@@ -26,7 +26,7 @@ function ShopeeCallback({ onDone }) {
   }, []);
 
   return (
-    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', marginTop: 120 }}>
+    <div style={{ fontFamily: 'var(--sans)', textAlign: 'center', marginTop: 120 }}>
       <h2>Shopee Connection</h2>
       {error ? (
         <>

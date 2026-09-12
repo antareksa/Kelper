@@ -115,56 +115,10 @@ function Daftar() {
   );
 }
 
-const NAV_ITEMS = [
-  { key: 'active', label: 'Active Station' },
-  { key: 'daftar', label: 'Daftar' },
-];
-
-function PackingStationDashboard() {
-  const [tab, setTab] = useState('active');
-
+function PackingStationDashboard({ view = 'active' }) {
   return (
-    <div style={{ display: 'flex', gap: 24, background: colors.bg, padding: 20, borderRadius: 8, minHeight: 'calc(100vh - 160px)' }}>
-      <style>{`
-        .psd-nav-item {
-          display: block;
-          width: 100%;
-          text-align: left;
-          padding: 8px 12px;
-          border-radius: 6px;
-          border: none;
-          border-left: 3px solid transparent;
-          background: transparent;
-          color: ${colors.textDim};
-          font-size: 14px;
-          cursor: pointer;
-          margin-bottom: 2px;
-        }
-        .psd-nav-item:hover {
-          background: ${colors.cardAlt};
-          color: ${colors.text};
-        }
-        .psd-nav-item.active {
-          background: ${colors.cardAlt};
-          border-left-color: ${colors.blue};
-          color: ${colors.text};
-          font-weight: 600;
-        }
-      `}</style>
-      <div style={{ width: 180, flexShrink: 0, background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 8 }}>
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.key}
-            onClick={() => setTab(item.key)}
-            className={`psd-nav-item${tab === item.key ? ' active' : ''}`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      <div style={{ flex: 1 }}>
-        {tab === 'active' ? <ActiveStation /> : <Daftar />}
-      </div>
+    <div style={{ minHeight: 'calc(100vh - 160px)' }}>
+      {view === 'active' ? <ActiveStation /> : <Daftar />}
     </div>
   );
 }

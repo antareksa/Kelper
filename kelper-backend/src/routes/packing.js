@@ -4,6 +4,7 @@ const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getOrderDetail, downloadShippingDocument } = require('../shopee/client');
 const { bookShipment } = require('../shopee/shipping');
+const { getConfig } = require('../config');
 
 const router = express.Router();
 
@@ -13,6 +14,62 @@ function now() {
 
 function touch(sessionId) {
   db.prepare('UPDATE packing_sessions SET last_activity_at = ? WHERE id = ?').run(now(), sessionId);
+}
+
+// Debug mode — mock orders never touch the real Shopee API. Marked by an
+// order_sn prefix so every downstream step (shipping, labels, cancellation
+// recheck) can tell a mock order apart from a real synced one.
+function isMockOrder(orderSn) {
+  return typeof orderSn === 'string' && orderSn.startsWith('MOCK-');
+}
+
+const MOCK_ITEMS = [
+  { sku: 'MOCK-SKU-1', product_name: 'Mock Product A', qty: 2 },
+  { sku: 'MOCK-SKU-2', product_name: 'Mock Product B', qty: 1 },
+];
+
+function createMockOrder(shopId) {
+  const orderSn = `MOCK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  db.prepare(`
+    INSERT INTO orders (order_sn, shop_id, status, buyer_name, created_at)
+    VALUES (?, ?, 'LOCKED', 'Debug Buyer', ?)
+  `).run(orderSn, shopId, now());
+  for (const item of MOCK_ITEMS) {
+    db.prepare('INSERT INTO order_items (order_sn, sku, product_name, qty) VALUES (?, ?, ?, ?)')
+      .run(orderSn, item.sku, item.product_name, item.qty);
+  }
+  return orderSn;
+}
+
+// Builds a tiny valid PDF from scratch (no external deps) so debug-mode
+// "labels" can flow through the same print/reprint/download paths as a real
+// Shopee label, without ever calling Shopee.
+function buildMockPdf(labelText) {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>',
+    '<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    null, // filled in below (needs the stream length)
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  const stream = `BT /F1 14 Tf 20 150 Td (${labelText}) Tj ET`;
+  objects[3] = `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`;
+
+  let body = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((content, i) => {
+    offsets.push(Buffer.byteLength(body, 'latin1'));
+    body += `${i + 1} 0 obj\n${content}\nendobj\n`;
+  });
+
+  const xrefStart = Buffer.byteLength(body, 'latin1');
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    xref += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  }
+  body += `${xref}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  return Buffer.from(body, 'latin1');
 }
 
 function getSessionWithOrder(sessionId) {
@@ -34,7 +91,7 @@ function getSessionWithOrder(sessionId) {
 // better-sqlite3 runs synchronously on a single connection, so this select+update
 // pair cannot interleave with a concurrent request — that's what satisfies AC1.
 router.post('/next-order', (req, res) => {
-  const { station_id, shop_id, operator_name } = req.body;
+  const { station_id, shop_id, operator_name, debug } = req.body;
   if (!station_id || !shop_id) {
     return res.status(400).json({ error: 'station_id and shop_id are required' });
   }
@@ -49,17 +106,22 @@ router.post('/next-order', (req, res) => {
   }
 
   const lockNext = db.transaction(() => {
-    const next = db
-      .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' ORDER BY created_at ASC LIMIT 1")
-      .get(shop_id);
-    if (!next) return null;
-
-    db.prepare("UPDATE orders SET status = 'LOCKED' WHERE order_sn = ?").run(next.order_sn);
+    let orderSn;
+    if (debug) {
+      orderSn = createMockOrder(shop_id);
+    } else {
+      const next = db
+        .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' ORDER BY created_at ASC LIMIT 1")
+        .get(shop_id);
+      if (!next) return null;
+      db.prepare("UPDATE orders SET status = 'LOCKED' WHERE order_sn = ?").run(next.order_sn);
+      orderSn = next.order_sn;
+    }
 
     const result = db.prepare(`
       INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, started_at, last_activity_at)
       VALUES (?, ?, ?, 'IN_PROGRESS', ?, ?)
-    `).run(next.order_sn, station_id, operator_name || null, now(), now());
+    `).run(orderSn, station_id, operator_name || null, now(), now());
 
     return result.lastInsertRowid;
   });
@@ -142,10 +204,14 @@ router.post('/release-order', (req, res) => {
 });
 
 // Auto-release sessions nobody has touched in over an hour, so an operator
-// walking away mid-order doesn't strand it forever.
-const STALE_SESSION_SECONDS = 60 * 60;
+// walking away mid-order doesn't strand it forever. Both the timeout and how
+// often this check runs are config-driven (config.json's `session` block) —
+// re-read on every tick via a recursive setTimeout (rather than a fixed
+// setInterval) so editing config.json with a text editor takes effect on the
+// very next tick, no server restart needed.
 function releaseStaleSessions() {
-  const cutoff = now() - STALE_SESSION_SECONDS;
+  const { staleSessionSeconds } = getConfig().session;
+  const cutoff = now() - staleSessionSeconds;
   const stale = db
     .prepare("SELECT id, order_sn FROM packing_sessions WHERE status = 'IN_PROGRESS' AND last_activity_at < ?")
     .all(cutoff);
@@ -159,7 +225,11 @@ function releaseStaleSessions() {
     release();
   }
 }
-setInterval(releaseStaleSessions, 60 * 1000);
+function scheduleStaleCheck() {
+  releaseStaleSessions();
+  setTimeout(scheduleStaleCheck, getConfig().session.staleCheckIntervalMs);
+}
+scheduleStaleCheck();
 
 // F/G. KIRIM HARI INI — real Shopee Logistics call: books the shipment
 // (logistics/ship_order), then generates the real label document.
@@ -170,8 +240,9 @@ router.post('/ship-today', async (req, res) => {
   if (!state.allComplete) return res.status(400).json({ error: 'items_incomplete' });
 
   try {
-    const accessToken = await getValidAccessToken(state.order.shop_id);
-    const trackingNo = await bookShipment(accessToken, state.order.shop_id, state.order.order_sn);
+    const trackingNo = isMockOrder(state.order.order_sn)
+      ? `MOCKTRACK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
+      : await bookShipment(await getValidAccessToken(state.order.shop_id), state.order.shop_id, state.order.order_sn);
 
     db.prepare(`
       UPDATE packing_sessions
@@ -208,6 +279,14 @@ router.post('/pack-besok', (req, res) => {
 // generating the resi, and blocks it if the order was cancelled overnight (AC8).
 async function recheckAndShip(session, order, res) {
   try {
+    if (isMockOrder(order.order_sn)) {
+      const trackingNo = `MOCKTRACK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      db.prepare(`
+        UPDATE packing_sessions SET tracking_no = ?, status = 'AWAITING_LABEL_SCAN' WHERE id = ?
+      `).run(trackingNo, session.id);
+      return res.json({ ...getSessionWithOrder(session.id), tracking_no: trackingNo });
+    }
+
     const accessToken = await getValidAccessToken(order.shop_id);
     const detail = await getOrderDetail(accessToken, order.shop_id, [order.order_sn]);
     const liveStatus = detail.response?.order_list?.[0]?.order_status;
@@ -319,6 +398,11 @@ router.get('/label/:session_id', async (req, res) => {
   const state = getSessionWithOrder(req.params.session_id);
   if (!state) return res.status(404).json({ error: 'session_not_found' });
   if (!state.session.tracking_no) return res.status(400).json({ error: 'no_label_yet' });
+
+  if (isMockOrder(state.order.order_sn)) {
+    res.setHeader('Content-Type', 'application/pdf');
+    return res.send(buildMockPdf(`MOCK LABEL - ${state.session.tracking_no}`));
+  }
 
   try {
     const accessToken = await getValidAccessToken(state.order.shop_id);

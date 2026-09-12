@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { colors } from './theme';
+import { IconMonitor } from './Icons';
 
 const API_BASE = 'http://localhost:3001';
 const SYNC_INTERVAL_MS = 60000;
@@ -43,6 +45,7 @@ function PackingStation() {
   // LOGIN OPERATOR command.
   const [stationReady, setStationReady] = useState(false);
   const [stationId, setStationId] = useState('STATION-A');
+  const [debugMode, setDebugMode] = useState(false);
   const [operatorName, setOperatorName] = useState('');
 
   const [state, setState] = useState(null); // { session, order, items, allComplete, tracking_no, internal_barcode }
@@ -185,7 +188,7 @@ function PackingStation() {
 
   async function grabNextOrder() {
     try {
-      const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: operatorName });
+      const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: operatorName, debug: debugMode });
       setLastSku(null);
       applyState(data);
     } catch (err) {
@@ -356,17 +359,26 @@ function PackingStation() {
 
   if (!stationReady) {
     return (
-      <form onSubmit={handleStationSetup} style={{ maxWidth: 320, margin: '40px auto', fontFamily: 'sans-serif' }}>
-        <h2>Station Setup</h2>
-        <label>Station ID</label>
-        <input value={stationId} onChange={(e) => setStationId(e.target.value)} style={inputStyle} />
-        <button type="submit" style={{ marginTop: 12, padding: '8px 16px' }}>Continue</button>
-        {infoMessage && (
-          <p style={{ marginTop: 12, color: infoType === 'error' ? '#c62828' : infoType === 'success' ? '#2e7d32' : '#555' }}>
-            {infoMessage}
-          </p>
-        )}
-      </form>
+      <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
+        <form onSubmit={handleStationSetup} style={{ ...setupCardStyle, width: 320 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+            <IconMonitor size={18} />
+            <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Station</span>
+          </div>
+          <label style={setupLabelStyle}>Station ID</label>
+          <input value={stationId} onChange={(e) => setStationId(e.target.value)} style={setupInputStyle} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: colors.textDim, cursor: 'pointer' }}>
+            <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
+            Debug mode (gunakan order mockup, tidak memanggil Shopee)
+          </label>
+          <button type="submit" style={setupSubmitStyle}>Continue</button>
+          {infoMessage && (
+            <p style={{ marginTop: 12, fontSize: 13, color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim }}>
+              {infoMessage}
+            </p>
+          )}
+        </form>
+      </div>
     );
   }
 
@@ -379,7 +391,7 @@ function PackingStation() {
         style={{
           width: 260,
           flexShrink: 0,
-          fontFamily: 'sans-serif',
+          fontFamily: 'var(--sans)',
           background: '#1a1a1a',
           color: 'white',
           borderRadius: 8,
@@ -405,7 +417,7 @@ function PackingStation() {
       <div
         style={{
           flex: 1,
-          fontFamily: 'sans-serif',
+          fontFamily: 'var(--sans)',
           padding: 24,
           background: showGreen ? '#2e7d32' : '#1a1a1a',
           color: 'white',
@@ -431,7 +443,14 @@ function PackingStation() {
 
       {state ? (
         <div>
-          <p>Order: <strong>{state.order.order_sn}</strong> — {state.order.buyer_name}</p>
+          <p>
+            Order: <strong>{state.order.order_sn}</strong> — {state.order.buyer_name}
+            {state.order.order_sn.startsWith('MOCK-') && (
+              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 'bold', color: '#000', background: '#ffca28', padding: '2px 6px', borderRadius: 4 }}>
+                DEBUG
+              </span>
+            )}
+          </p>
           <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid #555' }}>
@@ -455,7 +474,7 @@ function PackingStation() {
               rel="noreferrer"
               style={{ color: '#90caf9', display: 'inline-block', marginBottom: 16 }}
             >
-              View real Shopee label PDF (tracking: {state.session.tracking_no})
+              View {state.order.order_sn.startsWith('MOCK-') ? 'mock' : 'real Shopee'} label PDF (tracking: {state.session.tracking_no})
             </a>
           )}
         </div>
@@ -523,6 +542,46 @@ function PackingStation() {
     </div>
   );
 }
+
+const setupCardStyle = {
+  background: colors.card,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 16,
+  padding: 24,
+  boxSizing: 'border-box',
+};
+
+const setupLabelStyle = {
+  display: 'block',
+  fontSize: 12,
+  color: colors.textDim,
+  marginBottom: 4,
+};
+
+const setupInputStyle = {
+  display: 'block',
+  width: '100%',
+  padding: 10,
+  marginBottom: 14,
+  boxSizing: 'border-box',
+  background: colors.cardAlt,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 8,
+  color: colors.text,
+  fontFamily: 'var(--sans)',
+};
+
+const setupSubmitStyle = {
+  width: '100%',
+  padding: '10px 16px',
+  background: colors.text,
+  color: colors.bg,
+  border: 'none',
+  borderRadius: 8,
+  fontWeight: 600,
+  cursor: 'pointer',
+  fontFamily: 'var(--sans)',
+};
 
 const inputStyle = {
   display: 'block',

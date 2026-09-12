@@ -90,7 +90,7 @@ async function getOrderList(accessToken, shopId, { timeFrom, timeTo, orderStatus
   return res.json();
 }
 
-async function getOrderDetail(accessToken, shopId, orderSnList) {
+async function getOrderDetail(accessToken, shopId, orderSnList, fields = 'item_list,buyer_username,order_status') {
   const path = '/api/v2/order/get_order_detail';
   const timestamp = Math.floor(Date.now() / 1000);
   const sign = signShop(SHOPEE_PARTNER_ID, path, timestamp, accessToken, shopId, SHOPEE_PARTNER_KEY);
@@ -102,7 +102,7 @@ async function getOrderDetail(accessToken, shopId, orderSnList) {
     shop_id: shopId,
     access_token: accessToken,
     order_sn_list: orderSnList.join(','),
-    response_optional_fields: 'item_list,buyer_username,order_status',
+    response_optional_fields: fields,
   });
 
   const res = await fetch(`${SHOPEE_API_BASE}${path}?${params.toString()}`);
@@ -140,6 +140,16 @@ async function shopPost(path, accessToken, shopId, body) {
 
 function getShippingParameter(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/logistics/get_shipping_parameter', accessToken, shopId, { order_sn: orderSn });
+}
+
+function getMassShippingParameter(accessToken, shopId, packageNumbers) {
+  return shopPost('/api/v2/logistics/get_mass_shipping_parameter', accessToken, shopId, {
+    package_list: packageNumbers.map((package_number) => ({ package_number })),
+  });
+}
+
+function massShipOrder(accessToken, shopId, body) {
+  return shopPost('/api/v2/logistics/mass_ship_order', accessToken, shopId, body);
 }
 
 function getTrackingNumber(accessToken, shopId, orderSn) {
@@ -186,6 +196,8 @@ module.exports = {
   getOrderList,
   getOrderDetail,
   getShippingParameter,
+  getMassShippingParameter,
+  massShipOrder,
   getTrackingNumber,
   shipOrder,
   createShippingDocument,
