@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Run this ON the VM (Ubuntu 22.04+), from inside a full copy of this
-# project — e.g. after `git clone` or `scp`-ing the whole repo there.
+# Run this ON the VM (Ubuntu/Debian), from inside a full copy of this
+# project. Clone it to /opt/kelper (or another non-home-directory path),
+# NOT into a user's home directory — a home directory is typically mode 750,
+# so the dedicated "kelper" service user this script creates can't even
+# `chdir` into it to start the service, no matter what `chown` does to the
+# files inside it. E.g.:
+#   sudo mkdir -p /opt/kelper && sudo chown "$USER":"$USER" /opt/kelper
+#   git clone <repo-url> /opt/kelper
+#   cd /opt/kelper && bash deploy/setup-vm.sh
 # Safe to re-run: every step below checks before it acts.
 set -euo pipefail
 
