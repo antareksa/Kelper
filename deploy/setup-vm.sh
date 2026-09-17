@@ -10,13 +10,29 @@ SERVICE_USER="kelper"
 echo "==> KELPER production VM setup"
 echo "    App directory: $APP_DIR"
 
-# 1. Node.js — only installs if missing.
-if ! command -v node >/dev/null 2>&1; then
-  echo "==> Installing Node.js 20.x"
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# 1. Node.js 22.x — better-sqlite3 declares it needs >=22 and only ships
+#    prebuilt binaries for supported versions; anything older forces it to
+#    compile from source instead of just downloading a matching binary.
+# Checks the installed MAJOR version, not just "is node present at all" — a
+# machine that already has an older Node (e.g. from a prior failed run) must
+# still get upgraded, not skipped.
+NODE_MAJOR_REQUIRED=22
+current_node_major() { node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1; }
+if ! command -v node >/dev/null 2>&1 || [ "$(current_node_major)" -lt "$NODE_MAJOR_REQUIRED" ]; then
+  echo "==> Installing Node.js ${NODE_MAJOR_REQUIRED}.x"
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR_REQUIRED}.x" | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
 echo "    node: $(node -v)"
+
+# build-essential (make/gcc/g++) — a fallback in case better-sqlite3 (or any
+# other native dependency) still can't find a matching prebuilt binary for
+# this exact OS/arch and needs to compile from source. python3 is already
+# present on the base image.
+if ! command -v make >/dev/null 2>&1; then
+  echo "==> Installing build-essential (fallback for native module compilation)"
+  sudo apt-get install -y build-essential
+fi
 
 # 2. Dedicated system user — the service never runs as root.
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
