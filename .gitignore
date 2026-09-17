@@ -1,5 +1,8 @@
 .claude/
 node_modules/
 .env
+.env.*
 *.db
 kelper-asset/
+.kiosk-chrome-profile/
+kelper-backend/real_label_test.pdf

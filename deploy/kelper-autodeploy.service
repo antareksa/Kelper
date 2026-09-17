@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for KELPER updates and deploy if found
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{APP_DIR}}
+ExecStart={{APP_DIR}}/deploy/auto-deploy.sh

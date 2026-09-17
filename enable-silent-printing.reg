@@ -1,0 +1,18 @@
+Windows Registry Editor Version 5.00
+
+; Chrome Enterprise policies for silent, dialog-free printing.
+; Review before applying — this affects ALL Chrome profiles on this machine,
+; not just the Packing Station kiosk window.
+;
+; SilentPrintingEnabled: skips print preview entirely, prints straight to
+;   the default printer (falls back to auto-saving in Downloads if the
+;   default printer is a PDF printer, instead of prompting).
+; PrintPreviewUseSystemDefaultPrinter: makes Chrome use the actual Windows
+;   default printer, instead of whichever printer was most recently used.
+;
+; To apply: double-click this file and accept the UAC prompt.
+; To undo: delete the two values under this registry key, or set both to 0.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome]
+"SilentPrintingEnabled"=dword:00000001
+"PrintPreviewUseSystemDefaultPrinter"=dword:00000001

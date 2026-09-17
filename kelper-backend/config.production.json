@@ -2,8 +2,14 @@
   "debugMode": false,
   "shipping": {
     "useMassShip": false,
-    "trackingPoll": { "maxAttempts": 20, "delayMs": 3000 },
-    "documentPoll": { "maxAttempts": 5, "delayMs": 1000 }
+    "trackingPoll": {
+      "maxAttempts": 20,
+      "delayMs": 3000
+    },
+    "documentPoll": {
+      "maxAttempts": 5,
+      "delayMs": 1000
+    }
   },
   "session": {
     "staleSessionSeconds": 3600,

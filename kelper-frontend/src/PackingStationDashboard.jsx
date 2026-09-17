@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { colors, card } from './theme';
+import { renderCode39Svg } from './Barcode';
 
-const API_BASE = 'http://localhost:3001';
+// Resolves relative to whatever host served this page, so a client machine
+// on the LAN reaches the real backend instead of its own empty localhost.
+const API_BASE = `http://${window.location.hostname}:3001`;
 const REFRESH_MS = 10000;
+const SHOP_ID = 227886187;
 
 function formatTime(ts) {
   if (!ts) return '—';
@@ -61,10 +65,118 @@ function ActiveStation() {
   );
 }
 
+// The pools from the packing flow diagram: orders discovered from Shopee
+// that the server hasn't finished booking/labeling yet ("Processing"),
+// orders discovered + labeled but no Packing Station has claimed yet ("Ready
+// to Check"), orders a Packing Station has claimed and is actively scanning
+// right now ("On Progress Check"), orders packed today with a real label
+// waiting for Shipping Mode to confirm the courier took them ("Ready to
+// Pickup"), and
+// orders deferred to tomorrow, already scanned, waiting to be resumed
+// ("Ready to Process Tomorrow").
+function OrderLists() {
+  const [lists, setLists] = useState({ processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function load() {
+    try {
+      const res = await fetch(`${API_BASE}/packing/order-lists?shop_id=${SHOP_ID}`);
+      if (res.ok) setLists(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const columns = [
+    { key: 'processing', title: 'Processing' },
+    { key: 'readyToCheck', title: 'Ready to Check' },
+    { key: 'onProgressCheck', title: 'On Progress Check' },
+    { key: 'readyForPickup', title: 'Ready to Pickup' },
+    { key: 'readyTomorrow', title: 'Ready to Process Tomorrow' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 12, height: '100%' }}>
+      {columns.map(({ key, title }) => {
+        const rows = lists[key];
+        return (
+          <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
+            <div style={{ fontWeight: 700, color: colors.text, marginBottom: 2 }}>{title}</div>
+            <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 12 }}>
+              {rows.length} order{rows.length === 1 ? '' : 's'}
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {loading ? (
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Loading...</p>
+              ) : rows.length === 0 ? (
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Empty.</p>
+              ) : (
+                rows.map((row) => (
+                  <div key={row.order_sn} style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
+                    <div style={{ color: colors.textDim, marginTop: 2 }}>
+                      {row.buyer_name || '—'}
+                      {row.station_id && ` · ${row.station_id}`}
+                      {row.operator_name && ` (${row.operator_name})`}
+                    </div>
+                    {row.status === 'AWAITING_LABEL_SCAN' && (
+                      <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
+                        Waiting on confirm-scan — check the printer
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Daftar() {
   const [name, setName] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const printFrameRef = useRef(null);
+
+  // Prints the operator's login barcode as an actual scannable Code 39
+  // barcode (not just the plain text shown on screen) — this is the card
+  // the operator scans at the Packing Station to log in, so it needs to be
+  // physically scannable, same encoding as the Hardware Test barcode there.
+  function printLoginBarcode(data) {
+    const iframe = printFrameRef.current;
+    if (!iframe) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }, 300);
+    };
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            body { font-family: monospace; text-align: center; padding: 24px; }
+            svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>
+          <h2>${data.name}</h2>
+          ${renderCode39Svg(data.login_barcode)}
+          <p style="letter-spacing: 2px;">${data.login_barcode}</p>
+          <p style="font-size: 11px;">Scan this barcode at the Packing Station to log in.</p>
+        </body>
+      </html>
+    `;
+  }
 
   async function handleRegister() {
     setError(null);
@@ -78,6 +190,7 @@ function Daftar() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setResult(data);
+      printLoginBarcode(data);
     } catch (err) {
       setError(err.message);
     }
@@ -91,6 +204,7 @@ function Daftar() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setResult(data);
+      printLoginBarcode(data);
     } catch (err) {
       setError(err.message);
     }
@@ -111,6 +225,7 @@ function Daftar() {
         </p>
       )}
       {error && <p style={{ color: colors.red, marginTop: 16 }}>{error}</p>}
+      <iframe ref={printFrameRef} title="operator-barcode-print" style={{ display: 'none' }} />
     </div>
   );
 }
@@ -118,7 +233,7 @@ function Daftar() {
 function PackingStationDashboard({ view = 'active' }) {
   return (
     <div style={{ minHeight: 'calc(100vh - 160px)' }}>
-      {view === 'active' ? <ActiveStation /> : <Daftar />}
+      {view === 'active' ? <ActiveStation /> : view === 'lists' ? <OrderLists /> : <Daftar />}
     </div>
   );
 }

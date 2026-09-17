@@ -1,3 +1,10 @@
+const { isProduction } = require('./env');
+
+if (isProduction) {
+  console.error('Refusing to run seed-operators.js against production — this inserts fake placeholder operators.');
+  process.exit(1);
+}
+
 const db = require('./db');
 
 const operators = [

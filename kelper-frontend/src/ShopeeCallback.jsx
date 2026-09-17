@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
-const API_BASE = 'http://localhost:3001';
+// Resolves relative to whatever host served this page, so a client machine
+// on the LAN reaches the real backend instead of its own empty localhost.
+const API_BASE = `http://${window.location.hostname}:3001`;
 
 function ShopeeCallback({ onDone }) {
   const [message, setMessage] = useState('Connecting to Shopee...');

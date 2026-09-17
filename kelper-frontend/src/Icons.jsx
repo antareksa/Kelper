@@ -83,6 +83,15 @@ export function IconRefresh({ size = 16 }) {
   );
 }
 
+export function IconUpload({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M8 11V2.5M8 2.5 4.8 5.7M8 2.5l3.2 3.2" />
+      <path d="M2.7 10.7v1.6a1.3 1.3 0 0 0 1.3 1.3h8a1.3 1.3 0 0 0 1.3-1.3v-1.6" />
+    </svg>
+  );
+}
+
 export function IconEdit({ size = 12 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" {...base}>

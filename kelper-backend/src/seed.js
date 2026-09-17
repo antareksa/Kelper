@@ -1,3 +1,10 @@
+const { isProduction } = require('./env');
+
+if (isProduction) {
+  console.error('Refusing to run seed.js against production — this inserts fake test orders.');
+  process.exit(1);
+}
+
 const db = require('./db');
 
 const MOCK_SHOP_ID = 227886187;

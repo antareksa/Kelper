@@ -1,7 +1,12 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { NODE_ENV } = require('./env');
 
-const db = new Database(path.join(__dirname, '..', 'kelper.db'));
+// Separate database file per environment — development's mock orders and
+// experimental schema changes must never land in the same file production
+// actually depends on.
+const dbFilename = `kelper.${NODE_ENV}.db`;
+const db = new Database(path.join(__dirname, '..', dbFilename));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS shopee_tokens (
@@ -62,6 +67,45 @@ db.exec(`
     operator_name TEXT NOT NULL,
     checked_in_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS products (
+    sku TEXT PRIMARY KEY,
+    name TEXT,
+    hpp INTEGER,
+    barcode TEXT,
+    updated_at INTEGER NOT NULL
+  );
+
+  -- Local cache of Shopee's live product catalog (synced on demand, not
+  -- fetched fresh on every page load). Kept separate from "products" above,
+  -- which is the client's manually-imported HPP master list — the two are
+  -- joined by SKU at read time, never merged into one table, since one is
+  -- "what Shopee says is listed" and the other is "what the client says it
+  -- costs", and either can exist without the other.
+  CREATE TABLE IF NOT EXISTS shopee_items (
+    item_id INTEGER PRIMARY KEY,
+    shop_id INTEGER NOT NULL,
+    item_sku TEXT,
+    name TEXT NOT NULL,
+    item_status TEXT,
+    min_purchase_limit INTEGER,
+    has_model INTEGER NOT NULL DEFAULT 0,
+    image_url TEXT,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS shopee_item_models (
+    item_id INTEGER NOT NULL REFERENCES shopee_items(item_id),
+    model_id INTEGER NOT NULL,
+    model_sku TEXT,
+    model_name TEXT,
+    price INTEGER,
+    stock INTEGER,
+    model_status TEXT,
+    image_url TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (item_id, model_id)
+  );
 `);
 
 // Non-destructive migration for existing local databases created before
@@ -69,6 +113,39 @@ db.exec(`
 const packingSessionCols = db.prepare("PRAGMA table_info(packing_sessions)").all().map((c) => c.name);
 if (!packingSessionCols.includes('last_activity_at')) {
   db.exec('ALTER TABLE packing_sessions ADD COLUMN last_activity_at INTEGER');
+}
+
+// Non-destructive migration for the server's background sync flow: orders
+// now carry their own pre-fetched shipment/label data instead of that being
+// fetched live at pack-time.
+const orderCols = db.prepare("PRAGMA table_info(orders)").all().map((c) => c.name);
+const newOrderCols = {
+  is_instant: 'INTEGER NOT NULL DEFAULT 0',
+  logistics_channel_id: 'INTEGER',
+  shipping_carrier: 'TEXT',
+  tracking_no: 'TEXT',
+  label_pdf: 'BLOB',
+  label_ready: 'INTEGER NOT NULL DEFAULT 0',
+  // Learned as a side effect of booking (see shipping.js) — used to fetch
+  // item details via get_package_detail when order/get_order_detail fails.
+  package_number: 'TEXT',
+};
+for (const [col, def] of Object.entries(newOrderCols)) {
+  if (!orderCols.includes(col)) {
+    db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${def}`);
+  }
+}
+
+// Non-destructive migration for existing local databases created before the
+// product image thumbnail/preview feature existed.
+const shopeeItemCols = db.prepare("PRAGMA table_info(shopee_items)").all().map((c) => c.name);
+if (!shopeeItemCols.includes('image_url')) {
+  db.exec('ALTER TABLE shopee_items ADD COLUMN image_url TEXT');
+}
+
+const shopeeModelCols = db.prepare("PRAGMA table_info(shopee_item_models)").all().map((c) => c.name);
+if (!shopeeModelCols.includes('image_url')) {
+  db.exec('ALTER TABLE shopee_item_models ADD COLUMN image_url TEXT');
 }
 
 module.exports = db;

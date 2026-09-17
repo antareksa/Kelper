@@ -142,6 +142,42 @@ function getShippingParameter(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/logistics/get_shipping_parameter', accessToken, shopId, { order_sn: orderSn });
 }
 
+function getChannelList(accessToken, shopId) {
+  return shopGet('/api/v2/logistics/get_channel_list', accessToken, shopId);
+}
+
+// Workaround for order/get_order_detail returning an empty order_list for
+// every recently-created order in this sandbox shop (confirmed against
+// Shopee support evidence) — this endpoint reliably returns the same
+// item_list data keyed by package_number instead of order_sn, once a
+// package exists for the order (i.e. after ship_order has been called).
+function getPackageDetail(accessToken, shopId, packageNumberList) {
+  return shopGet('/api/v2/order/get_package_detail', accessToken, shopId, {
+    package_number_list: packageNumberList.join(','),
+  });
+}
+
+// Returns item ids only — item names/prices/stock/SKUs come from a separate
+// get_item_base_info call, and variant-level SKUs from get_model_list.
+function getItemList(accessToken, shopId, { offset = 0, pageSize = 50, itemStatus = 'NORMAL' } = {}) {
+  return shopGet('/api/v2/product/get_item_list', accessToken, shopId, {
+    offset: String(offset),
+    page_size: String(pageSize),
+    item_status: itemStatus,
+  });
+}
+
+// Shopee caps this at 50 item ids per call.
+function getItemBaseInfo(accessToken, shopId, itemIdList) {
+  return shopGet('/api/v2/product/get_item_base_info', accessToken, shopId, {
+    item_id_list: itemIdList.join(','),
+  });
+}
+
+function getModelList(accessToken, shopId, itemId) {
+  return shopGet('/api/v2/product/get_model_list', accessToken, shopId, { item_id: itemId });
+}
+
 function getMassShippingParameter(accessToken, shopId, packageNumbers) {
   return shopPost('/api/v2/logistics/get_mass_shipping_parameter', accessToken, shopId, {
     package_list: packageNumbers.map((package_number) => ({ package_number })),
@@ -196,6 +232,11 @@ module.exports = {
   getOrderList,
   getOrderDetail,
   getShippingParameter,
+  getChannelList,
+  getPackageDetail,
+  getItemList,
+  getItemBaseInfo,
+  getModelList,
   getMassShippingParameter,
   massShipOrder,
   getTrackingNumber,

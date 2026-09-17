@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { colors } from './theme';
 import { IconMonitor } from './Icons';
+import { renderCode39Svg } from './Barcode';
 
-const API_BASE = 'http://localhost:3001';
+// Resolves relative to whatever host served this page — the packing
+// station's own machine has nothing running on port 3001, the real backend
+// lives on the server this page was loaded from over the LAN.
+const API_BASE = `http://${window.location.hostname}:3001`;
 const SYNC_INTERVAL_MS = 60000;
 const SHOP_ID = 227886187;
 
@@ -14,16 +18,15 @@ function formatTime(ts) {
 }
 
 const COMMANDS = [
-  { cmd: 'NEXT_ORDER', desc: 'Start processing the next available new order.' },
-  { cmd: 'NEXT_ORDER_KEMAREN', desc: "Resume the next order set aside yesterday (Pack Besok), without needing its specific barcode." },
+  { cmd: 'NEXT_ORDER', desc: 'Start processing the next available order — automatically picks the highest-priority one (Instant, then yesterday\'s leftovers, then fresh).' },
   { cmd: 'PAUSE', desc: 'Pause the station (freezes scanning) while you step away.' },
   { cmd: 'RESUME', desc: 'Resume the station after a pause.' },
   { cmd: 'UNDO', desc: 'Revert your last item scan.' },
   { cmd: 'MASALAH', desc: 'Flag the current order as a problem — needs manual resolution.' },
   { cmd: 'RELEASE_ORDER', desc: "Give up this order and put it back in the pool for any station (e.g. you're not going to finish it)." },
-  { cmd: 'KIRIM_HARI_INI', desc: 'Ship this order today — books the real shipment and prints the label.' },
-  { cmd: 'PACK_BESOK', desc: 'Set this order aside for tomorrow instead of shipping now.' },
-  { cmd: 'REPRINT', desc: 'Reprint the current label without creating a new shipment.' },
+  { cmd: 'REPRINT', desc: 'After scanning all items: if the label fails to scan back (printer issue), reprint it without creating a new shipment.' },
+  { cmd: 'SHIPPING_MODE', desc: 'Switch this station to Shipping Mode — scan packed labels to confirm courier pickup, separate from packing.' },
+  { cmd: 'PACKING_MODE', desc: 'Switch back to normal packing from Shipping Mode.' },
   { cmd: 'LOGOUT', desc: 'End this operator\'s shift on this station (station stays configured for the next operator).' },
 ];
 
@@ -45,9 +48,16 @@ function PackingStation() {
   // LOGIN OPERATOR command.
   const [stationReady, setStationReady] = useState(false);
   const [stationId, setStationId] = useState('STATION-A');
-  const [debugMode, setDebugMode] = useState(false);
   const [operatorName, setOperatorName] = useState('');
+  const [testScanValue, setTestScanValue] = useState('');
+  const [lastTestScan, setLastTestScan] = useState(null);
+  const [paperWidthMm, setPaperWidthMm] = useState(100);
+  const [paperHeightMm, setPaperHeightMm] = useState(120);
+  const [hwCheckCode, setHwCheckCode] = useState(null);
+  const [hwCheckStatus, setHwCheckStatus] = useState('idle'); // idle | awaiting_scan | pass | fail
 
+  const [mode, setMode] = useState('packing'); // packing | shipping — toggled by scanning SHIPPING_MODE / PACKING_MODE
+  const [pickupLog, setPickupLog] = useState([]); // recent Shipping Mode confirmations, most recent first
   const [state, setState] = useState(null); // { session, order, items, allComplete, tracking_no, internal_barcode }
   const [lastSku, setLastSku] = useState(null);
   const [infoMessage, setInfoMessage] = useState('');
@@ -59,12 +69,59 @@ function PackingStation() {
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [queueCounts, setQueueCounts] = useState({ ready_to_pack: 0, deferred_ready: 0 });
   const inputRef = useRef(null);
+  const testScanInputRef = useRef(null);
   const submittingRef = useRef(false); // reentrancy guard — a real scanner can fire faster than a request round-trips
   const printFrameRef = useRef(null);
+
+  // Station ID / debug checkbox are the one place a mouse is expected (initial
+  // setup); the scanner test below should work the moment the screen loads,
+  // same as the real scan input does once logged in — no click needed.
+  useEffect(() => {
+    if (!stationReady) testScanInputRef.current?.focus();
+  }, [stationReady]);
 
   useEffect(() => {
     if (stationReady && inputRef.current) inputRef.current.focus();
   }, [stationReady, operatorName, state]);
+
+  // Kiosk-mode prints silently and instantly, with no OS dialog — but the
+  // printer driver itself can still briefly take real OS-level window focus
+  // away from Chrome during the physical print (some thermal-printer drivers
+  // pop a transient status window), which no amount of element.focus() can
+  // fix on its own since the input can look focused at the DOM level while
+  // the browser window itself isn't the foreground window — the blinking
+  // caret follows OS focus, not DOM focus. window.focus() asks the browser
+  // to reclaim the foreground; element.focus() then puts the caret back on
+  // the right field. Each print helper calls this directly after its
+  // .print() call, and the watchdog below keeps re-asserting it afterward.
+  function focusScanInput() {
+    window.focus();
+    if (stationReady) inputRef.current?.focus();
+    else testScanInputRef.current?.focus();
+  }
+
+  // Self-healing backstop: whatever specifically stole focus — a button, the
+  // invisible print iframe, a real print dialog, the printer driver's own
+  // status window, an OS app-switch — this keeps re-asserting focus so it
+  // can't stay lost for more than a fraction of a second, without needing to
+  // know which of those it was. It reasserts unconditionally (not just when
+  // it detects focus is missing) because document.activeElement can already
+  // read as the scan input while the OS window itself still isn't foreground
+  // — re-calling focus() is a harmless no-op in the normal case. The only
+  // exemption is the handful of fields that genuinely need a mouse during
+  // one-time station setup (marked data-mouse-input="true"); anything else
+  // is fair game to reclaim, since the physical station has no mouse.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const active = document.activeElement;
+      if (active?.dataset?.mouseInput === 'true') return;
+      const target = stationReady ? inputRef.current : testScanInputRef.current;
+      if (!target) return;
+      window.focus();
+      target.focus();
+    }, 400);
+    return () => clearInterval(interval);
+  }, [stationReady]);
 
   // Single source of truth for checking a station out of the admin Active
   // Station view. Runs as a cleanup whenever operatorName changes (covers
@@ -93,6 +150,18 @@ function PackingStation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationReady]);
 
+  // Auto-retry when idle so a station with nothing to do picks up a newly
+  // available order on its own — the server can finish booking one
+  // moments after this station last checked and came up empty. NEXT_ORDER
+  // still works as a manual "check right now" nudge, it's just no longer
+  // required to actually get the next order.
+  useEffect(() => {
+    if (!operatorName || paused || mode !== 'packing' || state || busy) return;
+    const interval = setInterval(() => grabNextOrder(), 10000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorName, paused, mode, state, busy]);
+
   // Detects the backend auto-releasing this session after 1h of inactivity
   // (operator walked away and never came back) and logs the operator out —
   // the station itself stays configured for whoever badges in next.
@@ -110,6 +179,24 @@ function PackingStation() {
     }, 60000);
     return () => clearInterval(interval);
   }, [state?.session?.id, state?.session?.status]);
+
+  // Self-healing for the "order booked but Shopee hasn't sent item details
+  // yet" gap: the server backfills order_items in the background on its
+  // own schedule, independent of this session — so once it succeeds, this
+  // picks the new items up automatically instead of leaving the operator
+  // stuck on a screen with nothing to scan and no way to notice it changed.
+  useEffect(() => {
+    if (!state || state.session.status !== 'IN_PROGRESS' || state.items.length > 0) return;
+    const sessionId = state.session.id;
+    const interval = setInterval(async () => {
+      const res = await fetch(`${API_BASE}/packing/session/${sessionId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.items?.length > 0) applyState(data);
+    }, 10000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.session?.id, state?.session?.status, state?.items?.length]);
 
   async function refreshCounts() {
     try {
@@ -130,8 +217,9 @@ function PackingStation() {
   // set imperatively — so it can't drift out of sync with what's actually true.
   function getGuidance() {
     if (!operatorName) return { text: 'Scan your operator barcode to log in.', type: 'info' };
+    if (mode === 'shipping') return { text: 'Shipping Mode — scan a packed label to confirm pickup. Scan PACKING_MODE to go back.', type: 'info' };
     if (paused) return { text: 'Station paused. Scan RESUME to continue.', type: 'info' };
-    if (!state) return { text: 'Scan NEXT_ORDER to begin.', type: 'info' };
+    if (!state) return { text: 'No orders ready right now — checking automatically. Scan NEXT_ORDER to check now.', type: 'info' };
     const { session, allComplete } = state;
 
     if (session.status === 'DONE') return { text: 'Order done! Grabbing next order...', type: 'success' };
@@ -142,11 +230,17 @@ function PackingStation() {
       return { text: 'Order flagged as a problem (MASALAH) — needs manual resolution.', type: 'error' };
     }
     if (session.status === 'AWAITING_LABEL_SCAN') {
-      return { text: `Label printed: ${session.tracking_no}. Scan the label to confirm.`, type: 'info' };
+      return { text: `Label printed for ${state.order.order_sn} — scan the label's barcode to confirm it printed correctly. If nothing came out (or it's wrong), scan REPRINT.`, type: 'info' };
+    }
+    if (session.status === 'READY_FOR_PICKUP') {
+      return { text: `Confirmed — put it on the package. Grabbing next order...`, type: 'success' };
     }
     if (session.status === 'IN_PROGRESS') {
+      if (state.items.length === 0) {
+        return { text: 'No item data from Shopee yet for this order — nothing to scan. Waiting for it to arrive (checking automatically), or scan RELEASE_ORDER to put it back and try a different one.', type: 'error' };
+      }
       return allComplete
-        ? { text: 'All items scanned! Scan KIRIM_HARI_INI or PACK_BESOK.', type: 'success' }
+        ? { text: 'All items scanned — finishing up...', type: 'success' }
         : { text: 'Scan each item on the order.', type: 'info' };
     }
     return { text: 'Scan NEXT_ORDER to continue.', type: 'info' };
@@ -159,7 +253,14 @@ function PackingStation() {
     } else if (data.session?.status === 'DEFERRED_READY') {
       setTimeout(() => grabNextOrder(), 1200);
     } else if (data.session?.status === 'AWAITING_LABEL_SCAN') {
+      // Print, then stop and wait — the operator must scan the label back to
+      // confirm it actually came out before this station moves on. That
+      // confirm-scan is the printer health check; there's no separate
+      // detection for a jam/out-of-paper/wrong-tray failure.
       autoPrintLabel(data.session.id);
+    } else if (data.session?.status === 'READY_FOR_PICKUP') {
+      // Reached only after the confirm-scan above succeeds — safe to move on.
+      setTimeout(() => grabNextOrder(), 800);
     }
   }
 
@@ -177,8 +278,15 @@ function PackingStation() {
       const iframe = printFrameRef.current;
       if (!iframe) return;
       iframe.onload = () => {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
+        // A brand-new kiosk window may not have finished enumerating system
+        // printers yet — printing immediately can make Chrome fall back to
+        // its own "Save as PDF" pseudo-destination instead of the real
+        // default. A short delay gives printer discovery time to finish.
+        setTimeout(() => {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+          focusScanInput();
+        }, 1000);
       };
       iframe.src = blobUrl;
     } catch {
@@ -186,29 +294,135 @@ function PackingStation() {
     }
   }
 
-  async function grabNextOrder() {
-    try {
-      const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: operatorName, debug: debugMode });
-      setLastSku(null);
-      applyState(data);
-    } catch (err) {
-      setState(null);
-      notify(err.message === 'no_orders' ? 'No orders ready to pack right now.' : err.message, 'error');
-    }
+  // Pure hardware sanity check — no backend involved. Builds a tiny static
+  // receipt and prints it the same way a real label gets printed, just
+  // skipping the fetch-a-PDF step since there's nothing real to print yet.
+  function handleTestPrint() {
+    const iframe = printFrameRef.current;
+    if (!iframe) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        focusScanInput();
+      }, 1000);
+    };
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            @page { size: ${paperWidthMm}mm ${paperHeightMm}mm; margin: 0; }
+            html, body {
+              width: ${paperWidthMm}mm;
+              height: ${paperHeightMm}mm;
+              margin: 0;
+              overflow: hidden;
+            }
+            body {
+              font-family: monospace;
+              box-sizing: border-box;
+              padding: 8mm;
+              page-break-after: avoid;
+              page-break-inside: avoid;
+            }
+          </style>
+        </head>
+        <body>
+          <h2>TEST PRINT OK</h2>
+          <p>Station: ${stationId}</p>
+          <p>Paper: ${paperWidthMm}mm x ${paperHeightMm}mm</p>
+          <p>Time: ${new Date().toLocaleString()}</p>
+        </body>
+      </html>
+    `;
   }
 
-  async function grabNextBesok() {
-    setBusy(true);
-    setBusyLabel('Rechecking order status & booking shipment with Shopee...');
+  // Closed-loop hardware check: print a barcode encoding a fresh random code,
+  // then require the operator to scan that exact barcode back. A match proves
+  // the printer produced a physically scannable label AND the scanner reads
+  // it correctly — checking both devices in one pass instead of trusting
+  // "the printer made paper come out" and "the scanner made text appear" as
+  // separate, weaker signals.
+  function startHardwareCheck() {
+    const code = `HW${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    setHwCheckCode(code);
+    setHwCheckStatus('awaiting_scan');
+
+    const iframe = printFrameRef.current;
+    if (!iframe) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        focusScanInput();
+      }, 1000);
+    };
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            @page { size: ${paperWidthMm}mm ${paperHeightMm}mm; margin: 0; }
+            html, body {
+              width: ${paperWidthMm}mm;
+              height: ${paperHeightMm}mm;
+              margin: 0;
+              overflow: hidden;
+            }
+            body {
+              font-family: monospace;
+              box-sizing: border-box;
+              padding: 8mm;
+              text-align: center;
+              page-break-after: avoid;
+              page-break-inside: avoid;
+            }
+            svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>
+          <h2>HARDWARE CHECK</h2>
+          ${renderCode39Svg(code)}
+          <p style="letter-spacing: 2px;">${code}</p>
+          <p style="font-size: 11px;">Scan this barcode below to confirm hardware.</p>
+        </body>
+      </html>
+    `;
+  }
+
+  // Scanning/typing TEST_PRINT here triggers the same print as the button —
+  // the physical station only has a scanner and a printer, no mouse, so
+  // nothing in this panel should require a click to operate.
+  function handleTestScan(e) {
+    if (e.key !== 'Enter') return;
+    const value = testScanValue;
+    setTestScanValue('');
+    if (value === 'TEST_PRINT') {
+      handleTestPrint();
+      return;
+    }
+    if (value === 'CHECK_HW') {
+      startHardwareCheck();
+      return;
+    }
+    if (hwCheckStatus === 'awaiting_scan') {
+      setHwCheckStatus(value === hwCheckCode ? 'pass' : 'fail');
+      return;
+    }
+    setLastTestScan(value);
+  }
+
+  // Accepts an explicit operator name override for the call made right after
+  // login (see handleOperatorBarcode) — setOperatorName() there hasn't been
+  // applied to the `operatorName` state yet by the time this runs in the same
+  // tick, so falling back to the closed-over state would send an empty name.
+  async function grabNextOrder(overrideOperatorName) {
     try {
-      const data = await post('/packing/next-besok', { station_id: stationId, shop_id: SHOP_ID, operator_name: operatorName });
+      const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: overrideOperatorName ?? operatorName });
       setLastSku(null);
       applyState(data);
     } catch (err) {
       setState(null);
-      notify(err.message, 'error');
-    } finally {
-      setBusy(false);
+      notify(err.message === 'no_orders' ? 'No orders ready right now — checking automatically.' : err.message, 'error');
     }
   }
 
@@ -242,6 +456,16 @@ function PackingStation() {
       if (!res.ok) throw new Error(data.message || data.error);
       setOperatorName(data.name);
       notify(`Welcome, ${data.name}.`, 'success');
+      // No separate NEXT_ORDER scan needed to start a shift — go straight
+      // into the first order the same way the station already auto-advances
+      // between orders (see applyState).
+      setBusy(true);
+      setBusyLabel('Finding the next order...');
+      try {
+        await grabNextOrder(data.name);
+      } finally {
+        setBusy(false);
+      }
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -272,22 +496,48 @@ function PackingStation() {
     if (value === 'LOGOUT') return handleLogout();
     if (value === 'PAUSE') { setPaused(true); return notify('Paused', 'info'); }
     if (value === 'RESUME') { setPaused(false); return notify('Resumed', 'info'); }
+    // Mode toggle works regardless of pause/session state — switching to
+    // check on pickups shouldn't require first resolving whatever the
+    // packing side happens to be doing.
+    if (value === 'SHIPPING_MODE') { setMode('shipping'); return notify('Shipping Mode — scan a packed label to confirm pickup.', 'info'); }
+    if (value === 'PACKING_MODE') { setMode('packing'); return notify('Back to Packing Mode.', 'info'); }
     if (paused) return notify('Station is paused. Scan RESUME first.', 'error');
+
+    if (mode === 'shipping') {
+      submittingRef.current = true;
+      try {
+        const data = await post('/packing/confirm-pickup', { order_sn: value });
+        setPickupLog((log) => [{ order_sn: data.order_sn, at: Date.now() }, ...log].slice(0, 20));
+        return notify(`${data.order_sn} confirmed picked up.`, 'success');
+      } catch (err) {
+        return notify(err.message, 'error');
+      } finally {
+        submittingRef.current = false;
+      }
+    }
 
     submittingRef.current = true;
     try {
-      if (value === 'NEXT_ORDER' || value === 'NEXT_ORDER_KEMAREN') {
-        if (state && state.session.status !== 'DONE' && state.session.status !== 'DEFERRED_READY') {
+      if (value === 'NEXT_ORDER') {
+        const doneStatuses = ['DONE', 'DEFERRED_READY', 'READY_FOR_PICKUP'];
+        if (state && !doneStatuses.includes(state.session.status)) {
           return notify('Finish or defer the current order first.', 'error');
         }
-        return value === 'NEXT_ORDER' ? await grabNextOrder() : await grabNextBesok();
+        setBusy(true);
+        setBusyLabel('Finding the next order...');
+        try {
+          await grabNextOrder();
+        } finally {
+          setBusy(false);
+        }
+        return;
       }
 
       if (!state) {
         // no active session — only NEXT_ORDER or resuming a Pack Besok barcode make sense here
         if (value.startsWith('BESOK-')) {
           setBusy(true);
-          setBusyLabel('Rechecking order status & booking shipment with Shopee...');
+          setBusyLabel('Confirming order status...');
           try {
             const data = await post('/packing/resume-besok', { internal_barcode: value });
             applyState(data);
@@ -299,12 +549,17 @@ function PackingStation() {
         return notify('No active order. Scan NEXT_ORDER first.', 'error');
       }
 
+      // AWAITING_LABEL_SCAN blocks here until the operator scans the printed
+      // label back — that scan is the printer health check (see
+      // finalizeCompletedOrder). REPRINT re-fires the same label/PDF without
+      // creating a new shipment; any other scan is tried as the confirm.
       if (state.session.status === 'AWAITING_LABEL_SCAN') {
         if (value === 'REPRINT') {
-          const data = await post('/packing/reprint', { session_id: state.session.id });
-          return notify(`Reprinted label: ${data.tracking_no}`, 'success');
+          await post('/packing/reprint', { session_id: state.session.id });
+          autoPrintLabel(state.session.id);
+          return notify('Reprinting label...', 'info');
         }
-        const data = await post('/packing/label-scan', { session_id: state.session.id, tracking_no: value });
+        const data = await post('/packing/confirm-print', { session_id: state.session.id, order_sn: value });
         return applyState(data);
       }
 
@@ -326,24 +581,8 @@ function PackingStation() {
           setLastSku(null);
           return applyState(data);
         }
-        if (value === 'KIRIM_HARI_INI') {
-          if (!state.allComplete) return notify('Not all items are scanned yet.', 'error');
-          setBusy(true);
-          setBusyLabel('Booking shipment & generating label with Shopee...');
-          try {
-            const data = await post('/packing/ship-today', { session_id: state.session.id });
-            applyState(data);
-          } finally {
-            setBusy(false);
-          }
-          return;
-        }
-        if (value === 'PACK_BESOK') {
-          if (!state.allComplete) return notify('Not all items are scanned yet.', 'error');
-          const data = await post('/packing/pack-besok', { session_id: state.session.id });
-          return applyState(data);
-        }
-        // otherwise treat it as an item SKU scan
+        // otherwise treat it as an item SKU scan — the server auto-decides
+        // ship-today vs. defer-to-tomorrow once every item is scanned
         const data = await post('/packing/scan-item', { session_id: state.session.id, sku: value });
         setLastSku(value);
         return applyState(data);
@@ -359,25 +598,89 @@ function PackingStation() {
 
   if (!stationReady) {
     return (
-      <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
+      <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
         <form onSubmit={handleStationSetup} style={{ ...setupCardStyle, width: 320 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
             <IconMonitor size={18} />
             <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Station</span>
           </div>
           <label style={setupLabelStyle}>Station ID</label>
-          <input value={stationId} onChange={(e) => setStationId(e.target.value)} style={setupInputStyle} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: colors.textDim, cursor: 'pointer' }}>
-            <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
-            Debug mode (gunakan order mockup, tidak memanggil Shopee)
-          </label>
-          <button type="submit" style={setupSubmitStyle}>Continue</button>
+          <input data-mouse-input="true" value={stationId} onChange={(e) => setStationId(e.target.value)} style={setupInputStyle} />
+          <button data-mouse-input="true" type="submit" style={setupSubmitStyle}>Continue</button>
           {infoMessage && (
             <p style={{ marginTop: 12, fontSize: 13, color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim }}>
               {infoMessage}
             </p>
           )}
         </form>
+
+        <div style={{ ...setupCardStyle, width: 320, marginTop: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: colors.text, marginBottom: 12 }}>Hardware Test</div>
+
+          <label style={setupLabelStyle}>Paper size (mm)</label>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <input
+              data-mouse-input="true"
+              type="number"
+              min="1"
+              value={paperWidthMm}
+              onChange={(e) => setPaperWidthMm(Number(e.target.value))}
+              style={{ ...setupInputStyle, marginBottom: 0 }}
+              aria-label="Paper width (mm)"
+            />
+            <span style={{ color: colors.textDim, alignSelf: 'center' }}>x</span>
+            <input
+              data-mouse-input="true"
+              type="number"
+              min="1"
+              value={paperHeightMm}
+              onChange={(e) => setPaperHeightMm(Number(e.target.value))}
+              style={{ ...setupInputStyle, marginBottom: 0 }}
+              aria-label="Paper height (mm)"
+            />
+          </div>
+
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleTestPrint} style={{ ...setupSubmitStyle, marginBottom: 12 }}>
+            Test Print
+          </button>
+
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={startHardwareCheck} style={{ ...setupSubmitStyle, marginBottom: 8 }}>
+            Check Hardware
+          </button>
+          {hwCheckStatus === 'awaiting_scan' && (
+            <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.textDim }}>
+              Printed <strong>{hwCheckCode}</strong> — scan it below to confirm.
+            </p>
+          )}
+          {hwCheckStatus === 'pass' && (
+            <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.green }}>
+              ✅ Hardware ready — printer and scanner both confirmed.
+            </p>
+          )}
+          {hwCheckStatus === 'fail' && (
+            <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.red }}>
+              ❌ Scanned value didn't match the printed barcode. Scan CHECK_HW to retry.
+            </p>
+          )}
+
+          <label style={setupLabelStyle}>Scan here (or scan TEST_PRINT / CHECK_HW — no mouse needed)</label>
+          <input
+            ref={testScanInputRef}
+            value={testScanValue}
+            onChange={(e) => setTestScanValue(e.target.value)}
+            onKeyDown={handleTestScan}
+            onBlur={() => testScanInputRef.current && testScanInputRef.current.focus()}
+            placeholder="Scan or type, then press Enter"
+            style={setupInputStyle}
+          />
+          {lastTestScan !== null && (
+            <p style={{ marginTop: 8, fontSize: 13, color: colors.green }}>
+              Last scanned: <strong>{lastTestScan}</strong>
+            </p>
+          )}
+        </div>
+
+        <iframe ref={printFrameRef} title="label-print" style={{ display: 'none' }} />
       </div>
     );
   }
@@ -426,7 +729,7 @@ function PackingStation() {
         }}
       >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <h2>Packing Station — {stationId}</h2>
+        <h2>{mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'} — {stationId}</h2>
         <div style={{ textAlign: 'right', fontSize: 12, lineHeight: 1.7 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
             <span style={{ fontSize: 14, fontWeight: 'bold' }}>
@@ -441,7 +744,33 @@ function PackingStation() {
         </div>
       </div>
 
-      {state ? (
+      {mode === 'shipping' ? (
+        <div>
+          <p style={{ opacity: 0.85 }}>
+            Scan each packed label's barcode as the courier takes it — confirms pickup and clears it from the Ready to Pickup pool.
+            This is independent of whatever the packing side is doing; no order needs to be "current" here.
+          </p>
+          {pickupLog.length === 0 ? (
+            <p style={{ opacity: 0.6 }}>No pickups confirmed yet this session.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #555' }}>
+                  <th>Order</th><th>Confirmed at</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pickupLog.map((entry) => (
+                  <tr key={`${entry.order_sn}-${entry.at}`} style={{ color: '#a5d6a7' }}>
+                    <td>{entry.order_sn}</td>
+                    <td>{formatTime(entry.at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : state ? (
         <div>
           <p>
             Order: <strong>{state.order.order_sn}</strong> — {state.order.buyer_name}
@@ -454,7 +783,7 @@ function PackingStation() {
           <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid #555' }}>
-                <th>SKU</th><th>Product</th><th>Scanned / Qty</th>
+                <th>SKU</th><th>Product</th><th>Barcode</th><th>Scanned / Qty</th>
               </tr>
             </thead>
             <tbody>
@@ -462,12 +791,13 @@ function PackingStation() {
                 <tr key={it.sku} style={{ color: it.scanned_qty === it.qty ? '#a5d6a7' : 'white' }}>
                   <td>{it.sku}</td>
                   <td>{it.product_name}</td>
+                  <td style={{ fontFamily: 'monospace', color: it.barcode ? 'inherit' : '#888' }}>{it.barcode || '—'}</td>
                   <td>{it.scanned_qty} / {it.qty}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {state.session.status === 'AWAITING_LABEL_SCAN' && (
+          {['AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP'].includes(state.session.status) && (
             <a
               href={`${API_BASE}/packing/label/${state.session.id}`}
               target="_blank"
@@ -495,6 +825,12 @@ function PackingStation() {
           margin-right: 8px;
           vertical-align: middle;
         }
+        /* No mouse on the real station once setup is done — this rule only
+           exists in the DOM while this screen is mounted, so Station Setup
+           (rendered separately, before stationReady) keeps the normal cursor.
+           !important overrides the browser's own default cursor on inputs/
+           buttons (text caret, pointer), which plain inheritance can't. */
+        *, *::before, *::after { cursor: none !important; }
       `}</style>
 
       <div
@@ -515,7 +851,7 @@ function PackingStation() {
         onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
         onBlur={() => inputRef.current && inputRef.current.focus()}
         autoFocus
-        placeholder={busy ? 'Please wait... (scans still accepted)' : operatorName ? 'Scan here (command or SKU)...' : 'Scan operator barcode...'}
+        placeholder={busy ? 'Please wait... (scans still accepted)' : !operatorName ? 'Scan operator barcode...' : mode === 'shipping' ? 'Scan a packed label...' : 'Scan here (command or SKU)...'}
         style={{ ...inputStyle, background: '#000', color: '#0f0', fontFamily: 'monospace', fontSize: 18 }}
       />
 

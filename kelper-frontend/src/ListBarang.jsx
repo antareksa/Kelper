@@ -1,81 +1,27 @@
-// Style/layout preview only — mock product data, not wired to the Shopee
-// Product API yet. Built to check the expand-row interaction works before
-// wiring up real SKU/variant data.
+// Wired to the local Shopee catalog cache (synced on demand via the Refresh
+// button, not fetched live on every page load — see /products/sync-shopee).
+// Trend and Omset Ini/Lalu need order-history aggregation, a separate,
+// bigger feature not built yet — shown as "—" rather than faked, same rule
+// the tech doc sets for HPP: an unknown number is never presented as zero.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { colors, card } from './theme';
-import { IconSearch, IconRefresh, IconEdit, IconStore, IconHistory, IconChevronDown } from './Icons';
+import { IconSearch, IconRefresh, IconUpload, IconStore, IconHistory, IconChevronDown } from './Icons';
 import { useShopName } from './useShopName';
 
-const SUMMARY = [
-  { label: 'Total SKU', value: '49' },
-  { label: 'SKU Kosong', value: '18', accent: colors.red },
-  { label: 'Fee Layanan', value: '26.85%' },
-  { label: 'Rata-rata Margin', value: '21.98%', accent: colors.green },
-  { label: 'Omset Bulan Ini', value: 'Rp 312.485.000' },
-  { label: 'Omset Bulan Lalu', value: 'Rp 289.940.500' },
-];
+// Resolves relative to whatever host served this page, so a client machine
+// on the LAN reaches the real backend instead of its own empty localhost.
+const API_BASE = `http://${window.location.hostname}:3001`;
+const SHOP_ID = 227886187;
 
-const PRODUCTS = [
-  { sku: 'ADDITION-01', name: 'Extra Bubble Wrap Untuk Tambahan Prot...', variants: 1, soldOut: false, trend: 0, minBeli: 1, profitPct: -136, omsetIni: 'Rp 1.240.000', omsetLalu: 'Rp 1.480.000' },
-  { sku: 'KEL-01', name: 'Kelper Spin Mop Lantai Stainless Steel Pel Putar P...', variants: 1, soldOut: false, trend: 192, minBeli: 1, profitPct: 23, omsetIni: 'Rp 65.641.255', omsetLalu: 'Rp 53.284.224' },
-  { sku: 'KEL-02', name: 'Kelper Spray Mop Alat Pel Semprot Microfiber Se...', variants: 1, soldOut: false, trend: 0, minBeli: 1, profitPct: 25, omsetIni: 'Rp 18.320.000', omsetLalu: 'Rp 17.905.000' },
-  { sku: 'KEL-03', name: 'Kelper Sapu Pengki Tekuk Estetik Sweep B...', variants: 1, soldOut: true, trend: 0, minBeli: 1, profitPct: 25, omsetIni: 'Rp 0', omsetLalu: 'Rp 6.120.000' },
-  { sku: 'KEL-04', name: 'Kelper Spin Mop Deluxe Pel Putar Spin Mop...', variants: 1, soldOut: true, trend: 0, minBeli: 1, profitPct: 30, omsetIni: 'Rp 0', omsetLalu: 'Rp 9.870.000' },
-  { sku: 'KEL-05', name: 'Kelper Flat Mop Lantai Microfiber Pel Segi', variants: 1, soldOut: true, trend: 0, minBeli: 1, profitPct: 36, omsetIni: 'Rp 0', omsetLalu: 'Rp 4.550.000' },
-  { sku: 'KEL-06', name: 'Kelper - Spin Mop Handle Alat Pel Tongkat Pel Tan...', variants: 1, soldOut: false, trend: 0, minBeli: 1, profitPct: 28, omsetIni: 'Rp 12.680.000', omsetLalu: 'Rp 11.230.000' },
-  { sku: 'KEL-07', name: 'Kelper Refill Spin Mop Pel Putar', variants: 1, soldOut: false, trend: 0, minBeli: 1, profitPct: 34, omsetIni: 'Rp 22.410.000', omsetLalu: 'Rp 19.860.000' },
-  { sku: 'KEL-08', name: 'Kelper 4 in 1 Sapu Pengki Sikat Slaber Pake...', variants: 1, soldOut: false, trend: 0, minBeli: 1, profitPct: 27, omsetIni: 'Rp 9.150.000', omsetLalu: 'Rp 8.400.000' },
-  { sku: 'KEL-09', name: 'Kelper X Mop Super Praktis Alat Pel', variants: 1, soldOut: true, trend: 0, minBeli: 1, profitPct: 23, omsetIni: 'Rp 0', omsetLalu: 'Rp 5.640.000' },
-];
-
-const VARIANT_DEMO = {
-  sku: 'KEL-01',
-  stok: 28,
-  hpp: 'Rp 100.783',
-  harga: 'Rp 208.829',
-  hargaSistem: 'Rp 208.829 (0%)', // Shopee's live listed price
-  estProfit: 'Rp 48.324',
-  estProfitPct: '23%',
-  qtyIni: 324,
-  qtyLalu: 265,
-  omsetIni: 'Rp 65.641.255',
-  omsetLalu: 'Rp 53.284.224',
-};
+function formatRupiah(value) {
+  if (value == null) return '—';
+  return `Rp${Number(value).toLocaleString('id-ID')}`;
+}
 
 const TABLE_GRID = '32px minmax(220px,2fr) 90px 100px 90px 100px 90px 130px 130px 44px';
-const SUB_GRID = '110px 1fr 60px 110px 150px 100px 90px 80px 80px 120px 120px 90px';
-
-function Toggle({ on, onToggle }) {
-  return (
-    <button
-      onClick={onToggle}
-      style={{
-        width: 32,
-        height: 18,
-        borderRadius: 9,
-        border: 'none',
-        background: on ? colors.green : colors.cardAlt,
-        position: 'relative',
-        cursor: 'pointer',
-        flexShrink: 0,
-      }}
-    >
-      <span
-        style={{
-          position: 'absolute',
-          top: 2,
-          left: on ? 16 : 2,
-          width: 14,
-          height: 14,
-          borderRadius: '50%',
-          background: '#fff',
-          transition: 'left 0.15s',
-        }}
-      />
-    </button>
-  );
-}
+const SUB_GRID = '110px 1fr 60px 110px 100px 150px 100px 90px 80px 80px 120px 120px 90px';
 
 function SummaryCard({ label, value, accent }) {
   return (
@@ -86,7 +32,12 @@ function SummaryCard({ label, value, accent }) {
   );
 }
 
+// null = no order-history data to compute a trend from yet (not the same as
+// a real 0% trend, so it renders distinctly rather than looking like "flat").
 function TrendBadge({ value }) {
+  if (value == null) {
+    return <span style={{ fontSize: 12.5, color: colors.textFaint, fontFamily: 'var(--num)' }}>—</span>;
+  }
   if (!value) {
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: colors.textFaint, fontSize: 12.5, fontFamily: 'var(--num)' }}>
@@ -104,9 +55,69 @@ function TrendBadge({ value }) {
   );
 }
 
+// Average profit % across variants that actually have an HPP entry; null
+// (shown as "—") when none of them do, rather than presenting 0%.
+function avgProfitPct(variants) {
+  const withHpp = variants.filter((v) => v.profitPct != null);
+  if (withHpp.length === 0) return null;
+  const sum = withHpp.reduce((acc, v) => acc + v.profitPct, 0);
+  return Math.round((sum / withHpp.length) * 10) / 10;
+}
+
+// Same small thumbnail + hover-preview behavior as the item-level photo, but
+// reusable per variant row. Falls back to a plain placeholder box (no
+// initials — a variant has no short code worth abbreviating) when there's
+// no image at all, which the catalog endpoint already tries to avoid by
+// falling back to the item's own photo before this ever renders.
+function VariantThumb({ image }) {
+  const ref = useRef(null);
+  const [hovering, setHovering] = useState(false);
+
+  if (!image) {
+    return <div style={{ width: 28, height: 28, borderRadius: 6, background: colors.cardAlt, flexShrink: 0 }} />;
+  }
+
+  return (
+    <div ref={ref} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)} style={{ flexShrink: 0 }}>
+      <img src={image} alt="" style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'cover', display: 'block' }} />
+      {hovering && <ImageHoverPreview src={image} anchorRect={ref.current?.getBoundingClientRect()} />}
+    </div>
+  );
+}
+
+// Renders into document.body via a portal, positioned from the thumbnail's
+// own bounding rect, so the big preview can never get clipped by an
+// ancestor's overflow:hidden/auto (the table wrapper and card both have
+// one) the way a normal absolutely-positioned tooltip would be.
+function ImageHoverPreview({ src, anchorRect }) {
+  if (!anchorRect) return null;
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        top: anchorRect.top + anchorRect.height / 2,
+        left: anchorRect.right + 10,
+        transform: 'translateY(-50%)',
+        zIndex: 1000,
+        background: colors.card,
+        border: `1px solid ${colors.border}`,
+        borderRadius: 10,
+        padding: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        pointerEvents: 'none',
+      }}
+    >
+      <img src={src} alt="" style={{ width: 220, height: 220, objectFit: 'cover', borderRadius: 6, display: 'block' }} />
+    </div>,
+    document.body
+  );
+}
+
 function ProductRow({ product, expanded, onToggle }) {
-  const [manual, setManual] = useState(false);
   const initials = product.sku.slice(0, 2);
+  const profitPct = avgProfitPct(product.variants);
+  const thumbRef = useRef(null);
+  const [hovering, setHovering] = useState(false);
 
   return (
     <div style={{ borderBottom: `1px solid ${colors.border}` }}>
@@ -126,18 +137,38 @@ function ProductRow({ product, expanded, onToggle }) {
         </span>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 8, background: colors.cardAlt, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: colors.textDim }}>
-            {initials}
+          <div
+            ref={thumbRef}
+            onMouseEnter={() => setHovering(true)}
+            onMouseLeave={() => setHovering(false)}
+            style={{ flexShrink: 0 }}
+          >
+            {product.image ? (
+              <img src={product.image} alt="" style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover', display: 'block' }} />
+            ) : (
+              <div style={{ width: 36, height: 36, borderRadius: 8, background: colors.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: colors.textDim }}>
+                {initials}
+              </div>
+            )}
           </div>
+
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {product.name}
             </div>
-            <div style={{ fontSize: 11, color: colors.textDim }}>{product.variants} varian</div>
+            <div style={{ fontSize: 11, color: colors.textDim }}>{product.variants.length} varian</div>
           </div>
+          {hovering && product.image && (
+            <ImageHoverPreview src={product.image} anchorRect={thumbRef.current?.getBoundingClientRect()} />
+          )}
         </div>
 
-        <div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {product.status !== 'NORMAL' && (
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: colors.textDim, background: colors.cardAlt, padding: '3px 8px', borderRadius: 999 }}>
+              {product.status === 'BANNED' ? 'DIBANNED' : 'DIARSIPKAN'}
+            </span>
+          )}
           {product.soldOut && (
             <span style={{ fontSize: 10.5, fontWeight: 600, color: colors.red, background: colors.redDim, padding: '3px 8px', borderRadius: 999 }}>
               ● SOLD OUT
@@ -147,19 +178,18 @@ function ProductRow({ product, expanded, onToggle }) {
 
         <div style={{ fontSize: 12.5, color: colors.blue, fontFamily: 'ui-monospace, monospace' }}>{product.sku}</div>
 
-        <TrendBadge value={product.trend} />
+        <TrendBadge value={null} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>
-          {product.minBeli}
-          <IconEdit size={11} />
+          {product.minPurchase ?? '—'}
         </div>
 
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: product.profitPct < 0 ? colors.red : colors.green, fontFamily: 'var(--num)' }}>
-          {product.profitPct}%
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: profitPct == null ? colors.textFaint : profitPct < 0 ? colors.red : colors.green, fontFamily: 'var(--num)' }}>
+          {profitPct == null ? '—' : `${profitPct}%`}
         </div>
 
-        <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{product.omsetIni}</div>
-        <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{product.omsetLalu}</div>
+        <div style={{ fontSize: 12.5, color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+        <div style={{ fontSize: 12.5, color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
 
         <button style={{ background: 'none', border: 'none', color: colors.textDim, cursor: 'pointer', padding: 4 }}>
           <IconHistory size={14} />
@@ -175,6 +205,7 @@ function ProductRow({ product, expanded, onToggle }) {
                 <div>Nama Varian</div>
                 <div>Stok</div>
                 <div>HPP</div>
+                <div>Code</div>
                 <div>Harga</div>
                 <div>Est Profit</div>
                 <div>Est % Profit</div>
@@ -184,35 +215,39 @@ function ProductRow({ product, expanded, onToggle }) {
                 <div>Omset Lalu</div>
                 <div>Aksi</div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: SUB_GRID, gap: 10, alignItems: 'center', padding: '10px 10px', background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 10, fontSize: 12.5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 6, background: colors.cardAlt, flexShrink: 0 }} />
-                  <span style={{ color: colors.text }}>{VARIANT_DEMO.sku}</span>
-                </div>
-                <div style={{ color: colors.text }}>{VARIANT_DEMO.sku}</div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.stok}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: colors.text, fontFamily: 'var(--num)' }}>
-                  {VARIANT_DEMO.hpp} <IconEdit size={11} />
-                </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: colors.text, fontFamily: 'var(--num)' }}>
-                    {VARIANT_DEMO.harga} <IconEdit size={11} />
+              {product.variants.map((v) => (
+                <div
+                  key={v.model_id}
+                  style={{ display: 'grid', gridTemplateColumns: SUB_GRID, gap: 10, alignItems: 'center', padding: '10px 10px', background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 10, fontSize: 12.5, marginBottom: 6 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <VariantThumb image={v.image} />
+                    <span style={{ color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{v.sku}</span>
                   </div>
-                  <div style={{ fontSize: 10.5, color: colors.textFaint }}>
-                    Sistem: <span style={{ fontFamily: 'var(--num)' }}>{VARIANT_DEMO.hargaSistem}</span>
+                  <div style={{ color: colors.text }}>{v.name}</div>
+                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{v.stock ?? '—'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: v.hpp == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>
+                    {formatRupiah(v.hpp)}
                   </div>
+                  <div style={{ color: v.barcode == null ? colors.textFaint : colors.text, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                    {v.barcode ?? '—'}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: colors.text, fontFamily: 'var(--num)' }}>
+                      {formatRupiah(v.price)}
+                    </div>
+                  </div>
+                  <div style={{ color: v.profit == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.profit)}</div>
+                  <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>
+                    {v.profitPct == null ? '—' : `${v.profitPct}%`}
+                  </div>
+                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+                  <div />
                 </div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.estProfit}</div>
-                <div style={{ color: colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.estProfitPct}</div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.qtyIni}</div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.qtyLalu}</div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.omsetIni}</div>
-                <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{VARIANT_DEMO.omsetLalu}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: colors.textDim }}>Manual</span>
-                  <Toggle on={manual} onToggle={() => setManual((v) => !v)} />
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
@@ -224,8 +259,102 @@ function ProductRow({ product, expanded, onToggle }) {
 function ListBarang() {
   const [expandedSku, setExpandedSku] = useState(null);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState('active'); // active | archived | all
+  const [catalog, setCatalog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [uploadMessage, setUploadMessage] = useState(null);
+  const [uploadMessageType, setUploadMessageType] = useState('info'); // info | error | success
   const shopName = useShopName();
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    loadCatalog();
+  }, []);
+
+  async function loadCatalog() {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/products/catalog`);
+      setCatalog(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/products/sync-shopee?shop_id=${SHOP_ID}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      await loadCatalog();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // Imports HPP + Code (barcode) from the client's Excel sheet (Nama, SKU,
+  // Modal, Barcode) and assigns them onto the matching product by SKU — the
+  // join happens server-side in /products/catalog, so reloading it here is
+  // enough to reflect the new HPP/Code values against the Shopee variants.
+  async function handleFileChange(e) {
+    const file = e.target.files[0];
+    e.target.value = ''; // allow re-selecting the same file to re-import after a fix
+    if (!file) return;
+
+    setUploading(true);
+    setUploadMessage(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch(`${API_BASE}/products/import-hpp`, { method: 'POST', body });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+
+      const skippedNote = data.skippedRows.length > 0 ? ` (${data.skippedRows.length} baris dilewati — SKU kosong)` : '';
+      setUploadMessage(`Berhasil impor HPP untuk ${data.imported} SKU.${skippedNote}`);
+      setUploadMessageType('success');
+      await loadCatalog();
+    } catch (err) {
+      setUploadMessage(err.message);
+      setUploadMessageType('error');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
+  // one taken down by Shopee) — neither is "NORMAL" anymore, but the item
+  // doesn't disappear from Shopee's own records, so it wouldn't disappear
+  // from ours either without this filter. Default to hiding both, since an
+  // archived product isn't something you're actively selling.
+  const statusFiltered = catalog.filter((p) => {
+    if (statusFilter === 'all') return true;
+    if (statusFilter === 'archived') return p.status !== 'NORMAL';
+    return p.status === 'NORMAL';
+  });
+
+  const filtered = statusFiltered.filter((p) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.variants.some((v) => v.sku.toLowerCase().includes(q));
+  });
+
+  const allVariants = statusFiltered.flatMap((p) => p.variants);
+  const skuKosong = allVariants.filter((v) => v.hpp == null).length;
+  const avgMargin = avgProfitPct(allVariants);
+
+  const summary = [
+    { label: 'Total SKU', value: String(allVariants.length) },
+    { label: 'SKU Kosong (Tanpa HPP)', value: String(skuKosong), accent: skuKosong > 0 ? colors.red : undefined },
+    { label: 'Rata-rata Margin', value: avgMargin == null ? '—' : `${avgMargin}%`, accent: avgMargin != null ? colors.green : undefined },
+  ];
 
   return (
     <div style={{ color: colors.text }}>
@@ -248,90 +377,110 @@ function ListBarang() {
           />
         </div>
 
-        <button style={{ ...pillStyle, width: 34, justifyContent: 'center', padding: 0 }}>
+        <div style={{ display: 'flex', border: `1px solid ${colors.border}`, borderRadius: 8, overflow: 'hidden' }}>
+          {[
+            { key: 'active', label: 'Aktif' },
+            { key: 'archived', label: 'Diarsipkan' },
+            { key: 'all', label: 'Semua' },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(key)}
+              style={{
+                padding: '0 12px',
+                height: 34,
+                border: 'none',
+                background: statusFilter === key ? colors.cardAlt : colors.card,
+                color: statusFilter === key ? colors.text : colors.textDim,
+                fontSize: 13,
+                fontWeight: statusFilter === key ? 600 : 400,
+                cursor: 'pointer',
+                fontFamily: 'var(--sans)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          style={{ ...pillStyle, width: 34, justifyContent: 'center', padding: 0, opacity: syncing ? 0.6 : 1 }}
+          title="Sync dari Shopee"
+        >
           <IconRefresh size={15} />
         </button>
 
-        <button style={{ ...pillStyle, gap: 8, background: colors.blue + '22', color: colors.blue, borderColor: 'transparent' }}>
-          FEE SETTING <strong style={{ fontFamily: 'var(--num)' }}>28%</strong>
-          <IconEdit size={11} />
+        <input ref={fileInputRef} type="file" accept=".xlsx" onChange={handleFileChange} style={{ display: 'none' }} />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
+          title="Impor HPP & Code dari Excel (Nama, SKU, Modal, Barcode)"
+        >
+          <IconUpload size={15} />
+          {uploading ? 'Mengimpor...' : 'Upload HPP'}
         </button>
       </div>
 
+      {error && <p style={{ color: colors.red, fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {uploadMessage && (
+        <p style={{ color: uploadMessageType === 'error' ? colors.red : colors.green, fontSize: 13, marginBottom: 12 }}>
+          {uploadMessage}
+        </p>
+      )}
+
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        {SUMMARY.map((s) => <SummaryCard key={s.label} {...s} />)}
+        {summary.map((s) => <SummaryCard key={s.label} {...s} />)}
       </div>
 
       <div style={{ ...card({ padding: 0 }), overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
-          <div style={{ minWidth: 900 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: TABLE_GRID, gap: 10, padding: '10px 12px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: `1px solid ${colors.border}` }}>
-              <div />
-              <div>Item SKU</div>
-              <div />
-              <div>SKU Induk</div>
-              <div>Trend</div>
-              <div>Min. Pembelian</div>
-              <div>Est % Profit</div>
-              <div>Omset Bulan Ini</div>
-              <div>Omset Bulan Lalu</div>
-              <div>Aksi</div>
+        {loading ? (
+          <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Memuat produk...</p>
+        ) : catalog.length === 0 ? (
+          <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>
+            Belum ada produk. Klik tombol sync ({'↻'}) di atas untuk mengambil data dari Shopee.
+          </p>
+        ) : filtered.length === 0 ? (
+          <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Tidak ada produk yang cocok dengan filter ini.</p>
+        ) : (
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ minWidth: 900 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: TABLE_GRID, gap: 10, padding: '10px 12px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: `1px solid ${colors.border}` }}>
+                  <div />
+                  <div>Item SKU</div>
+                  <div />
+                  <div>SKU Induk</div>
+                  <div>Trend</div>
+                  <div>Min. Pembelian</div>
+                  <div>Est % Profit</div>
+                  <div>Omset Bulan Ini</div>
+                  <div>Omset Bulan Lalu</div>
+                  <div>Aksi</div>
+                </div>
+
+                {filtered.map((p) => (
+                  <ProductRow
+                    key={p.item_id}
+                    product={p}
+                    expanded={expandedSku === p.sku}
+                    onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
+                  />
+                ))}
+              </div>
             </div>
 
-            {PRODUCTS.map((p) => (
-              <ProductRow
-                key={p.sku}
-                product={p}
-                expanded={expandedSku === p.sku}
-                onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, padding: '12px 16px', fontSize: 12.5, color: colors.textDim }}>
-          <span>Showing 1 – 10 of 49</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            Rows
-            <select style={{ background: colors.cardAlt, color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 6, padding: '4px 6px', fontFamily: 'var(--num)' }}>
-              <option>10</option>
-              <option>25</option>
-              <option>50</option>
-            </select>
-          </span>
-          <span style={{ display: 'flex', gap: 4 }}>
-            <PageBtn label="«" />
-            <PageBtn label="‹" />
-            {[1, 2, 3, 4, 5].map((n) => (
-              <PageBtn key={n} label={n} active={page === n} onClick={() => setPage(n)} />
-            ))}
-            <PageBtn label="›" />
-            <PageBtn label="»" />
-          </span>
-        </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '12px 16px', fontSize: 12.5, color: colors.textDim }}>
+              Menampilkan {filtered.length} dari {statusFiltered.length} produk
+              {statusFiltered.length !== catalog.length && ` (${catalog.length - statusFiltered.length} disembunyikan oleh filter status)`}
+            </div>
+          </>
+        )}
       </div>
     </div>
-  );
-}
-
-function PageBtn({ label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        minWidth: 26,
-        height: 26,
-        borderRadius: 6,
-        border: `1px solid ${active ? colors.blue : colors.border}`,
-        background: active ? colors.blue : 'transparent',
-        color: active ? '#fff' : colors.textDim,
-        fontSize: 12,
-        cursor: 'pointer',
-        fontFamily: 'var(--num)',
-      }}
-    >
-      {label}
-    </button>
   );
 }
 

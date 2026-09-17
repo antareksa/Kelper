@@ -1,42 +1,39 @@
-// Style/layout preview only — numbers below are sample data, not wired to
-// anything real. Most of these metrics are blocked per the tech doc (HPP,
-// ads access, visitor count aren't available yet) or simply not built yet.
-// This exists to nail down the visual direction before wiring real data in.
-
+import { useEffect, useState } from 'react';
 import { colors, card } from './theme';
 import { Sparkline } from './Sparkline';
 import { IconArrowUpRight } from './Icons';
 import { useShopName } from './useShopName';
 
-const KPI_CARDS = [
-  { label: 'Omzet Hari Ini', value: 'Rp 17.285.894', trendPct: '-17.96%', trendType: 'down', spark: [22, 19, 17, 18, 15, 13, 12] },
-  { label: 'Laba Bersih Hari Ini', value: 'Rp 413.326', trendPct: '-33.75%', trendType: 'down', spark: [9, 8.6, 8, 7.2, 6.5, 5.8, 5.3] },
-  { label: 'Total Order', value: '271', trendPct: '-23.23%', trendType: 'down', spark: [340, 320, 300, 295, 280, 275, 271] },
-  { label: 'Pengunjung', value: '4.494', trendPct: '+46.77%', trendType: 'up', spark: [2800, 3100, 3400, 3600, 3900, 4200, 4494] },
-  { label: 'Persentase Profit', value: '5.01%', trendPct: '-0.99%', trendType: 'down', spark: [6.1, 5.9, 5.7, 5.6, 5.4, 5.2, 5.01] },
-];
+// Resolves relative to whatever host served this page, so a client machine
+// on the LAN reaches the real backend instead of its own empty localhost.
+const API_BASE = `http://${window.location.hostname}:3001`;
+const SHOP_ID = 227886187;
+const REFRESH_MS = 60000;
 
-const FUNNEL_STEPS = [
-  { label: 'Margin', value: 'Rp 9.497.997', color: colors.green },
-  { label: 'Iklan', value: 'Rp 3.670.892', color: colors.blue },
-  { label: 'Layanan', value: 'Rp 4.622.423', color: colors.blue },
-  { label: 'Biaya Pesanan', value: 'Rp 338.750', color: colors.orange },
-  { label: 'Affiliasi', value: 'Rp 452.606', color: colors.orange },
-];
+function formatRupiah(value) {
+  if (value == null) return '—';
+  return `Rp${Math.round(value).toLocaleString('id-ID')}`;
+}
 
-const PRODUCTS = [
-  { name: 'Kelper Sikat Lantai 2 in 1 Gagang Panjang', sku: 'KEL-37', price: 'Rp 339.887', change: '+41%' },
-  { name: 'Kelper Twist Mop Pel Putar Microfiber', sku: 'KEL-43', price: 'Rp 172.586', change: '+37%' },
-  { name: 'Kelper Pembersih Kaca Jendela Teleskopik', sku: 'KEL-40', price: 'Rp 177.080', change: '+30%' },
-  { name: 'KELPER 4 in 1 Sapu Pengki Sikat Slaber', sku: 'KEL-08', price: 'Rp 54.547', change: '+27%' },
-];
+function formatTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
-const COSTS = [
-  { label: 'Iklan', pct: '18.9%', value: 'Rp 3.670.892', color: colors.blue },
-  { label: 'Layanan', pct: '26.7%', value: 'Rp 4.638.863', color: colors.orange },
-  { label: 'Affiliasi', pct: '2.6%', value: 'Rp 452.606', color: colors.green },
-  { label: 'Biaya per Pesanan', pct: '2%', value: 'Rp 340.000', color: colors.textFaint },
-];
+// pct is a plain percentage-change number (e.g. 12.3 or -4.5); suffix lets
+// the margin card (a percentage-POINT delta, not a percentage change) read
+// correctly instead of implying a second layer of percent-of-percent math.
+function trendLabel(pct, suffix = '% dari kemarin') {
+  if (pct == null) return 'Belum ada data kemarin';
+  return `${pct > 0 ? '+' : ''}${pct}${suffix}`;
+}
+
+function trendType(pct) {
+  if (pct == null) return null;
+  return pct >= 0 ? 'up' : 'down';
+}
 
 function CardHeader({ label }) {
   return (
@@ -47,35 +44,59 @@ function CardHeader({ label }) {
   );
 }
 
-function KpiCard({ label, value, trendPct, trendType, spark }) {
-  const sparkColor = trendType === 'up' ? colors.green : colors.red;
+function KpiCard({ label, value, trend, spark }) {
+  const type = trendType(trend?.pct);
+  const sparkColor = type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint;
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
       <CardHeader label={label} />
       <div style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
-      <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: trendType === 'up' ? colors.green : colors.red }}>
-        {trendType === 'up' ? '▲' : '▼'} <span style={{ fontFamily: 'var(--num)' }}>{trendPct}</span> dari kemarin
+      <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
+        {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
+        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix) : 'Belum ada data kemarin'}</span>
       </div>
-      <Sparkline data={spark} color={sparkColor} height={30} />
+      {spark && spark.length >= 2 ? <Sparkline data={spark} color={sparkColor} height={30} /> : <div style={{ height: 30 }} />}
     </div>
   );
 }
 
-function ProfitFunnel() {
+function BlockedCard({ label, note }) {
+  return (
+    <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column', opacity: 0.65 }}>
+      <CardHeader label={label} />
+      <div style={{ fontSize: 15, fontWeight: 600, color: colors.textFaint, marginBottom: 6 }}>Belum terhubung</div>
+      <div style={{ fontSize: 11.5, color: colors.textFaint, lineHeight: 1.4 }}>{note}</div>
+    </div>
+  );
+}
+
+// Only "Margin" (today's estimated gross profit) is real — the other four
+// funnel steps need Shopee's Ads/Finance APIs, which nothing in this app
+// currently calls, so they stay explicitly marked rather than showing a
+// fabricated split.
+function ProfitFunnel({ laba }) {
+  const steps = [
+    { label: 'Margin (Estimasi)', value: formatRupiah(laba), color: colors.green, blocked: false },
+    { label: 'Iklan', color: colors.blue, blocked: true },
+    { label: 'Layanan', color: colors.blue, blocked: true },
+    { label: 'Biaya Pesanan', color: colors.orange, blocked: true },
+    { label: 'Affiliasi', color: colors.orange, blocked: true },
+  ];
   return (
     <div style={card({ flex: 1 })}>
       <CardHeader label="Profit Funnel" />
       <div style={{ display: 'flex', gap: 8 }}>
-        {FUNNEL_STEPS.map((s) => (
+        {steps.map((s) => (
           <div
             key={s.label}
             style={{
               flex: 1,
               aspectRatio: '2 / 1',
-              background: s.color,
+              background: s.blocked ? colors.cardAlt : s.color,
+              border: s.blocked ? `1px dashed ${colors.border}` : 'none',
               borderRadius: 10,
               padding: '14px 14px',
-              color: '#fff',
+              color: s.blocked ? colors.textFaint : '#fff',
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'space-between',
@@ -83,7 +104,9 @@ function ProfitFunnel() {
             }}
           >
             <div style={{ fontSize: 14, opacity: 0.9 }}>{s.label}</div>
-            <div style={{ fontSize: 19, fontWeight: 700, fontFamily: 'var(--num)' }}>{s.value}</div>
+            <div style={{ fontSize: s.blocked ? 11.5 : 19, fontWeight: 700, fontFamily: 'var(--num)' }}>
+              {s.blocked ? 'Belum tersedia' : s.value}
+            </div>
           </div>
         ))}
       </div>
@@ -91,19 +114,41 @@ function ProfitFunnel() {
   );
 }
 
-function LineChartPlaceholder() {
+// Real intraday cumulative Omzet/Laba for today, bucketed by WIB hour —
+// replaces the old hardcoded placeholder curve.
+function LineChart({ omzetSeries, labaSeries }) {
+  if (!omzetSeries || omzetSeries.length === 0) {
+    return (
+      <div style={card({ flex: 1 })}>
+        <CardHeader label="Omzet vs Laba Hari Ini (Estimasi, per jam)" />
+        <div style={{ padding: '30px 0', textAlign: 'center', color: colors.textDim, fontSize: 13 }}>Belum ada order hari ini.</div>
+      </div>
+    );
+  }
+
+  const max = Math.max(1, ...omzetSeries, ...labaSeries);
+  const toCoords = (series) => series.map((v, i) => {
+    const x = series.length > 1 ? (i / (series.length - 1)) * 300 : 0;
+    const y = 92 - (v / max) * 82;
+    return [x, y];
+  });
+  const omzetCoords = toCoords(omzetSeries);
+  const labaCoords = toCoords(labaSeries);
+  const [lastOmzetX, lastOmzetY] = omzetCoords[omzetCoords.length - 1];
+  const [lastLabaX, lastLabaY] = labaCoords[labaCoords.length - 1];
+
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Omzet vs Laba Hari Ini" />
+      <CardHeader label="Omzet vs Laba Hari Ini (Estimasi, per jam)" />
       <div style={{ position: 'relative' }}>
         <svg viewBox="0 0 300 100" preserveAspectRatio="none" style={{ width: '100%', height: 140, display: 'block' }}>
           <line x1="0" y1="92" x2="300" y2="92" stroke={colors.border} strokeWidth="1" strokeDasharray="2 4" />
-          <polyline points="0,80 60,30 120,45 180,55 240,60 300,70" fill="none" stroke={colors.blue} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <polyline points="0,90 60,75 120,80 180,82 240,85 300,88" fill="none" stroke={colors.green} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <polyline points={omzetCoords.map((p) => p.join(',')).join(' ')} fill="none" stroke={colors.blue} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <polyline points={labaCoords.map((p) => p.join(',')).join(' ')} fill="none" stroke={colors.green} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         {/* plain circular dots — the svg above is stretched non-uniformly (preserveAspectRatio="none"), which would turn <circle> into an ellipse */}
-        <span style={{ position: 'absolute', left: '100%', top: '70%', transform: 'translate(-50%, -50%)', width: 7, height: 7, borderRadius: '50%', background: colors.blue }} />
-        <span style={{ position: 'absolute', left: '100%', top: '88%', transform: 'translate(-50%, -50%)', width: 7, height: 7, borderRadius: '50%', background: colors.green }} />
+        <span style={{ position: 'absolute', left: `${(lastOmzetX / 300) * 100}%`, top: `${lastOmzetY}%`, transform: 'translate(-50%, -50%)', width: 7, height: 7, borderRadius: '50%', background: colors.blue }} />
+        <span style={{ position: 'absolute', left: `${(lastLabaX / 300) * 100}%`, top: `${lastLabaY}%`, transform: 'translate(-50%, -50%)', width: 7, height: 7, borderRadius: '50%', background: colors.green }} />
       </div>
       <div style={{ display: 'flex', gap: 16, fontSize: 11, color: colors.textDim, marginTop: 4 }}>
         <span><span style={{ color: colors.blue }}>●</span> Omzet</span>
@@ -113,67 +158,115 @@ function LineChartPlaceholder() {
   );
 }
 
-function ProductList() {
+function ProductList({ products }) {
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Produk Paling Menguntungkan" />
-      {PRODUCTS.map((p) => (
-        <div key={p.sku} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
-          <div>
-            <div style={{ color: colors.text }}>{p.name}</div>
-            <div style={{ color: colors.textDim, fontSize: 11 }}>{p.sku}</div>
+      <CardHeader label="Produk Paling Menguntungkan (30 Hari Terakhir)" />
+      {products.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>Belum ada data penjualan.</div>
+      ) : (
+        products.map((p) => (
+          <div key={p.sku} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+            <div>
+              <div style={{ color: colors.text }}>{p.name}</div>
+              <div style={{ color: colors.textDim, fontSize: 11 }}>{p.sku} · {p.qty} terjual</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(p.revenue)}</div>
+              <div style={{ color: p.profit == null ? colors.textFaint : colors.green, fontSize: 11, fontFamily: 'var(--num)' }}>
+                {p.profit == null ? 'HPP belum diisi' : `Profit ${formatRupiah(p.profit)}`}
+              </div>
+            </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{p.price}</div>
-            <div style={{ color: colors.green, fontSize: 11, fontFamily: 'var(--num)' }}>{p.change}</div>
-          </div>
-        </div>
-      ))}
+        ))
+      )}
     </div>
   );
 }
 
 function CostBreakdown() {
   return (
-    <div style={card({ flex: 1 })}>
+    <div style={{ ...card({ flex: 1 }), opacity: 0.65 }}>
       <CardHeader label="Biaya Terbesar" />
-      {COSTS.map((c) => (
-        <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', fontSize: 13 }}>
-          <span style={{ width: 8, height: 8, borderRadius: 4, background: c.color, display: 'inline-block' }} />
-          <span style={{ flex: 1, color: colors.textDim }}>{c.label} <span style={{ opacity: 0.6, fontFamily: 'var(--num)' }}>{c.pct}</span></span>
-          <span style={{ color: colors.text, fontFamily: 'var(--num)' }}>{c.value}</span>
-        </div>
-      ))}
+      <div style={{ padding: '20px 0', textAlign: 'center', color: colors.textFaint, fontSize: 12.5, lineHeight: 1.5 }}>
+        Belum terhubung ke Shopee Ads/Finance API — biaya iklan, layanan, dan afiliasi tidak tersedia.
+      </div>
     </div>
   );
 }
 
-function BocorList() {
+function BocorList({ leaking }) {
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Bottom 5 Produk Bocor" />
-      <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>
-        Tidak ada produk bocor — semua produk berada dalam kontrol baik.
-      </div>
+      <CardHeader label="Produk Bocor (Harga ≤ HPP)" />
+      {leaking.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>
+          Tidak ada produk bocor — semua produk berada dalam kontrol baik.
+        </div>
+      ) : (
+        leaking.map((p) => (
+          <div key={p.sku} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+            <div>
+              <div style={{ color: colors.text }}>{p.name}</div>
+              <div style={{ color: colors.textDim, fontSize: 11 }}>{p.sku}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>Harga {formatRupiah(p.price)}</div>
+              <div style={{ color: colors.red, fontSize: 11, fontFamily: 'var(--num)' }}>
+                HPP {formatRupiah(p.hpp)} (rugi {formatRupiah(p.hpp - p.price)}/pcs)
+              </div>
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
 
 function MainDashboard() {
   const shopName = useShopName();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [lastRefreshAt, setLastRefreshAt] = useState(null);
+
+  async function load() {
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}`);
+      if (res.ok) {
+        setData(await res.json());
+        setLastRefreshAt(Date.now());
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading && !data) {
+    return <div style={{ color: colors.textDim, padding: 40, textAlign: 'center' }}>Memuat data dashboard...</div>;
+  }
+  if (!data) {
+    return <div style={{ color: colors.red, padding: 40, textAlign: 'center' }}>Gagal memuat data dashboard.</div>;
+  }
 
   return (
     <div style={{ color: colors.text }}>
-      <div style={{ background: colors.orangeDim, border: `1px solid ${colors.orange}`, color: '#f0c674', borderRadius: 10, padding: '8px 12px', fontSize: 12, marginBottom: 16 }}>
-        Style/layout preview only — sample numbers, not connected to real data yet.
+      <div style={{ background: colors.orangeDim, border: `1px solid ${colors.orange}`, color: '#f0c674', borderRadius: 10, padding: '8px 12px', fontSize: 12, marginBottom: 16, lineHeight: 1.5 }}>
+        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> (harga katalog saat ini × qty terjual — bukan harga transaksi asli, karena Shopee belum menyediakan harga per-order untuk toko ini). Iklan, Layanan, Affiliasi, dan Pengunjung belum terhubung ke API terkait.
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa Hari Ini</div>
-          <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — last update 17:23</div>
+          <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — last update {formatTime(lastRefreshAt)}</div>
         </div>
         <button
+          onClick={load}
           style={{
             background: colors.cardAlt,
             border: `1px solid ${colors.border}`,
@@ -189,23 +282,31 @@ function MainDashboard() {
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        {KPI_CARDS.map((k) => <KpiCard key={k.label} {...k} />)}
+        <KpiCard label="Total Order Hari Ini" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
+        <KpiCard label="Omzet Hari Ini (Estimasi)" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
+        <KpiCard label="Laba Kotor Hari Ini (Estimasi)" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
+        <KpiCard
+          label="Persentase Profit (Estimasi)"
+          value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
+          trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari kemarin' }}
+        />
+        <BlockedCard label="Pengunjung" note="Perlu akses Shopee Analytics/Traffic API — belum diintegrasikan." />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProfitFunnel />
+        <ProfitFunnel laba={data.today.laba} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <LineChartPlaceholder />
+        <LineChart omzetSeries={data.todayHourly.omzet} labaSeries={data.todayHourly.laba} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProductList />
+        <ProductList products={data.topProducts} />
         <CostBreakdown />
       </div>
 
-      <BocorList />
+      <BocorList leaking={data.leaking} />
     </div>
   );
 }

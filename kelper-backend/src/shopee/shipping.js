@@ -61,6 +61,24 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
   return trackingNumber;
 }
 
+// "Package <number> not eligible for rescheduling" is what get_shipping_parameter
+// says once a package already exists for an order — that message is the only
+// place Shopee's API actually hands us the package_number (ship_order's own
+// success response never includes it, confirmed against the sandbox). Used
+// both to detect "already booked" and to harvest the number itself, which
+// get_package_detail then uses as a working substitute for the item_list
+// that order/get_order_detail has been failing to return for new orders.
+const PACKAGE_NUMBER_PATTERN = /Package (\S+) not eligible for rescheduling/i;
+
+// ship_order itself can also report "already booked", worded differently
+// from get_shipping_parameter's message above — seen in practice from a race
+// between the server's own retry and a concurrent manual booking attempt
+// on the same order. Without recognizing this, that order would throw here
+// forever: get_shipping_parameter would keep succeeding (nothing pending to
+// reject), ship_order would keep hitting this same rejection, and label_ready
+// would never become true.
+const ALREADY_SHIPPED_PATTERN = /already\s*(been\s*)?shipped/i;
+
 // Single-order path: get_shipping_parameter -> ship_order.
 //
 // Idempotent by design: if a previous attempt already called ship_order (e.g. a
@@ -70,21 +88,31 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
 // rather than failing or trying to ship_order a second time.
 async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   const shippingParam = await getShippingParameter(accessToken, shopId, orderSn);
-  const alreadyBooked = shippingParam.error && /not eligible for rescheduling/i.test(shippingParam.message || '');
+  const alreadyBookedMatch = shippingParam.error ? shippingParam.message?.match(PACKAGE_NUMBER_PATTERN) : null;
 
-  if (shippingParam.error && !alreadyBooked) {
+  if (shippingParam.error && !alreadyBookedMatch) {
     throw new Error(`get_shipping_parameter failed: ${shippingParam.message || shippingParam.error}`);
   }
 
-  if (!alreadyBooked) {
+  let packageNumber = alreadyBookedMatch?.[1] ?? null;
+
+  if (!alreadyBookedMatch) {
     const pickup = pickPickupOption(shippingParam.response?.pickup);
     const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
-    if (shipResult.error) {
+    const alreadyShipped = shipResult.error && ALREADY_SHIPPED_PATTERN.test(shipResult.message || '');
+    if (shipResult.error && !alreadyShipped) {
       throw new Error(`ship_order failed: ${shipResult.message || shipResult.error}`);
     }
+
+    // Deliberately re-trigger the "already booked" error we just handled above
+    // (or that ship_order just reported directly), purely to read the
+    // package_number out of its message.
+    const recheck = await getShippingParameter(accessToken, shopId, orderSn);
+    packageNumber = recheck.message?.match(PACKAGE_NUMBER_PATTERN)?.[1] ?? null;
   }
 
-  return pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  const trackingNumber = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  return { trackingNumber, packageNumber };
 }
 
 // Mass-shipping path: get_mass_shipping_parameter -> mass_ship_order.
@@ -95,6 +123,10 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
 // at sync time) — mass_ship_order lets one call cover multiple packages, but
 // here it's only ever called with this one order's package.
 async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
+  // NOTE: still depends on get_order_detail for package_list, unlike the
+  // single-order path above — inherits the same "empty for new orders" issue
+  // seen against Shopee's sandbox if that endpoint is still broken when this
+  // path is re-enabled.
   const detail = await getOrderDetail(accessToken, shopId, [orderSn], 'package_list');
   const packageNumber = detail.response?.order_list?.[0]?.package_list?.[0]?.package_number;
   if (!packageNumber) throw new Error('Could not resolve package_number for mass shipping');
@@ -120,11 +152,25 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
     throw new Error(`mass_ship_order failed for package: ${failEntry.fail_reason}`);
   }
 
-  return pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  const trackingNumber = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  return { trackingNumber, packageNumber };
+}
+
+// One-time backfill for orders that were already booked/labeled before
+// package_number started being captured at booking time — same "deliberately
+// re-trigger the already-booked error" trick as inside bookShipmentSingle,
+// exposed standalone so shopeeSync.js can retroactively learn the number
+// for orders it otherwise has no way to ever get one for.
+async function learnPackageNumber(accessToken, shopId, orderSn) {
+  const shippingParam = await getShippingParameter(accessToken, shopId, orderSn);
+  return shippingParam.message?.match(PACKAGE_NUMBER_PATTERN)?.[1] ?? null;
 }
 
 // Books the real shipment on Shopee and generates the real label PDF.
-// Returns the tracking number once the document is confirmed READY.
+// Returns { trackingNumber, packageNumber } once the document is confirmed
+// READY — packageNumber is what shopeeSync.js uses to fetch item details
+// via get_package_detail, working around order/get_order_detail's failure on
+// new orders.
 // Which underlying API pair is used (single ship_order vs mass_ship_order) is
 // controlled by config.json's shipping.useMassShip — editable with a plain
 // text editor, no restart needed.
@@ -135,4 +181,4 @@ async function bookShipment(accessToken, shopId, orderSn) {
     : bookShipmentSingle(accessToken, shopId, orderSn, cfg);
 }
 
-module.exports = { bookShipment };
+module.exports = { bookShipment, learnPackageNumber };

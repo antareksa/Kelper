@@ -2,26 +2,25 @@ import { useState } from 'react';
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
-import HppBiaya from './HppBiaya';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
 
-const DASHBOARD_TAB = { key: 'main', label: 'Dashboard', Icon: IconGrid };
+// Resolves relative to whatever host served this page, so a client machine
+// on the LAN reaches the real backend instead of its own empty localhost.
+const API_BASE = `http://${window.location.hostname}:3001`;
 
-const ITEMS_GROUP = { key: 'items', label: 'List Barang', Icon: IconBox };
-const ITEMS_SUB_ITEMS = [
-  { key: 'produk', label: 'Produk', Icon: IconBox },
-  { key: 'hpp', label: 'HPP & Biaya', Icon: IconTag },
-];
+const DASHBOARD_TAB = { key: 'main', label: 'Dashboard', Icon: IconGrid };
+const ITEMS_TAB = { key: 'items', label: 'List Barang', Icon: IconBox };
 
 const PACKING_GROUP = { key: 'packing', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
   { key: 'active', label: 'Active Station', Icon: IconMonitor },
+  { key: 'lists', label: 'Order Lists', Icon: IconTag },
   { key: 'daftar', label: 'Daftar', Icon: IconUser },
 ];
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
-const ItemsIcon = ITEMS_GROUP.Icon;
+const ItemsIcon = ITEMS_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
 function Dashboard() {
@@ -30,14 +29,13 @@ function Dashboard() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('main'); // main | items | packing
-  const [itemsView, setItemsView] = useState('produk'); // produk | hpp
   const [packingView, setPackingView] = useState('active'); // active | daftar
 
   async function handleLogin(e) {
     e.preventDefault();
     setError(null);
     try {
-      const res = await fetch(`http://localhost:3001/admin/login`, {
+      const res = await fetch(`${API_BASE}/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -104,41 +102,12 @@ function Dashboard() {
               </button>
 
               <button
-                onClick={() => setTab(ITEMS_GROUP.key)}
-                style={navItemStyle(tab === ITEMS_GROUP.key)}
+                onClick={() => setTab(ITEMS_TAB.key)}
+                style={navItemStyle(tab === ITEMS_TAB.key)}
               >
                 <ItemsIcon size={16} />
-                <span style={{ flex: 1 }}>{ITEMS_GROUP.label}</span>
-                <span style={{ display: 'flex', transform: tab === ITEMS_GROUP.key ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
-                  <IconChevronDown size={12} />
-                </span>
+                {ITEMS_TAB.label}
               </button>
-              {tab === ITEMS_GROUP.key && (
-                <div style={{ marginLeft: 18, marginTop: 6, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {ITEMS_SUB_ITEMS.map(({ key, label }) => (
-                    <button
-                      key={key}
-                      onClick={() => setItemsView(key)}
-                      style={{
-                        display: 'block',
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        border: 'none',
-                        background: itemsView === key ? colors.cardAlt : 'transparent',
-                        color: itemsView === key ? colors.text : colors.textDim,
-                        fontSize: 13.5,
-                        fontWeight: itemsView === key ? 600 : 400,
-                        cursor: 'pointer',
-                        fontFamily: 'var(--sans)',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               <button
                 onClick={() => setTab(PACKING_GROUP.key)}
@@ -223,7 +192,7 @@ function Dashboard() {
         <div style={{ flex: 1, height: '100vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
           {tab === 'main' && <MainDashboard />}
 
-          {tab === 'items' && (itemsView === 'produk' ? <ListBarang /> : <HppBiaya />)}
+          {tab === 'items' && <ListBarang />}
 
           {tab === 'packing' && <PackingStationDashboard view={packingView} />}
         </div>

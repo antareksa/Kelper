@@ -1,4 +1,13 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const fs = require('fs');
+const path = require('path');
+const { NODE_ENV, isProduction } = require('./src/env');
+
+// .env.<environment> is the normal case; a plain .env is kept as a fallback
+// so an existing local checkout that hasn't been migrated yet still works.
+const envFile = path.join(__dirname, `.env.${NODE_ENV}`);
+const fallbackEnvFile = path.join(__dirname, '.env');
+require('dotenv').config({ path: fs.existsSync(envFile) ? envFile : fallbackEnvFile });
+
 const express = require('express');
 const authRoutes = require('./src/routes/auth');
 const shopRoutes = require('./src/routes/shop');
@@ -6,6 +15,9 @@ const packingRoutes = require('./src/routes/packing');
 const ordersRoutes = require('./src/routes/orders');
 const operatorsRoutes = require('./src/routes/operators');
 const adminRoutes = require('./src/routes/admin');
+const productsRoutes = require('./src/routes/products');
+const dashboardRoutes = require('./src/routes/dashboard');
+const { startShopeeSync } = require('./src/shopeeSync');
 
 const app = express();
 app.use(express.json());
@@ -24,6 +36,26 @@ app.use('/packing', packingRoutes);
 app.use('/orders', ordersRoutes);
 app.use('/operators', operatorsRoutes);
 app.use('/admin', adminRoutes);
+app.use('/products', productsRoutes);
+app.use('/dashboard', dashboardRoutes);
+
+// Production serves the frontend's built static bundle directly from this
+// same process/port — there's no separate `vite dev` running in production
+// (that's a development-only tool). Registered after every API route so a
+// request for a real endpoint is never shadowed by the SPA catch-all below.
+// Development is unaffected: it keeps using Vite's own dev server on 5173,
+// exactly as today.
+if (isProduction) {
+  const distPath = path.join(__dirname, '..', 'kelper-frontend', 'dist');
+  if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+  } else {
+    console.error(`[server] production build not found at ${distPath} — run "npm run build" in kelper-frontend first.`);
+  }
+}
 
 const port = process.env.PORT || 3001;
-app.listen(port, () => console.log(`kelper-backend listening on http://localhost:${port}`));
+app.listen(port, () => console.log(`kelper-backend [${NODE_ENV}] listening on http://localhost:${port}`));
+
+startShopeeSync();

@@ -1,0 +1,16 @@
+[Unit]
+Description=KELPER backend (production)
+After=network.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+WorkingDirectory={{APP_DIR}}/kelper-backend
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+User={{SERVICE_USER}}
+Group={{SERVICE_USER}}
+
+[Install]
+WantedBy=multi-user.target

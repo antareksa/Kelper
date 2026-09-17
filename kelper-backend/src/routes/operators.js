@@ -1,17 +1,12 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
+const { startOfTodayWIB } = require('../wib');
 
 const router = express.Router();
 
 function now() {
   return Math.floor(Date.now() / 1000);
-}
-
-function startOfTodayUnix() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return Math.floor(d.getTime() / 1000);
 }
 
 // LOGIN OPERATOR — looks up the operator by barcode and, if a station_id is
@@ -49,12 +44,17 @@ router.get('/active-stations', (req, res) => {
   const sessions = db.prepare('SELECT * FROM station_sessions').all();
 
   const rows = sessions.map((s) => {
+    // READY_FOR_PICKUP isn't included — once the label's printed AND
+    // confirm-scanned, the station has already moved on to its next order,
+    // so that status no longer reflects "what this station is doing right
+    // now". AWAITING_LABEL_SCAN is included — the station is still blocked
+    // there, waiting on the operator's confirm-scan.
     const active = db
       .prepare("SELECT order_sn FROM packing_sessions WHERE station_id = ? AND status IN ('IN_PROGRESS', 'AWAITING_LABEL_SCAN') ORDER BY started_at DESC LIMIT 1")
       .get(s.station_id);
     const doneToday = db
       .prepare("SELECT COUNT(*) as c FROM packing_sessions WHERE station_id = ? AND status = 'DONE' AND completed_at >= ?")
-      .get(s.station_id, startOfTodayUnix()).c;
+      .get(s.station_id, startOfTodayWIB()).c;
 
     return {
       station_id: s.station_id,

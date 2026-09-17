@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 
-const API_BASE = 'http://localhost:3001';
+// Resolves relative to whatever host served this page — a station on
+// another machine loads this over the LAN (e.g. http://192.168.1.50:5173),
+// so the API must be reached at that same address, not the station's own
+// localhost, which has nothing running on port 3001.
+const API_BASE = `http://${window.location.hostname}:3001`;
 
 export function useShopName() {
   const [shopName, setShopName] = useState(null);
