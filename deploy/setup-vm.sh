@@ -69,6 +69,14 @@ fi
 #    SQLite database file inside kelper-backend/.
 sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
 
+# Git refuses to operate in a repo it doesn't own by default (a guard
+# against a classic shared-directory attack) — the chown above means EVERY
+# account that ever runs git here (you, manually; the auto-deploy timer,
+# running as root) needs an explicit exception, or git silently fails with
+# "detected dubious ownership" from this point on. --system applies it for
+# all users/accounts on this machine in one shot, so nobody hits this later.
+sudo git config --system --add safe.directory "$APP_DIR"
+
 # 7. Install and (re)start the systemd service.
 echo "==> Installing systemd service"
 sudo cp "$APP_DIR/deploy/kelper.service" /etc/systemd/system/kelper.service
