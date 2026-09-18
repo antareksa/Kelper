@@ -102,7 +102,7 @@ function Dashboard() {
                 Toko belum terhubung ke Shopee. Sinkronisasi pesanan dan katalog produk tidak akan berjalan sampai ini terhubung.
               </p>
               <button onClick={shopee.loginShopee} style={{ ...submitStyle, marginBottom: 10 }}>
-                Login Shopee
+                Connect
               </button>
               <button
                 onClick={() => setShopeeModalDismissed(true)}
