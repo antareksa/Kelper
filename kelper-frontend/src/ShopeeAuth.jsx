@@ -18,12 +18,16 @@ function ShopeeAuth() {
   }
 
   if (connected) {
+    // Stacked, not side-by-side — a long shop name in a fixed-width sidebar
+    // needs to wrap onto its own line(s) rather than push the Logout button
+    // off to the side or force the sidebar wider. overflowWrap handles a
+    // shop name with no natural break points (spaces) too.
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: '#2e7d32' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
           ✓ Shopee Connected{shopName ? ` — ${shopName}` : ''}
-        </span>
-        <button onClick={handleLogout} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75 }}>
+        </div>
+        <button onClick={handleLogout} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75, marginTop: 6 }}>
           Logout
         </button>
       </div>

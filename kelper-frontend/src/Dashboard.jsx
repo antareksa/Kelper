@@ -133,13 +133,6 @@ function Dashboard() {
               <IconGrid size={18} />
               <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: 0.3, fontFamily: 'var(--heading)' }}>KELPER</span>
             </div>
-            {/* Used to live on the old landing page's top-right corner — that
-                page is skipped entirely when loading straight into the
-                Dashboard from its own hostname, so this is now the only
-                place it's reachable at all. */}
-            <div style={{ padding: '0 8px', marginBottom: 20 }}>
-              <ShopeeAuth />
-            </div>
             <div style={{ fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, padding: '0 10px', marginBottom: 6 }}>
               Main
             </div>
@@ -235,6 +228,14 @@ function Dashboard() {
                 A
               </div>
               <span style={{ fontSize: 13, color: colors.text, fontWeight: 600 }}>Admin</span>
+            </div>
+            {/* Used to live on the old landing page's top-right corner —
+                that page is skipped entirely when loading straight into the
+                Dashboard from its own hostname, so this is now the only
+                place it's reachable at all. minWidth: 0 lets its text wrap
+                instead of forcing the sidebar wider on a long shop name. */}
+            <div style={{ padding: '10px 8px 0', borderTop: `1px solid ${colors.border}`, marginTop: 14, minWidth: 0 }}>
+              <ShopeeAuth />
             </div>
           </div>
         </div>
