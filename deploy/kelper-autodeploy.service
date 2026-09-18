@@ -6,5 +6,13 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User={{SERVICE_USER}}
+# systemd services don't inherit a normal login environment — $HOME isn't
+# set just because User= is, so without this, SSH (invoked internally by
+# `git fetch` over a git@github.com URL) can't find ~/.ssh/config,
+# ~/.ssh/known_hosts, or the deploy key, and fails with "Host key
+# verification failed" even though the exact same command works fine when
+# run interactively as the same user. %h resolves to that user's actual
+# home directory.
+Environment=HOME=%h
 WorkingDirectory={{APP_DIR}}
 ExecStart={{APP_DIR}}/deploy/auto-deploy.sh
