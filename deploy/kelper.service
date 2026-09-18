@@ -10,7 +10,7 @@ ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
 User={{SERVICE_USER}}
-Group={{SERVICE_USER}}
+Group={{SERVICE_GROUP}}
 
 [Install]
 WantedBy=multi-user.target

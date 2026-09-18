@@ -2,20 +2,31 @@
 # Run this ON the VM (Ubuntu/Debian), from inside a full copy of this
 # project. Clone it to /opt/kelper (or another non-home-directory path),
 # NOT into a user's home directory — a home directory is typically mode 750,
-# so the dedicated "kelper" service user this script creates can't even
-# `chdir` into it to start the service, no matter what `chown` does to the
-# files inside it. E.g.:
+# which used to block a separate service account from even chdir-ing into
+# it. E.g.:
 #   sudo mkdir -p /opt/kelper && sudo chown "$USER":"$USER" /opt/kelper
 #   git clone <repo-url> /opt/kelper
 #   cd /opt/kelper && bash deploy/setup-vm.sh
+#
+# The systemd service runs as whoever runs THIS script — no separate
+# dedicated service account. A dedicated unprivileged account is nicer in
+# principle, but for a single-operator deployment like this it only ever
+# produced cross-user permission conflicts (systemd unable to chdir into a
+# chowned home directory; git refusing to touch a .git it doesn't own; the
+# deploying user then locked out of writing to their own clone) — three
+# separate bugs from the same root cause. Simpler and more reliable to just
+# run as the deploying user.
+#
 # Safe to re-run: every step below checks before it acts.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_USER="kelper"
+SERVICE_USER="$(whoami)"
+SERVICE_GROUP="$(id -gn)"
 
 echo "==> KELPER production VM setup"
 echo "    App directory: $APP_DIR"
+echo "    Service user:  $SERVICE_USER:$SERVICE_GROUP"
 
 # 1. Node.js 22.x — better-sqlite3 declares it needs >=22 and only ships
 #    prebuilt binaries for supported versions; anything older forces it to
@@ -41,22 +52,16 @@ if ! command -v make >/dev/null 2>&1; then
   sudo apt-get install -y build-essential
 fi
 
-# 2. Dedicated system user — the service never runs as root.
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  echo "==> Creating system user: $SERVICE_USER"
-  sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-fi
-
-# 3. Backend dependencies (production only, no devDependencies).
+# 2. Backend dependencies (production only, no devDependencies).
 echo "==> Installing backend dependencies"
 (cd "$APP_DIR/kelper-backend" && npm ci --omit=dev)
 
-# 4. Build the frontend into kelper-frontend/dist — this is what server.js
+# 3. Build the frontend into kelper-frontend/dist — this is what server.js
 #    serves in production; there is no `vite dev` running here.
 echo "==> Building frontend"
 (cd "$APP_DIR/kelper-frontend" && npm ci && npm run build)
 
-# 5. Sanity-check the one thing this script can't do for you.
+# 4. Sanity-check the one thing this script can't do for you.
 if [ ! -f "$APP_DIR/kelper-backend/.env.production" ]; then
   echo ""
   echo "!! kelper-backend/.env.production is missing."
@@ -65,32 +70,26 @@ if [ ! -f "$APP_DIR/kelper-backend/.env.production" ]; then
   echo ""
 fi
 
-# 6. Ownership — the service user needs to read the app and write the
-#    SQLite database file inside kelper-backend/.
-sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
-
-# Git refuses to operate in a repo it doesn't own by default (a guard
-# against a classic shared-directory attack) — the chown above means EVERY
-# account that ever runs git here (you, manually; the auto-deploy timer,
-# running as root) needs an explicit exception, or git silently fails with
-# "detected dubious ownership" from this point on. --system applies it for
-# all users/accounts on this machine in one shot, so nobody hits this later.
+# 5. Git safe.directory — needed regardless of file ownership, because the
+#    auto-deploy timer runs as root while the repo is cloned as a regular
+#    user, and root running git against a directory it doesn't own hits the
+#    same "dubious ownership" guard git applies to anyone else.
 sudo git config --system --add safe.directory "$APP_DIR"
 
-# 7. Install and (re)start the systemd service.
+# 6. Install and (re)start the systemd service.
 echo "==> Installing systemd service"
 sudo cp "$APP_DIR/deploy/kelper.service" /etc/systemd/system/kelper.service
 sudo sed -i "s#{{APP_DIR}}#$APP_DIR#g" /etc/systemd/system/kelper.service
 sudo sed -i "s#{{SERVICE_USER}}#$SERVICE_USER#g" /etc/systemd/system/kelper.service
+sudo sed -i "s#{{SERVICE_GROUP}}#$SERVICE_GROUP#g" /etc/systemd/system/kelper.service
 sudo systemctl daemon-reload
 sudo systemctl enable kelper
 sudo systemctl restart kelper
 
-# 8. Auto-deploy timer — checks the "main" branch every 2 minutes and
+# 7. Auto-deploy timer — checks the "main" branch every 2 minutes and
 #    redeploys automatically on a new commit (see auto-deploy.sh). Runs as
-#    root (no User= in the unit) since it needs to re-run this same script,
-#    which itself needs sudo for the steps above — avoids fighting with
-#    passwordless-sudo setup for a restricted user. Skipped entirely if this
+#    root (no User= in the unit) since it needs to run this same script,
+#    which itself needs sudo for the steps above. Skipped entirely if this
 #    directory isn't a git repo (e.g. it was scp'd over instead of cloned).
 if [ -d "$APP_DIR/.git" ]; then
   echo "==> Installing auto-deploy timer"
