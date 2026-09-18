@@ -2,6 +2,7 @@ import { useState } from 'react';
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
+import ShopeeAuth from './ShopeeAuth';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
 
@@ -88,9 +89,16 @@ function Dashboard() {
           }}
         >
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', marginBottom: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', marginBottom: 10 }}>
               <IconGrid size={18} />
               <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: 0.3, fontFamily: 'var(--heading)' }}>KELPER</span>
+            </div>
+            {/* Used to live on the old landing page's top-right corner — that
+                page is skipped entirely when loading straight into the
+                Dashboard from its own hostname, so this is now the only
+                place it's reachable at all. */}
+            <div style={{ padding: '0 8px', marginBottom: 20 }}>
+              <ShopeeAuth />
             </div>
             <div style={{ fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, padding: '0 10px', marginBottom: 6 }}>
               Main
