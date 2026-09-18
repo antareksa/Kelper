@@ -106,6 +106,15 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (item_id, model_id)
   );
+
+  -- Small runtime-mutable key/value store for toggles an admin flips from
+  -- the UI (e.g. pausing order sync) — deliberately NOT config.json, which
+  -- is git-tracked deployment config and would get silently reverted by the
+  -- next git pull/auto-deploy if the UI wrote to it instead.
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Non-destructive migration for existing local databases created before

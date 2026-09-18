@@ -4,6 +4,7 @@ const { getValidAccessToken } = require('./shopee/tokenStore');
 const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument } = require('./shopee/client');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
+const { getSetting } = require('./settings');
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -395,7 +396,21 @@ function purgeStaleMockOrders(shopId) {
   console.log(`[server] purged ${stale.length} stale mock order(s) left over from debug mode (shop ${shopId})`);
 }
 
+// Order fetching defaults to OFF — an admin explicitly starts it from the
+// Order Lists screen once they're ready, rather than it silently running
+// the moment a server boots. Gates both the timer-driven loop below AND the
+// manual /orders/sync endpoint (Packing Station's own periodic call included)
+// since they share this one function — a "pause" that only stopped one of
+// the two callers wouldn't actually stop fetching.
+function isSyncEnabled() {
+  return getSetting('syncEnabled', 'false') === 'true';
+}
+
 async function syncAndLabelOrders(shopId) {
+  if (!isSyncEnabled()) {
+    return;
+  }
+
   if (getConfig().debugMode) {
     return runDebugTick(shopId);
   }

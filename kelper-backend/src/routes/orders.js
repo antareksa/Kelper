@@ -1,12 +1,29 @@
 const express = require('express');
 const db = require('../db');
 const { syncAndLabelOrders } = require('../shopeeSync');
+const { getSetting, setSetting } = require('../settings');
 
 const router = express.Router();
+
+// Order fetching is off by default (see shopeeSync.js's isSyncEnabled) —
+// these two let the Order Lists screen show current status and let an admin
+// start/pause it. Genuinely global: pausing here also stops the manual
+// /sync endpoint below and the background timer, since all three share the
+// same underlying check.
+router.get('/sync-status', (req, res) => {
+  res.json({ enabled: getSetting('syncEnabled', 'false') === 'true' });
+});
+
+router.post('/sync-toggle', (req, res) => {
+  const { enabled } = req.body;
+  setSetting('syncEnabled', enabled ? 'true' : 'false');
+  res.json({ enabled: !!enabled });
+});
 
 // Manual/on-demand trigger for the same discover+book+label logic the
 // server's own background sync loop already runs continuously — harmless to
 // call anytime since both paths share syncAndLabelOrders and it's idempotent.
+// Still a no-op while fetching is paused (see sync-toggle above).
 router.post('/sync', async (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id is required' });

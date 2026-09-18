@@ -80,10 +80,19 @@ function ActiveStation() {
 function OrderLists() {
   const [lists, setLists] = useState({ processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
+  // null = still checking on first load, not "paused" — the toggle button
+  // stays disabled until we actually know, so a click can't race a stale
+  // guess of the state.
+  const [syncEnabled, setSyncEnabled] = useState(null);
+  const [toggling, setToggling] = useState(false);
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, REFRESH_MS);
+    loadSyncStatus();
+    const interval = setInterval(() => {
+      load();
+      loadSyncStatus();
+    }, REFRESH_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -96,6 +105,29 @@ function OrderLists() {
     }
   }
 
+  async function loadSyncStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/orders/sync-status`);
+      if (res.ok) setSyncEnabled((await res.json()).enabled);
+    } catch {
+      // best-effort — keeps whatever was last known rather than flashing "checking"
+    }
+  }
+
+  async function toggleSync() {
+    setToggling(true);
+    try {
+      const res = await fetch(`${API_BASE}/orders/sync-toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !syncEnabled }),
+      });
+      if (res.ok) setSyncEnabled((await res.json()).enabled);
+    } finally {
+      setToggling(false);
+    }
+  }
+
   const columns = [
     { key: 'processing', title: 'Processing' },
     { key: 'readyToCheck', title: 'Ready to Check' },
@@ -105,8 +137,52 @@ function OrderLists() {
   ];
 
   return (
-    <div style={{ display: 'flex', gap: 12, height: '100%' }}>
-      {columns.map(({ key, title }) => {
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
+      <div style={{ ...card(), display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span
+            aria-hidden
+            style={{
+              width: 9,
+              height: 9,
+              borderRadius: '50%',
+              background: syncEnabled ? colors.green : colors.textFaint,
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5 }}>
+              {syncEnabled === null ? 'Memeriksa status fetching...' : syncEnabled ? 'Fetching Order: Aktif' : 'Fetching Order: Dijeda'}
+            </div>
+            <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 1 }}>
+              {syncEnabled
+                ? 'Server sedang mengambil pesanan baru dari Shopee secara otomatis.'
+                : 'Server tidak akan mengambil pesanan baru sampai fetching dimulai di sini.'}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={toggleSync}
+          disabled={syncEnabled === null || toggling}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 8,
+            border: 'none',
+            fontWeight: 600,
+            fontSize: 13,
+            flexShrink: 0,
+            cursor: syncEnabled === null || toggling ? 'default' : 'pointer',
+            background: syncEnabled ? colors.redDim : colors.greenDim,
+            color: syncEnabled ? colors.red : colors.green,
+            opacity: toggling ? 0.6 : 1,
+          }}
+        >
+          {syncEnabled ? 'Jeda Fetching' : 'Mulai Fetching'}
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+        {columns.map(({ key, title }) => {
         const rows = lists[key];
         return (
           <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
@@ -140,6 +216,7 @@ function OrderLists() {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
