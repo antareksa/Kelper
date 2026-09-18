@@ -1,46 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useShopeeConnection } from './useShopeeConnection';
 
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const SHOP_ID = 227886187;
-
-// Compact Shopee connection status, meant to sit in a page corner rather than
-// be its own screen — checks connectivity on mount and shows either a
-// connected badge or a Login Shopee button.
+// Compact Shopee connection status, meant to sit inline (in the Dashboard's
+// sidebar) rather than be its own screen — shows either a connected badge or
+// a Login Shopee button. See useShopeeConnection for the actual check; the
+// Dashboard's first-login connect prompt shares the same hook so both stay
+// in sync without duplicating the fetch logic.
 function ShopeeAuth() {
-  const [checking, setChecking] = useState(true);
-  const [connected, setConnected] = useState(false);
-  const [shopName, setShopName] = useState(null);
-
-  useEffect(() => {
-    checkConnection();
-  }, []);
-
-  async function checkConnection() {
-    setChecking(true);
-    try {
-      const res = await fetch(`${API_BASE}/auth/check?shop_id=${SHOP_ID}`);
-      const data = await res.json();
-      setConnected(data.connected);
-      if (data.connected) {
-        const infoRes = await fetch(`${API_BASE}/shop/info?shop_id=${SHOP_ID}`);
-        const infoData = await infoRes.json();
-        if (infoRes.ok) setShopName(infoData.shop_name);
-      }
-    } catch {
-      setConnected(false);
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  function handleLogin() {
-    window.location.href = `${API_BASE}/auth/login`;
-  }
+  const { checking, connected, shopName, loginShopee } = useShopeeConnection();
 
   if (checking) {
     return <span style={{ fontSize: 12, opacity: 0.6 }}>Checking Shopee...</span>;
@@ -55,7 +21,7 @@ function ShopeeAuth() {
   }
 
   return (
-    <button onClick={handleLogin} style={{ fontSize: 12, padding: '4px 10px' }}>
+    <button onClick={loginShopee} style={{ fontSize: 12, padding: '4px 10px' }}>
       Login Shopee
     </button>
   );

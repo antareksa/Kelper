@@ -3,6 +3,7 @@ import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
 import ShopeeAuth from './ShopeeAuth';
+import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
 
@@ -34,6 +35,13 @@ function Dashboard() {
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('main'); // main | items | packing
   const [packingView, setPackingView] = useState('active'); // active | daftar
+  const [shopeeModalDismissed, setShopeeModalDismissed] = useState(false);
+
+  // Checked only once actually logged in (not on the login form) — a fresh
+  // check every login, since local dismissal state resets on reload, so
+  // this can't go permanently silent while still disconnected.
+  const shopee = useShopeeConnection(authenticated);
+  const showShopeeModal = authenticated && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -74,6 +82,38 @@ function Dashboard() {
   return (
     <div style={{ background: colors.bg, height: '100vh', display: 'flex', overflow: 'hidden', fontFamily: 'var(--sans)' }}>
       <>
+        {showShopeeModal && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.65)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+            }}
+          >
+            <div style={{ ...cardStyle, width: 360, textAlign: 'center' }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: colors.text, marginBottom: 10, fontFamily: 'var(--heading)' }}>
+                Hubungkan Shopee
+              </div>
+              <p style={{ fontSize: 13, color: colors.textDim, marginBottom: 22, lineHeight: 1.55 }}>
+                Toko belum terhubung ke Shopee. Sinkronisasi pesanan dan katalog produk tidak akan berjalan sampai ini terhubung.
+              </p>
+              <button onClick={shopee.loginShopee} style={{ ...submitStyle, marginBottom: 10 }}>
+                Login Shopee
+              </button>
+              <button
+                onClick={() => setShopeeModalDismissed(true)}
+                style={{ background: 'none', border: 'none', color: colors.textDim, fontSize: 12.5, cursor: 'pointer', fontFamily: 'var(--sans)' }}
+              >
+                Nanti saja
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Sidebar */}
         <div
           style={{
