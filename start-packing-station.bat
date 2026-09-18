@@ -10,13 +10,15 @@ REM keep reusing that instead of the real Windows default printer. A fresh,
 REM dedicated profile has no such history to override the default with.
 REM
 REM This is a Packing Station — a lightweight kiosk machine, not a copy of
-REM the KELPER project. ONE separate machine (the Dashboard Station, started
-REM via start-dashboard-station.bat) runs the actual server; every Packing
-REM Station is just this one file plus Chrome, nothing else. Set
-REM SERVER_ADDRESS below to that one machine's LAN IP (find it by running
-REM "ipconfig" on the server machine and reading its IPv4 Address — usually
-REM 192.168.x.x). Leave it as localhost only if THIS station is that same
-REM machine.
-set SERVER_ADDRESS=localhost
+REM the KELPER project. ONE separate machine (the Dashboard Station, or a
+REM cloud VM) runs the actual server; every Packing Station is just this one
+REM file plus Chrome, nothing else. Set SERVER_URL below to wherever that
+REM server actually is — the real production URL for daily use, e.g.:
+REM   https://packing.kelper.co.id
+REM (a dedicated "packing." hostname jumps straight into station setup, no
+REM landing-page click needed — see App.jsx's initialView). For local LAN
+REM testing instead of the real server, use that machine's IP and Vite's dev
+REM port instead, e.g.: http://192.168.1.50:5173
+set SERVER_URL=https://packing.kelper.co.id
 
-start chrome --app=http://%SERVER_ADDRESS%:5173 --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
+start chrome --app=%SERVER_URL% --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
