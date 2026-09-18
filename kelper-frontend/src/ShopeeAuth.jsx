@@ -6,7 +6,12 @@ import { useShopeeConnection } from './useShopeeConnection';
 // Dashboard's first-login connect prompt shares the same hook so both stay
 // in sync without duplicating the fetch logic.
 function ShopeeAuth() {
-  const { checking, connected, shopName, loginShopee } = useShopeeConnection();
+  const { checking, connected, shopName, loginShopee, logoutShopee } = useShopeeConnection();
+
+  function handleLogout() {
+    if (!window.confirm('Logout dari Shopee? Sinkronisasi pesanan akan berhenti sampai login lagi.')) return;
+    logoutShopee();
+  }
 
   if (checking) {
     return <span style={{ fontSize: 12, opacity: 0.6 }}>Checking Shopee...</span>;
@@ -14,9 +19,14 @@ function ShopeeAuth() {
 
   if (connected) {
     return (
-      <span style={{ fontSize: 12, color: '#2e7d32' }}>
-        ✓ Shopee Connected{shopName ? ` — ${shopName}` : ''}
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: '#2e7d32' }}>
+          ✓ Shopee Connected{shopName ? ` — ${shopName}` : ''}
+        </span>
+        <button onClick={handleLogout} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75 }}>
+          Logout
+        </button>
+      </div>
     );
   }
 

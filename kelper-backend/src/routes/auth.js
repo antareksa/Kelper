@@ -38,6 +38,19 @@ router.get('/exchange', async (req, res) => {
   res.json({ ok: true, shop_id: Number(shop_id), expires_at: now + data.expire_in });
 });
 
+// Forgets the locally stored token so the Dashboard shows disconnected and
+// the sync loop stops touching this shop until someone logs in again. This
+// doesn't revoke anything on Shopee's own side (Shopee doesn't expose a
+// revoke endpoint to partner apps the way it exposes obtaining one) — it
+// just clears what KELPER itself remembers, which is the only thing "log
+// out" can practically mean from this side.
+router.post('/logout', (req, res) => {
+  const { shop_id } = req.body;
+  if (!shop_id) return res.status(400).json({ error: 'shop_id is required' });
+  db.prepare('DELETE FROM shopee_tokens WHERE shop_id = ?').run(shop_id);
+  res.json({ ok: true });
+});
+
 router.get('/status', (req, res) => {
   const rows = db.prepare('SELECT shop_id, expires_at, updated_at FROM shopee_tokens').all();
   res.json(rows);

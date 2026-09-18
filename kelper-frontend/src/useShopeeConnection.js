@@ -48,5 +48,18 @@ export function useShopeeConnection(enabled = true) {
     window.location.href = `${API_BASE}/auth/login`;
   }
 
-  return { checking, connected, shopName, loginShopee };
+  // Only forgets the token on KELPER's own side (see the backend route) —
+  // re-checks afterward instead of just assuming it worked, same as any
+  // other state change here.
+  async function logoutShopee() {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shop_id: SHOP_ID }),
+    });
+    setConnected(false);
+    setShopName(null);
+  }
+
+  return { checking, connected, shopName, loginShopee, logoutShopee };
 }
