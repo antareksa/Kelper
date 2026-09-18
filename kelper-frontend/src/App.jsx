@@ -10,13 +10,32 @@ function isShopeeCallback() {
   return params.has('code') && params.has('shop_id');
 }
 
+// A dedicated hostname (e.g. dashboard.kelper.co.id / packing.kelper.co.id)
+// jumps straight to that view — most useful for a Packing Station kiosk,
+// which can then launch directly into station setup instead of needing a
+// mouse click on the landing page every boot. Anything else (localhost, a
+// bare IP, the root domain) falls back to the landing page with both
+// buttons, unchanged from before.
+function initialView() {
+  if (isShopeeCallback()) return 'shopee-callback';
+  const host = window.location.hostname;
+  if (host.startsWith('packing')) return 'packing';
+  if (host.startsWith('dashboard')) return 'dashboard';
+  return 'landing';
+}
+
 function App() {
   // landing | dashboard | packing | shopee-callback
-  const [view, setView] = useState(() => (isShopeeCallback() ? 'shopee-callback' : 'landing'));
+  const [view, setView] = useState(initialView);
 
+  // Named for what it did before dedicated hostnames existed — now returns
+  // to whichever view actually belongs on this hostname (e.g. straight back
+  // to Dashboard on dashboard.kelper.co.id, never the generic landing page
+  // there), since the query string is cleared first and initialView() reads
+  // it fresh.
   function backToLanding() {
     window.history.replaceState(null, '', window.location.pathname);
-    setView('landing');
+    setView(initialView());
   }
 
   if (view === 'shopee-callback') {
