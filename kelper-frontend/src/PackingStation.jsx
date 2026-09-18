@@ -3,10 +3,12 @@ import { colors } from './theme';
 import { IconMonitor } from './Icons';
 import { renderCode39Svg } from './Barcode';
 
-// Resolves relative to whatever host served this page — the packing
-// station's own machine has nothing running on port 3001, the real backend
-// lives on the server this page was loaded from over the LAN.
-const API_BASE = `http://${window.location.hostname}:3001`;
+// A production build is served from the same origin as the API (Caddy
+// proxies both from one hostname), so relative paths just work and http://
+// would break under HTTPS as mixed content anyway. Dev still needs the
+// explicit cross-origin call since Vite's dev server (5173) and the backend
+// (3001) really are different origins there.
+const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
 const SYNC_INTERVAL_MS = 60000;
 const SHOP_ID = 227886187;
 

@@ -5,9 +5,12 @@ import ListBarang from './ListBarang';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
 
-// Resolves relative to whatever host served this page, so a client machine
-// on the LAN reaches the real backend instead of its own empty localhost.
-const API_BASE = `http://${window.location.hostname}:3001`;
+// A production build is served from the same origin as the API (Caddy
+// proxies both from one hostname), so relative paths just work and http://
+// would break under HTTPS as mixed content anyway. Dev still needs the
+// explicit cross-origin call since Vite's dev server (5173) and the backend
+// (3001) really are different origins there.
+const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
 
 const DASHBOARD_TAB = { key: 'main', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { key: 'items', label: 'List Barang', Icon: IconBox };
