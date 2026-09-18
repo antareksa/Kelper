@@ -88,14 +88,20 @@ sudo systemctl restart kelper
 
 # 7. Auto-deploy timer — checks the "main" branch every 2 minutes and
 #    redeploys automatically on a new commit (see auto-deploy.sh). Runs as
-#    root (no User= in the unit) since it needs to run this same script,
-#    which itself needs sudo for the steps above. Skipped entirely if this
-#    directory isn't a git repo (e.g. it was scp'd over instead of cloned).
+#    the same deploying user as everything else, not root — root has no way
+#    to authenticate to a private GitHub repo (the SSH deploy key lives
+#    under this user's home directory), so a root-run timer can `git fetch`
+#    a public repo but fails outright on a private one. This same user
+#    already has working passwordless sudo (setup-vm.sh's own sudo calls
+#    above just ran fine as them), so nothing is lost by not using root.
+#    Skipped entirely if this directory isn't a git repo (e.g. it was scp'd
+#    over instead of cloned).
 if [ -d "$APP_DIR/.git" ]; then
   echo "==> Installing auto-deploy timer"
   sudo cp "$APP_DIR/deploy/kelper-autodeploy.service" /etc/systemd/system/kelper-autodeploy.service
   sudo cp "$APP_DIR/deploy/kelper-autodeploy.timer" /etc/systemd/system/kelper-autodeploy.timer
   sudo sed -i "s#{{APP_DIR}}#$APP_DIR#g" /etc/systemd/system/kelper-autodeploy.service
+  sudo sed -i "s#{{SERVICE_USER}}#$SERVICE_USER#g" /etc/systemd/system/kelper-autodeploy.service
   sudo systemctl daemon-reload
   sudo systemctl enable --now kelper-autodeploy.timer
 else
