@@ -17,9 +17,14 @@ const operatorsRoutes = require('./src/routes/operators');
 const adminRoutes = require('./src/routes/admin');
 const productsRoutes = require('./src/routes/products');
 const dashboardRoutes = require('./src/routes/dashboard');
+const webhookRoutes = require('./src/routes/webhook');
 const { startShopeeSync } = require('./src/shopeeSync');
 
 const app = express();
+// Mounted before the app-wide express.json() below: push signature
+// verification needs the exact raw request bytes, so this one route gets
+// express.raw() instead of the parsed-JSON body every other route uses.
+app.use('/webhook', express.raw({ type: 'application/json' }), webhookRoutes);
 app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
