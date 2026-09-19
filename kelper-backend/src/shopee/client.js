@@ -188,6 +188,10 @@ function massShipOrder(accessToken, shopId, body) {
   return shopPost('/api/v2/logistics/mass_ship_order', accessToken, shopId, body);
 }
 
+function getEscrowDetail(accessToken, shopId, orderSn) {
+  return shopGet('/api/v2/payment/get_escrow_detail', accessToken, shopId, { order_sn: orderSn });
+}
+
 function getTrackingNumber(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/logistics/get_tracking_number', accessToken, shopId, { order_sn: orderSn });
 }
@@ -234,6 +238,7 @@ module.exports = {
   getShippingParameter,
   getChannelList,
   getPackageDetail,
+  getEscrowDetail,
   getItemList,
   getItemBaseInfo,
   getModelList,

@@ -10,15 +10,15 @@ const router = express.Router();
 // business owner is actually reading numbers off of.
 const REAL_ORDER_FILTER = "o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%'";
 
-// There is no real per-order sale price anywhere in this system —
-// order/get_order_detail (the only Shopee endpoint that would carry it) has
-// been confirmed broken for this shop, and nothing else captures it. Omzet/
-// Laba below are therefore an ESTIMATE: current catalog price x qty sold,
-// not the actual transaction price (so a since-changed price, voucher, or
-// bundle discount isn't reflected). Laba is gross margin (price - HPP), not
-// a true net profit — no ads/fee/affiliate deduction exists yet (see
-// buildBlockedMetrics below). Callers must surface this as an estimate, not
-// a fact.
+// order/get_order_detail (the endpoint that would normally carry real
+// per-order sale price) has been confirmed broken for this shop, so orders
+// that haven't shipped yet (no order_income row — see shopeeSync.js's
+// fillMissingIncomeData) fall back to an ESTIMATE: current catalog price x
+// qty sold, not the actual transaction price (so a since-changed price,
+// voucher, or bundle discount isn't reflected for those). Once an order has
+// shipped, its real escrow-based numbers (order_income) are used instead —
+// see sumOrdersInRange below for the blend. Ads/affiliate/visitor metrics
+// still have no data source at all (see the `blocked` list further down).
 function buildSkuPriceMap(shopId) {
   const rows = db
     .prepare(`
@@ -35,33 +35,60 @@ function buildSkuPriceMap(shopId) {
   return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
 }
 
-// Sums estimated revenue/profit for every order_item belonging to a real
-// order created in [startTs, endTs) — an item whose SKU isn't in the synced
-// catalog (never synced, or a leftover mock SKU) contributes nothing, per
-// the "never assume zero cost/price" rule already used in products.js.
+// Sums revenue/profit/fees for every real order created in [startTs, endTs)
+// — blended per order: an order with a fetched order_income row (i.e. it
+// has shipped, see fillMissingIncomeData) uses Shopee's real escrow numbers;
+// one without it yet falls back to the catalog price x qty estimate. Fee
+// fields (layanan/biayaPesanan) have no estimate equivalent — they're only
+// ever real, so they undercount orders still in progress by design rather
+// than guessing at a number Shopee hasn't charged yet.
 function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
-  const items = db
+  const orders = db
     .prepare(`
-      SELECT oi.sku, oi.qty
-      FROM order_items oi
-      JOIN orders o ON o.order_sn = oi.order_sn
+      SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
+      FROM orders o
+      LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
       WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
     `)
     .all(shopId, startTs, endTs);
+  if (orders.length === 0) return { orderCount: 0, omzet: 0, laba: 0, layanan: 0, biayaPesanan: 0 };
 
-  const orderCount = db
-    .prepare(`SELECT COUNT(*) c FROM orders o WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?`)
-    .get(shopId, startTs, endTs).c;
+  const placeholders = orders.map(() => '?').join(',');
+  const items = db
+    .prepare(`SELECT order_sn, sku, qty FROM order_items WHERE order_sn IN (${placeholders})`)
+    .all(...orders.map((o) => o.order_sn));
+  const itemsByOrder = new Map();
+  for (const item of items) {
+    if (!itemsByOrder.has(item.order_sn)) itemsByOrder.set(item.order_sn, []);
+    itemsByOrder.get(item.order_sn).push(item);
+  }
 
   let omzet = 0;
   let laba = 0;
-  for (const item of items) {
-    const info = skuPrices.get(item.sku);
-    if (!info || info.price == null) continue;
-    omzet += info.price * item.qty;
-    if (info.hpp != null) laba += (info.price - info.hpp) * item.qty;
+  let layanan = 0;
+  let biayaPesanan = 0;
+  for (const order of orders) {
+    const orderItems = itemsByOrder.get(order.order_sn) || [];
+    if (order.escrow_amount != null) {
+      let cogs = 0;
+      for (const item of orderItems) {
+        const info = skuPrices.get(item.sku);
+        if (info?.hpp != null) cogs += info.hpp * item.qty;
+      }
+      omzet += order.order_selling_price ?? 0;
+      laba += order.escrow_amount - cogs;
+      layanan += (order.service_fee ?? 0) + (order.commission_fee ?? 0);
+      biayaPesanan += order.seller_transaction_fee ?? 0;
+    } else {
+      for (const item of orderItems) {
+        const info = skuPrices.get(item.sku);
+        if (!info || info.price == null) continue;
+        omzet += info.price * item.qty;
+        if (info.hpp != null) laba += (info.price - info.hpp) * item.qty;
+      }
+    }
   }
-  return { orderCount, omzet, laba };
+  return { orderCount: orders.length, omzet, laba, layanan, biayaPesanan };
 }
 
 function pctChange(today, yesterday) {
@@ -88,7 +115,11 @@ router.get('/summary', (req, res) => {
   const marginPctYesterday = yesterday.omzet ? Math.round((yesterday.laba / yesterday.omzet) * 1000) / 10 : null;
 
   // Intraday cumulative Omzet/Laba for today, bucketed by WIB hour elapsed so
-  // far — real data, not a placeholder curve.
+  // far. Deliberately kept as the catalog-price estimate even for shipped
+  // orders (unlike sumOrdersInRange above) — it's a per-hour shape/trend
+  // visual, not a KPI number, and the UI already labels it "Estimasi".
+  // Blending real vs. estimated math per hour bucket wasn't worth the extra
+  // complexity for a chart nobody reads a single value off of.
   const todayStart = startOfDayWIB(0);
   const todayItems = db
     .prepare(`
@@ -160,6 +191,8 @@ router.get('/summary', (req, res) => {
       orderCount: today.orderCount,
       omzet: today.omzet,
       laba: today.laba,
+      layanan: today.layanan,
+      biayaPesanan: today.biayaPesanan,
       marginPct: marginPctToday,
     },
     trend: {
@@ -176,10 +209,11 @@ router.get('/summary', (req, res) => {
     todayHourly: { omzet: hourlyOmzet, laba: hourlyLaba },
     topProducts,
     leaking,
-    // Nothing currently integrates Shopee's ads/finance/analytics APIs — no
-    // amount of local query work can fill these in, so the frontend shows an
+    // Layanan/Biaya Pesanan are now real (see sumOrdersInRange above) — only
+    // ads/affiliate/visitor metrics still have no data source (Ads
+    // Performance and Brand Portal APIs aren't integrated), so those stay an
     // explicit "not connected" state instead of a fabricated number.
-    blocked: ['ads', 'layanan', 'affiliasi', 'biayaPesanan', 'pengunjung'],
+    blocked: ['ads', 'affiliasi', 'pengunjung'],
   });
 });
 

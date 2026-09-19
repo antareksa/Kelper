@@ -107,6 +107,25 @@ db.exec(`
     PRIMARY KEY (item_id, model_id)
   );
 
+  -- Real per-order financials from Shopee's escrow API (get_escrow_detail),
+  -- fetched once an order has shipped (see shopeeSync.js's
+  -- fillMissingIncomeData) — replaces the Dashboard's catalog-price x qty
+  -- guess with what Shopee actually paid out, for orders old enough to have
+  -- this data. escrow_amount can still change until the order is fully
+  -- completed (Shopee's buyer-confirmation window), so this is a snapshot,
+  -- not a permanently final number — fetched once per order rather than
+  -- kept in sync with later revisions, since re-fetching indefinitely would
+  -- mean calling this API for every historical order forever.
+  CREATE TABLE IF NOT EXISTS order_income (
+    order_sn TEXT PRIMARY KEY REFERENCES orders(order_sn),
+    order_selling_price REAL,
+    escrow_amount REAL,
+    service_fee REAL,
+    commission_fee REAL,
+    seller_transaction_fee REAL,
+    fetched_at INTEGER NOT NULL
+  );
+
   -- Small runtime-mutable key/value store for toggles an admin flips from
   -- the UI (e.g. pausing order sync) — deliberately NOT config.json, which
   -- is git-tracked deployment config and would get silently reverted by the

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken } = require('./shopee/tokenStore');
-const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument } = require('./shopee/client');
+const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail } = require('./shopee/client');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
 const { getSetting } = require('./settings');
@@ -192,6 +192,51 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
     } catch (err) {
       console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
     }
+  }
+}
+
+const insertIncome = db.prepare(`
+  INSERT OR REPLACE INTO order_income
+    (order_sn, order_selling_price, escrow_amount, service_fee, commission_fee, seller_transaction_fee, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+
+// Phase 3 — real financials: once an order has actually shipped (label
+// printed and pickup-confirmed), fetch what Shopee will really pay out for
+// it via the escrow API and store it, so the Dashboard can show real Omzet/
+// Laba/Layanan/Biaya Pesanan for that order instead of a catalog-price
+// guess. Fetched exactly once per order (see order_income's own comment in
+// db.js for why) — an order stuck on READY_TO_PACK/AWAITING_LABEL_SCAN
+// never reaches this query, so it isn't retried into existence early.
+async function fillMissingIncomeData(accessToken, shopId) {
+  const pending = db
+    .prepare(`
+      SELECT order_sn FROM orders
+      WHERE shop_id = ? AND status = 'READY_FOR_PICKUP' AND order_sn NOT LIKE 'MOCK-%'
+        AND NOT EXISTS (SELECT 1 FROM order_income WHERE order_income.order_sn = orders.order_sn)
+    `)
+    .all(shopId);
+
+  for (const { order_sn: orderSn } of pending) {
+    const result = await getEscrowDetail(accessToken, shopId, orderSn).catch((err) => ({ error: 'network', message: err.message }));
+    if (result.error) {
+      // Not fatal — escrow data can simply not exist yet this soon after
+      // shipping; leaving no order_income row means it's retried next tick.
+      console.warn(`[server] get_escrow_detail failed for order ${orderSn} (shop ${shopId}): ${result.message || result.error} — will retry next tick`);
+      continue;
+    }
+
+    const income = result.response?.order_income;
+    if (!income) continue;
+    insertIncome.run(
+      orderSn,
+      income.order_selling_price ?? null,
+      income.escrow_amount ?? null,
+      income.service_fee ?? null,
+      income.commission_fee ?? null,
+      income.seller_transaction_fee ?? null,
+      now()
+    );
   }
 }
 
@@ -424,6 +469,7 @@ async function syncAndLabelOrders(shopId) {
   if (getConfig().sync.autoBookShipping) {
     await bookAndLabelPendingOrders(accessToken, shopId);
   }
+  await fillMissingIncomeData(accessToken, shopId);
 }
 
 // Runs inside the Dashboard Station's server process (see server.js) — the
