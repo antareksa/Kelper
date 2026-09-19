@@ -10,10 +10,13 @@ const router = express.Router();
 // bytes, not a reserialized JSON object (key ordering could differ).
 router.post('/shopee', (req, res) => {
   const rawBody = req.body.toString('utf8');
-  const { SHOPEE_PARTNER_KEY, SHOPEE_PUSH_CALLBACK_URL } = process.env;
+  const { SHOPEE_PARTNER_KEY, SHOPEE_TEST_PUSH_PARTNER_KEY, SHOPEE_PUSH_CALLBACK_URL } = process.env;
   const signature = req.get('Authorization');
 
-  if (!verifyPushSignature(SHOPEE_PUSH_CALLBACK_URL, rawBody, SHOPEE_PARTNER_KEY, signature)) {
+  // Accepts either key: the Console's one-off "Get Test Push" verification
+  // handshake signs with SHOPEE_TEST_PUSH_PARTNER_KEY, while real live
+  // pushes are signed with the app's actual SHOPEE_PARTNER_KEY.
+  if (!verifyPushSignature(SHOPEE_PUSH_CALLBACK_URL, rawBody, [SHOPEE_PARTNER_KEY, SHOPEE_TEST_PUSH_PARTNER_KEY], signature)) {
     console.error('[webhook] rejected push: signature mismatch (check SHOPEE_PUSH_CALLBACK_URL matches the Partner Console exactly)');
     return res.status(401).end();
   }
