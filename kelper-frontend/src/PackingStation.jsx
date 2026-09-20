@@ -330,10 +330,13 @@ function PackingStation() {
   // available order on its own — the server can finish booking one
   // moments after this station last checked and came up empty. NEXT_ORDER
   // still works as a manual "check right now" nudge, it's just no longer
-  // required to actually get the next order.
+  // required to actually get the next order. 3s rather than something
+  // closer to the server's own 30s sync interval — this only ever hits our
+  // own already-synced database (GET /packing/next-order), never Shopee
+  // directly, so there's no rate limit or cost to checking often.
   useEffect(() => {
     if (!operatorName || paused || mode !== 'packing' || state || busy) return;
-    const interval = setInterval(() => grabNextOrder(), 10000);
+    const interval = setInterval(() => grabNextOrder(), 3000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operatorName, paused, mode, state, busy]);
