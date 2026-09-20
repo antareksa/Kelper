@@ -362,11 +362,10 @@ function ListBarang() {
   return (
     <div style={{ color: colors.text }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <button style={{ ...pillStyle, gap: 8 }}>
+        <div style={{ ...pillStyle, gap: 8, cursor: 'default' }}>
           <IconStore size={15} />
           {shopName || 'Toko belum terhubung'}
-          <IconChevronDown size={11} />
-        </button>
+        </div>
 
         <div style={{ position: 'relative', flex: 1, minWidth: 200, maxWidth: 320 }}>
           <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textFaint }}>
