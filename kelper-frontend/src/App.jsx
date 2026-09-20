@@ -12,13 +12,14 @@ function isShopeeCallback() {
 }
 
 // The Brand Portal app (a separate Shopee app, see ShopeeBrandAuth) is
-// registered with its own redirect URI ending in this path, so its callback
-// can be told apart from the main app's — both return the same `code`+
-// `shop_id` query shape, and sending a Brand-issued code to the main app's
-// /auth/exchange (or vice versa) would fail since each code is only valid
-// for the app it was issued to.
+// registered with its own redirect URI ending in this path (the main app
+// uses /check-connection instead — see .env's SHOPEE_REDIRECT_URI), so its
+// callback can be told apart from the main app's — both return the same
+// `code`+`shop_id` query shape, and sending a Brand-issued code to the main
+// app's /auth/exchange (or vice versa) would fail since each code is only
+// valid for the app it was issued to.
 function isShopeeBrandCallback() {
-  return isShopeeCallback() && window.location.pathname === '/shopee-callback-brand';
+  return isShopeeCallback() && window.location.pathname === '/check-connection-brand';
 }
 
 // A dedicated hostname (e.g. dashboard.kelper.co.id / packing.kelper.co.id)

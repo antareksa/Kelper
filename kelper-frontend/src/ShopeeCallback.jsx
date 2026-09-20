@@ -26,8 +26,16 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
         const res = await fetch(`${API_BASE}${exchangeUrl}?code=${code}&shop_id=${shopId}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
-        setMessage('Connected! Returning to the main menu...');
-        setTimeout(() => onDone(), 1200);
+        setMessage('Connected! Returning to Shopee config...');
+        setTimeout(() => {
+          // Land back on the config page (where the connection widgets
+          // live) rather than the Dashboard's default /home — onDone
+          // (App.jsx's backToLanding) re-derives the view from whatever
+          // pathname is current, so setting it here before calling onDone
+          // is what actually decides where that ends up.
+          window.history.replaceState(null, '', '/config/shopee');
+          onDone();
+        }, 1200);
       } catch (err) {
         setError(err.message);
       }
