@@ -506,9 +506,12 @@ async function fetchAffiliatePerformance(shopId) {
     return;
   }
 
-  const summary = result.response?.summary?.[0];
-  if (!summary) return; // no affiliate activity that day — nothing to store, will show as 0 either way
-  insertAffiliatePerformance.run(shopId, yesterday, summary.sales_confirmed ?? null, summary.orders_confirmed ?? null, summary.buyers_confirmed ?? null, now());
+  // An empty summary means Shopee has nothing to report (no affiliate
+  // orders that day) — genuinely zero, not "not fetched yet". Storing a
+  // zeroed row either way is what lets the Dashboard tell "connected, zero
+  // activity" apart from "never fetched" (no row at all).
+  const summary = result.response?.summary?.[0] || { sales_confirmed: 0, orders_confirmed: 0, buyers_confirmed: 0 };
+  insertAffiliatePerformance.run(shopId, yesterday, summary.sales_confirmed ?? 0, summary.orders_confirmed ?? 0, summary.buyers_confirmed ?? 0, now());
 }
 
 // Runs inside the Dashboard Station's server process (see server.js) — the
