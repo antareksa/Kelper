@@ -8,7 +8,10 @@ import { renderCode39Svg } from './Barcode';
 // explicit cross-origin call since Vite's dev server (5173) and the backend
 // (3001) really are different origins there.
 const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const REFRESH_MS = 10000;
+// Only ever hits our own backend (active-stations, order-lists), never
+// Shopee directly, so there's no rate-limit or cost concern with polling
+// this often — matches PackingStation.jsx's own idle-retry cadence.
+const REFRESH_MS = 3000;
 const SHOP_ID = 227886187;
 
 function formatTime(ts) {
