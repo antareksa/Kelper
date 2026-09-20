@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
@@ -43,6 +43,20 @@ function Dashboard() {
   // this can't go permanently silent while still disconnected.
   const shopee = useShopeeConnection(authenticated);
   const showShopeeModal = authenticated && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
+
+  // Gives the login screen its own real URL rather than just showing it
+  // inline at whatever path happened to be current. Doesn't preserve the
+  // originally-requested path through login — same as the Shopee OAuth
+  // callback, which also always lands on one fixed page rather than
+  // wherever the person started.
+  useEffect(() => {
+    if (!authenticated && location.pathname !== '/admin-login') {
+      navigate('/admin-login', { replace: true });
+    }
+    if (authenticated && location.pathname === '/admin-login') {
+      navigate('/home', { replace: true });
+    }
+  }, [authenticated, location.pathname, navigate]);
 
   async function handleLogin(e) {
     e.preventDefault();
