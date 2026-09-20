@@ -181,20 +181,33 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
     .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0")
     .all(shopId);
 
-  for (const { order_sn: orderSn } of pending) {
-    try {
-      const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
-      const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
-      if (!docResult.pdf) {
-        throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
-      }
+  // Concurrent, not sequential — confirmed via real production timing logs
+  // that a single order's wait for Shopee to assign a tracking number
+  // averages ~30s and can run close to a minute (see
+  // pollTrackingAndDocument's trackingPoll). Awaiting one order fully
+  // before starting the next meant order B never even began booking until
+  // order A's entire wait finished — the same shape of problem as
+  // discoverOnly being blocked by booking, just one level deeper. Safe to
+  // parallelize: each iteration only ever reads/writes its own order_sn's
+  // row, and Promise.allSettled (not Promise.all) keeps one order's
+  // rejection from stopping the others, matching the original per-order
+  // try/catch exactly.
+  await Promise.allSettled(
+    pending.map(async ({ order_sn: orderSn }) => {
+      try {
+        const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
+        const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
+        if (!docResult.pdf) {
+          throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
+        }
 
-      db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
-        .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
-    } catch (err) {
-      console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
-    }
-  }
+        db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
+          .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
+      } catch (err) {
+        console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
+      }
+    })
+  );
 }
 
 const insertIncome = db.prepare(`
