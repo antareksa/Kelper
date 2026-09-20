@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BrowserRouter } from 'react-router-dom';
 import ShopeeAuth from './ShopeeAuth';
 import PackingStation from './PackingStation';
 import Dashboard from './Dashboard';
@@ -110,7 +111,14 @@ function App() {
 
   return (
     <div>
-      {view === 'dashboard' && <Dashboard />}
+      {/* Only the Dashboard gets real sub-URLs (/home, /list-barang, ...) —
+          the Packing Station kiosk app has no equivalent need for them, and
+          wrapping it too would just be dead weight. */}
+      {view === 'dashboard' && (
+        <BrowserRouter>
+          <Dashboard />
+        </BrowserRouter>
+      )}
       {view === 'packing' && <PackingStation />}
     </div>
   );

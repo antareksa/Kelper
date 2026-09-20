@@ -30,12 +30,9 @@ function ShopeeBrandAuth() {
   }
 
   return (
-    <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: 11, color: '#999', marginBottom: 6 }}>Brand Portal (Affiliasi/Pengunjung)</div>
-      <button onClick={loginShopee} style={{ fontSize: 12, padding: '4px 10px' }}>
-        Connect
-      </button>
-    </div>
+    <button onClick={loginShopee} style={{ fontSize: 12, padding: '4px 10px' }}>
+      Connect
+    </button>
   );
 }
 

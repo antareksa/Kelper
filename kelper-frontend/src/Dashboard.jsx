@@ -1,9 +1,9 @@
 import { useState } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
-import ShopeeAuth from './ShopeeAuth';
-import ShopeeBrandAuth from './ShopeeBrandAuth';
+import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
@@ -15,14 +15,14 @@ import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, Ico
 // (3001) really are different origins there.
 const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
 
-const DASHBOARD_TAB = { key: 'main', label: 'Dashboard', Icon: IconGrid };
-const ITEMS_TAB = { key: 'items', label: 'List Barang', Icon: IconBox };
+const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
+const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
 
-const PACKING_GROUP = { key: 'packing', label: 'Packing Station Dashboard', Icon: IconMonitor };
+const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
-  { key: 'active', label: 'Active Station', Icon: IconMonitor },
-  { key: 'lists', label: 'Order Lists', Icon: IconTag },
-  { key: 'daftar', label: 'Daftar', Icon: IconUser },
+  { path: '/packing-station/active-station', label: 'Active Station', Icon: IconMonitor },
+  { path: '/packing-station/order-lists', label: 'Order Lists', Icon: IconTag },
+  { path: '/packing-station/daftar', label: 'Daftar', Icon: IconUser },
 ];
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
@@ -30,12 +30,12 @@ const ItemsIcon = ITEMS_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
 function Dashboard() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [authenticated, setAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState('main'); // main | items | packing
-  const [packingView, setPackingView] = useState('active'); // active | daftar
   const [shopeeModalDismissed, setShopeeModalDismissed] = useState(false);
 
   // Checked only once actually logged in (not on the login form) — a fresh
@@ -139,37 +139,37 @@ function Dashboard() {
             </div>
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <button
-                onClick={() => setTab(DASHBOARD_TAB.key)}
-                style={navItemStyle(tab === DASHBOARD_TAB.key)}
+                onClick={() => navigate(DASHBOARD_TAB.path)}
+                style={navItemStyle(location.pathname === DASHBOARD_TAB.path)}
               >
                 <DashboardIcon size={16} />
                 {DASHBOARD_TAB.label}
               </button>
 
               <button
-                onClick={() => setTab(ITEMS_TAB.key)}
-                style={navItemStyle(tab === ITEMS_TAB.key)}
+                onClick={() => navigate(ITEMS_TAB.path)}
+                style={navItemStyle(location.pathname === ITEMS_TAB.path)}
               >
                 <ItemsIcon size={16} />
                 {ITEMS_TAB.label}
               </button>
 
               <button
-                onClick={() => setTab(PACKING_GROUP.key)}
-                style={navItemStyle(tab === PACKING_GROUP.key)}
+                onClick={() => navigate(PACKING_SUB_ITEMS[0].path)}
+                style={navItemStyle(location.pathname.startsWith(PACKING_GROUP.path))}
               >
                 <PackingIcon size={16} />
                 <span style={{ flex: 1 }}>{PACKING_GROUP.label}</span>
-                <span style={{ display: 'flex', transform: tab === PACKING_GROUP.key ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
+                <span style={{ display: 'flex', transform: location.pathname.startsWith(PACKING_GROUP.path) ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
                   <IconChevronDown size={12} />
                 </span>
               </button>
-              {tab === PACKING_GROUP.key && (
+              {location.pathname.startsWith(PACKING_GROUP.path) && (
                 <div style={{ marginLeft: 18, marginTop: 6, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {PACKING_SUB_ITEMS.map(({ key, label }) => (
+                  {PACKING_SUB_ITEMS.map(({ path, label }) => (
                     <button
-                      key={key}
-                      onClick={() => setPackingView(key)}
+                      key={path}
+                      onClick={() => navigate(path)}
                       style={{
                         display: 'block',
                         width: '100%',
@@ -177,10 +177,10 @@ function Dashboard() {
                         padding: '8px 10px',
                         borderRadius: 8,
                         border: 'none',
-                        background: packingView === key ? colors.cardAlt : 'transparent',
-                        color: packingView === key ? colors.text : colors.textDim,
+                        background: location.pathname === path ? colors.cardAlt : 'transparent',
+                        color: location.pathname === path ? colors.text : colors.textDim,
                         fontSize: 13.5,
-                        fontWeight: packingView === key ? 600 : 400,
+                        fontWeight: location.pathname === path ? 600 : 400,
                         cursor: 'pointer',
                         fontFamily: 'var(--sans)',
                       }}
@@ -199,10 +199,18 @@ function Dashboard() {
                 <IconBell size={16} />
                 Notifications
               </div>
-              <div style={sideItemStyle}>
+              {/* Shopee connection status/controls used to live here directly
+                  (and before that, the old landing page's top-right corner) —
+                  moved to its own /config/shopee page instead of taking up
+                  permanent sidebar space, since it's a status page you check
+                  occasionally, not something needed on every screen. */}
+              <button
+                onClick={() => navigate('/config/shopee')}
+                style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
+              >
                 <IconSettings size={16} />
                 Settings
-              </div>
+              </button>
               <button
                 onClick={() => setAuthenticated(false)}
                 style={{ ...sideItemStyle, background: 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)' }}
@@ -230,27 +238,22 @@ function Dashboard() {
               </div>
               <span style={{ fontSize: 13, color: colors.text, fontWeight: 600 }}>Admin</span>
             </div>
-            {/* Used to live on the old landing page's top-right corner —
-                that page is skipped entirely when loading straight into the
-                Dashboard from its own hostname, so this is now the only
-                place it's reachable at all. minWidth: 0 lets its text wrap
-                instead of forcing the sidebar wider on a long shop name. */}
-            <div style={{ padding: '10px 8px 0', borderTop: `1px solid ${colors.border}`, marginTop: 14, minWidth: 0 }}>
-              <ShopeeAuth />
-            </div>
-            <div style={{ padding: '10px 8px 0', borderTop: `1px solid ${colors.border}`, marginTop: 10, minWidth: 0 }}>
-              <ShopeeBrandAuth />
-            </div>
           </div>
         </div>
 
         {/* Main content */}
         <div style={{ flex: 1, height: '100vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
-          {tab === 'main' && <MainDashboard />}
-
-          {tab === 'items' && <ListBarang />}
-
-          {tab === 'packing' && <PackingStationDashboard view={packingView} />}
+          <Routes>
+            <Route path="/" element={<Navigate to="/home" replace />} />
+            <Route path="/home" element={<MainDashboard />} />
+            <Route path="/list-barang" element={<ListBarang />} />
+            <Route path="/packing-station" element={<Navigate to="/packing-station/active-station" replace />} />
+            <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
+            <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
+            <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
+            <Route path="/config/shopee" element={<ShopeeConfigPage />} />
+            <Route path="*" element={<Navigate to="/home" replace />} />
+          </Routes>
         </div>
       </>
     </div>
