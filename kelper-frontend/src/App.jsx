@@ -10,6 +10,16 @@ function isShopeeCallback() {
   return params.has('code') && params.has('shop_id');
 }
 
+// The Brand Portal app (a separate Shopee app, see ShopeeBrandAuth) is
+// registered with its own redirect URI ending in this path, so its callback
+// can be told apart from the main app's — both return the same `code`+
+// `shop_id` query shape, and sending a Brand-issued code to the main app's
+// /auth/exchange (or vice versa) would fail since each code is only valid
+// for the app it was issued to.
+function isShopeeBrandCallback() {
+  return isShopeeCallback() && window.location.pathname === '/shopee-callback-brand';
+}
+
 // A dedicated hostname (e.g. dashboard.kelper.co.id / packing.kelper.co.id)
 // jumps straight to that view — most useful for a Packing Station kiosk,
 // which can then launch directly into station setup instead of needing a
@@ -17,6 +27,7 @@ function isShopeeCallback() {
 // bare IP, the root domain) falls back to the landing page with both
 // buttons, unchanged from before.
 function initialView() {
+  if (isShopeeBrandCallback()) return 'shopee-callback-brand';
   if (isShopeeCallback()) return 'shopee-callback';
   const host = window.location.hostname;
   if (host.startsWith('packing')) return 'packing';
@@ -25,7 +36,7 @@ function initialView() {
 }
 
 function App() {
-  // landing | dashboard | packing | shopee-callback
+  // landing | dashboard | packing | shopee-callback | shopee-callback-brand
   const [view, setView] = useState(initialView);
 
   // Named for what it did before dedicated hostnames existed — now returns
@@ -40,6 +51,10 @@ function App() {
 
   if (view === 'shopee-callback') {
     return <ShopeeCallback onDone={backToLanding} />;
+  }
+
+  if (view === 'shopee-callback-brand') {
+    return <ShopeeCallback onDone={backToLanding} exchangeUrl="/auth/brand/exchange" title="Brand Portal Connection" />;
   }
 
   if (view === 'landing') {

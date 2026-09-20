@@ -3,6 +3,7 @@ import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
 import ShopeeAuth from './ShopeeAuth';
+import ShopeeBrandAuth from './ShopeeBrandAuth';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
@@ -236,6 +237,9 @@ function Dashboard() {
                 instead of forcing the sidebar wider on a long shop name. */}
             <div style={{ padding: '10px 8px 0', borderTop: `1px solid ${colors.border}`, marginTop: 14, minWidth: 0 }}>
               <ShopeeAuth />
+            </div>
+            <div style={{ padding: '10px 8px 0', borderTop: `1px solid ${colors.border}`, marginTop: 10, minWidth: 0 }}>
+              <ShopeeBrandAuth />
             </div>
           </div>
         </div>

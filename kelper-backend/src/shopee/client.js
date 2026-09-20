@@ -5,25 +5,37 @@ const {
   SHOPEE_PARTNER_ID,
   SHOPEE_PARTNER_KEY,
   SHOPEE_REDIRECT_URI,
+  SHOPEE_BRAND_PARTNER_ID,
+  SHOPEE_BRAND_PARTNER_KEY,
+  SHOPEE_BRAND_REDIRECT_URI,
   SHOPEE_AUTH_BASE,
   SHOPEE_API_BASE,
 } = process.env;
 
-function buildAuthUrl() {
+// The Brand Portal integration is a second, separate Shopee app (its own
+// Partner ID/Key/redirect URI on the same Shopee environment) — buildAuthUrl/
+// exchangeToken/refreshToken below take a credentials set instead of always
+// reading the main app's env vars, so the same OAuth logic works for either
+// app without duplicating it. Existing callers are unaffected: the default
+// is exactly the main app's credentials, i.e. today's behavior.
+const MAIN_CREDENTIALS = { partnerId: SHOPEE_PARTNER_ID, partnerKey: SHOPEE_PARTNER_KEY, redirectUri: SHOPEE_REDIRECT_URI };
+const BRAND_CREDENTIALS = { partnerId: SHOPEE_BRAND_PARTNER_ID, partnerKey: SHOPEE_BRAND_PARTNER_KEY, redirectUri: SHOPEE_BRAND_REDIRECT_URI };
+
+function buildAuthUrl(creds = MAIN_CREDENTIALS) {
   const url = new URL(SHOPEE_AUTH_BASE);
-  url.searchParams.set('partner_id', SHOPEE_PARTNER_ID);
+  url.searchParams.set('partner_id', creds.partnerId);
   url.searchParams.set('auth_type', 'seller');
-  url.searchParams.set('redirect_uri', SHOPEE_REDIRECT_URI);
+  url.searchParams.set('redirect_uri', creds.redirectUri);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('state', crypto.randomBytes(8).toString('hex'));
   return url.toString();
 }
 
-async function exchangeToken(code, shopId) {
+async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS) {
   const path = '/api/v2/auth/token/get';
   const timestamp = Math.floor(Date.now() / 1000);
-  const sign = signPublic(SHOPEE_PARTNER_ID, path, timestamp, SHOPEE_PARTNER_KEY);
-  const url = `${SHOPEE_API_BASE}${path}?partner_id=${SHOPEE_PARTNER_ID}&timestamp=${timestamp}&sign=${sign}`;
+  const sign = signPublic(creds.partnerId, path, timestamp, creds.partnerKey);
+  const url = `${SHOPEE_API_BASE}${path}?partner_id=${creds.partnerId}&timestamp=${timestamp}&sign=${sign}`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -31,7 +43,7 @@ async function exchangeToken(code, shopId) {
     body: JSON.stringify({
       code,
       shop_id: Number(shopId),
-      partner_id: Number(SHOPEE_PARTNER_ID),
+      partner_id: Number(creds.partnerId),
     }),
   });
 
@@ -48,11 +60,11 @@ async function getShopInfo(accessToken, shopId) {
   return res.json();
 }
 
-async function refreshToken(refreshTokenValue, shopId) {
+async function refreshToken(refreshTokenValue, shopId, creds = MAIN_CREDENTIALS) {
   const path = '/api/v2/auth/access_token/get';
   const timestamp = Math.floor(Date.now() / 1000);
-  const sign = signPublic(SHOPEE_PARTNER_ID, path, timestamp, SHOPEE_PARTNER_KEY);
-  const url = `${SHOPEE_API_BASE}${path}?partner_id=${SHOPEE_PARTNER_ID}&timestamp=${timestamp}&sign=${sign}`;
+  const sign = signPublic(creds.partnerId, path, timestamp, creds.partnerKey);
+  const url = `${SHOPEE_API_BASE}${path}?partner_id=${creds.partnerId}&timestamp=${timestamp}&sign=${sign}`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -60,7 +72,7 @@ async function refreshToken(refreshTokenValue, shopId) {
     body: JSON.stringify({
       refresh_token: refreshTokenValue,
       shop_id: Number(shopId),
-      partner_id: Number(SHOPEE_PARTNER_ID),
+      partner_id: Number(creds.partnerId),
     }),
   });
 
@@ -229,6 +241,7 @@ async function downloadShippingDocument(accessToken, shopId, orderSn, trackingNu
 }
 
 module.exports = {
+  BRAND_CREDENTIALS,
   buildAuthUrl,
   exchangeToken,
   getShopInfo,

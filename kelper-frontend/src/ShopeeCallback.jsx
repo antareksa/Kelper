@@ -7,7 +7,12 @@ import { useEffect, useState } from 'react';
 // (3001) really are different origins there.
 const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
 
-function ShopeeCallback({ onDone }) {
+// exchangeUrl lets the same component handle both the main app's callback
+// and the Brand Portal app's (a separate Shopee app — see ShopeeBrandAuth) —
+// each app's code is only valid against its own /auth[/brand]/exchange, so
+// which endpoint gets called must match which app's redirect URI brought us
+// here (App.jsx's isShopeeBrandCallback decides that from the URL path).
+function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shopee Connection' }) {
   const [message, setMessage] = useState('Connecting to Shopee...');
   const [error, setError] = useState(null);
 
@@ -18,7 +23,7 @@ function ShopeeCallback({ onDone }) {
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/auth/exchange?code=${code}&shop_id=${shopId}`);
+        const res = await fetch(`${API_BASE}${exchangeUrl}?code=${code}&shop_id=${shopId}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
         setMessage('Connected! Returning to the main menu...');
@@ -32,7 +37,7 @@ function ShopeeCallback({ onDone }) {
 
   return (
     <div style={{ fontFamily: 'var(--sans)', textAlign: 'center', marginTop: 120 }}>
-      <h2>Shopee Connection</h2>
+      <h2>{title}</h2>
       {error ? (
         <>
           <p style={{ color: '#c62828' }}>Failed: {error}</p>

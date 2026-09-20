@@ -17,6 +17,20 @@ db.exec(`
     updated_at INTEGER NOT NULL
   );
 
+  -- Separate from shopee_tokens on purpose: the Brand Portal app is a
+  -- distinct Shopee app (its own Partner ID/Key), so its OAuth token must
+  -- never share a table keyed only by shop_id with the main app's token —
+  -- connecting one would silently clobber the other and break whichever
+  -- feature depends on it (order sync for the main app; Affiliasi/
+  -- Pengunjung for this one).
+  CREATE TABLE IF NOT EXISTS shopee_brand_tokens (
+    shop_id INTEGER PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS orders (
     order_sn TEXT PRIMARY KEY,
     shop_id INTEGER NOT NULL,
