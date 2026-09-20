@@ -453,10 +453,17 @@ function isSyncEnabled() {
   return getSetting('syncEnabled', 'false') === 'true';
 }
 
-async function syncAndLabelOrders(shopId) {
-  if (!isSyncEnabled()) {
-    return;
-  }
+// Fast half of the sync: discovers new orders and backfills their item
+// details. Deliberately excludes booking (see bookAndEnrichOnly below) —
+// ship_order can block for up to ~60s per order waiting on Shopee's own
+// tracking-number assignment (see shipping.js's trackingPoll), and since
+// the old code awaited booking in the same loop as discovery, a single slow
+// booking delayed noticing every OTHER brand new order behind it by that
+// same ~60s, even though pollIntervalMs said 5s. Confirmed directly against
+// production logs: a 46s gap between two "found new order(s)" lines with a
+// booking sitting in between them.
+async function discoverOnly(shopId) {
+  if (!isSyncEnabled()) return;
 
   if (getConfig().debugMode) {
     return runDebugTick(shopId);
@@ -465,13 +472,30 @@ async function syncAndLabelOrders(shopId) {
   purgeStaleMockOrders(shopId);
   const accessToken = await getValidAccessToken(shopId);
   await discoverNewOrders(accessToken, shopId);
+}
+
+// Slow half: booking/labeling plus real-financial enrichment (escrow). Runs
+// on its own independent schedule (see startShopeeSync) so it can never
+// delay discoverOnly above from picking up the next new order.
+async function bookAndEnrichOnly(shopId) {
+  if (!isSyncEnabled() || getConfig().debugMode) return;
+
+  const accessToken = await getValidAccessToken(shopId);
   // Kill switch for the auto ship_order/label step — config.json's
-  // sync.autoBookShipping, editable without a restart. Discovery
-  // and item-detail backfill keep running either way; only booking stops.
+  // sync.autoBookShipping, editable without a restart.
   if (getConfig().sync.autoBookShipping) {
     await bookAndLabelPendingOrders(accessToken, shopId);
   }
   await fillMissingIncomeData(accessToken, shopId);
+}
+
+// Full sync in one call, used by the manual /orders/sync trigger and the
+// Shopee Push Mechanism webhook — both want a single on-demand "do
+// everything now", unlike the background loop below which deliberately
+// splits discovery and booking onto independent schedules.
+async function syncAndLabelOrders(shopId) {
+  await discoverOnly(shopId);
+  await bookAndEnrichOnly(shopId);
 }
 
 const insertAffiliatePerformance = db.prepare(`
@@ -580,14 +604,31 @@ async function fetchAdsPerformance(shopId) {
 // background loop that keeps local order/shipment data in sync with Shopee,
 // independent of whatever the Dashboard or any Packing Station happens to
 // be doing at the time.
+//
+// Two INDEPENDENT self-rescheduling loops, not one — discovery must never
+// wait behind booking. Each loop only schedules its own next run after its
+// own work finishes, so a slow iteration only ever delays itself, never the
+// other loop.
 function startShopeeSync() {
-  async function tick() {
+  async function discoveryLoop() {
     const shops = db.prepare('SELECT shop_id FROM shopee_tokens').all();
     for (const { shop_id: shopId } of shops) {
       try {
-        await syncAndLabelOrders(shopId);
+        await discoverOnly(shopId);
       } catch (err) {
-        console.error(`[server] tick failed for shop ${shopId}: ${err.message}`);
+        console.error(`[server] discovery tick failed for shop ${shopId}: ${err.message}`);
+      }
+    }
+    setTimeout(discoveryLoop, getConfig().sync.pollIntervalMs);
+  }
+
+  async function enrichmentLoop() {
+    const shops = db.prepare('SELECT shop_id FROM shopee_tokens').all();
+    for (const { shop_id: shopId } of shops) {
+      try {
+        await bookAndEnrichOnly(shopId);
+      } catch (err) {
+        console.error(`[server] booking/enrichment tick failed for shop ${shopId}: ${err.message}`);
       }
     }
 
@@ -615,9 +656,11 @@ function startShopeeSync() {
       }
     }
 
-    setTimeout(tick, getConfig().sync.pollIntervalMs);
+    setTimeout(enrichmentLoop, getConfig().sync.pollIntervalMs);
   }
-  tick();
+
+  discoveryLoop();
+  enrichmentLoop();
 }
 
 module.exports = { syncAndLabelOrders, startShopeeSync };
