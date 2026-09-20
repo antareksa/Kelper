@@ -81,13 +81,7 @@ if [ ! -f "$APP_DIR/kelper-backend/.env.production" ]; then
   echo ""
 fi
 
-# 5. Git safe.directory — needed regardless of file ownership, because the
-#    auto-deploy timer runs as root while the repo is cloned as a regular
-#    user, and root running git against a directory it doesn't own hits the
-#    same "dubious ownership" guard git applies to anyone else.
-sudo git config --system --add safe.directory "$APP_DIR"
-
-# 6. Install and (re)start the systemd service.
+# 5. Install and (re)start the systemd service.
 echo "==> Installing systemd service"
 sudo cp "$APP_DIR/deploy/kelper.service" /etc/systemd/system/kelper.service
 sudo sed -i "s#{{APP_DIR}}#$APP_DIR#g" /etc/systemd/system/kelper.service
@@ -97,32 +91,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable kelper
 sudo systemctl restart kelper
 
-# 7. Auto-deploy timer — checks the "main" branch every 2 minutes and
-#    redeploys automatically on a new commit (see auto-deploy.sh). Runs as
-#    the same deploying user as everything else, not root — root has no way
-#    to authenticate to a private GitHub repo (the SSH deploy key lives
-#    under this user's home directory), so a root-run timer can `git fetch`
-#    a public repo but fails outright on a private one. This same user
-#    already has working passwordless sudo (setup-vm.sh's own sudo calls
-#    above just ran fine as them), so nothing is lost by not using root.
-#    Skipped entirely if this directory isn't a git repo (e.g. it was scp'd
-#    over instead of cloned).
-if [ -d "$APP_DIR/.git" ]; then
-  echo "==> Installing auto-deploy timer"
-  sudo cp "$APP_DIR/deploy/kelper-autodeploy.service" /etc/systemd/system/kelper-autodeploy.service
-  sudo cp "$APP_DIR/deploy/kelper-autodeploy.timer" /etc/systemd/system/kelper-autodeploy.timer
-  sudo sed -i "s#{{APP_DIR}}#$APP_DIR#g" /etc/systemd/system/kelper-autodeploy.service
-  sudo sed -i "s#{{SERVICE_USER}}#$SERVICE_USER#g" /etc/systemd/system/kelper-autodeploy.service
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now kelper-autodeploy.timer
-else
-  echo "==> Skipping auto-deploy timer — $APP_DIR isn't a git repo (was it scp'd instead of cloned?)"
-fi
+# Auto-deploy timer deliberately NOT installed here anymore — it was a
+# recurring source of trouble (npm ci failing with EACCES on root-owned
+# /root/.npm files specifically when triggered by the timer, never
+# interactively; and its own success-gate meant a failed run wasn't retried
+# on the next tick, since `git merge` already made LOCAL match REMOTE before
+# the failing step even ran). Deploys are manual now: SSH in and run this
+# script directly. If a kelper-autodeploy.timer is still enabled from an
+# earlier setup, disable it with:
+#   sudo systemctl disable --now kelper-autodeploy.timer
 
 echo ""
 echo "==> Done."
-echo "    Status:       sudo systemctl status kelper"
-echo "    Logs:         sudo journalctl -u kelper -f"
-echo "    Auto-deploy:  sudo systemctl status kelper-autodeploy.timer"
-echo "    Deploy check log: sudo journalctl -u kelper-autodeploy -f"
-echo "    Manual redeploy:  cd $APP_DIR && ./deploy/auto-deploy.sh"
+echo "    Status: sudo systemctl status kelper"
+echo "    Logs:   sudo journalctl -u kelper -f"
