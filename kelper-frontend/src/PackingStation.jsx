@@ -9,7 +9,6 @@ import { renderCode39Svg } from './Barcode';
 // explicit cross-origin call since Vite's dev server (5173) and the backend
 // (3001) really are different origins there.
 const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const SYNC_INTERVAL_MS = 60000;
 const SHOP_ID = 227886187;
 
 function formatTime(ts) {
@@ -21,7 +20,7 @@ function formatTime(ts) {
 
 // orders.created_at is unix SECONDS (server-side, see shopeeSync.js's now())
 // — unlike formatTime above, which takes the millisecond timestamps this
-// same file generates client-side (Date.now(), lastSyncAt).
+// same file generates client-side (Date.now(), pickupLog entries).
 function formatReceivedAt(tsSeconds) {
   if (!tsSeconds) return '—';
   const d = new Date(tsSeconds * 1000);
@@ -252,8 +251,6 @@ function PackingStation() {
   const [paused, setPaused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
-  const [lastSyncAt, setLastSyncAt] = useState(null);
-  const [queueCounts, setQueueCounts] = useState({ ready_to_pack: 0, deferred_ready: 0 });
   // Which item row to flash green/red right after a scan, and for how long —
   // cleared automatically so it never lingers past the next scan.
   const [flash, setFlash] = useState(null); // { sku, type: 'success' | 'error' }
@@ -329,16 +326,6 @@ function PackingStation() {
     };
   }, [operatorName, stationId]);
 
-  // Background sync — automatic only. Operators don't need a manual sync
-  // button; that's a system/admin concern, not a packing-floor one.
-  useEffect(() => {
-    if (!stationReady) return;
-    performSync();
-    const interval = setInterval(performSync, SYNC_INTERVAL_MS);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stationReady]);
-
   // Auto-retry when idle so a station with nothing to do picks up a newly
   // available order on its own — the server can finish booking one
   // moments after this station last checked and came up empty. NEXT_ORDER
@@ -386,16 +373,6 @@ function PackingStation() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.session?.id, state?.session?.status, state?.items?.length]);
-
-  async function refreshCounts() {
-    try {
-      const res = await fetch(`${API_BASE}/orders/queue-counts?shop_id=${SHOP_ID}`);
-      const data = await res.json();
-      if (res.ok) setQueueCounts(data);
-    } catch {
-      // best-effort — the counts are informational, not worth surfacing an error for
-    }
-  }
 
   function notify(text, type = 'info') {
     setInfoMessage(text);
@@ -625,17 +602,6 @@ function PackingStation() {
   function handleStationSetup(e) {
     e.preventDefault();
     setStationReady(true);
-  }
-
-  async function performSync() {
-    try {
-      const res = await fetch(`${API_BASE}/orders/sync?shop_id=${SHOP_ID}`, { method: 'POST' });
-      if (!res.ok) return;
-      setLastSyncAt(Date.now());
-      await refreshCounts();
-    } catch {
-      // best-effort background sync — queue counts just won't update this cycle
-    }
   }
 
   function handleLogout() {
