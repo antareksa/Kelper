@@ -44,6 +44,16 @@ function getSessionWithOrder(sessionId) {
     ...it,
     scanned_qty: progressBySku[it.sku] || 0,
     barcode: db.prepare('SELECT barcode FROM products WHERE sku = ?').get(it.sku)?.barcode ?? null,
+    // Same model-then-item image fallback as products.js's catalog listing —
+    // purely cosmetic (the Packing Station thumbnail), never used for
+    // matching a scan, so a SKU with no synced catalog entry just shows no
+    // image instead of failing anything.
+    image_url: db.prepare(`
+      SELECT COALESCE(m.image_url, i.image_url) AS image_url
+      FROM shopee_item_models m
+      JOIN shopee_items i ON i.item_id = m.item_id
+      WHERE COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) = ?
+    `).get(it.sku)?.image_url ?? null,
   }));
   // length check matters: an order whose items haven't arrived from Shopee
   // yet (get_order_detail can lag well behind label_ready) has zero rows

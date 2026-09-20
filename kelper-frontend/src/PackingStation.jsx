@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { colors } from './theme';
+import { colors, card } from './theme';
 import { IconMonitor } from './Icons';
 import { renderCode39Svg } from './Barcode';
 
@@ -17,6 +17,179 @@ function formatTime(ts) {
   const d = new Date(ts);
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// orders.created_at is unix SECONDS (server-side, see shopeeSync.js's now())
+// — unlike formatTime above, which takes the millisecond timestamps this
+// same file generates client-side (Date.now(), lastSyncAt).
+function formatReceivedAt(tsSeconds) {
+  if (!tsSeconds) return '—';
+  const d = new Date(tsSeconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// Same "no image → colored initials" fallback already used for products
+// with no synced Shopee image (see ListBarang.jsx) — kept visually
+// consistent across the app rather than inventing a second placeholder style.
+function ItemThumb({ imageUrl, sku, size = 44 }) {
+  if (imageUrl) {
+    return <img src={imageUrl} alt="" style={{ width: size, height: size, borderRadius: 8, objectFit: 'cover', display: 'block', flexShrink: 0 }} />;
+  }
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 8,
+        background: colors.cardAlt,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 12,
+        fontWeight: 700,
+        color: colors.textDim,
+        flexShrink: 0,
+      }}
+    >
+      {sku.slice(0, 2).toUpperCase()}
+    </div>
+  );
+}
+
+// One item row in the active scan list. `flashType` briefly overrides the
+// row's background right after a scan targets this exact SKU (see
+// PackingStation's flashRow) — green for a correct scan, red for a
+// rejected one (already fully scanned) — independent of the row's
+// steady-state "done" tint (done rows remain green after the flash fades).
+function ItemRow({ item, flashType }) {
+  const done = item.scanned_qty >= item.qty;
+  const bg = flashType === 'success' ? colors.greenDim : flashType === 'error' ? colors.redDim : done ? colors.greenDim : 'transparent';
+  const border = flashType === 'success' ? colors.green : flashType === 'error' ? colors.red : done ? colors.green : colors.border;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: 10,
+        borderRadius: 10,
+        border: `1px solid ${border}`,
+        background: bg,
+        transition: 'background 0.15s, border-color 0.15s',
+      }}
+    >
+      <ItemThumb imageUrl={item.image_url} sku={item.sku} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {item.product_name}
+        </div>
+        <div style={{ fontSize: 11, color: colors.textDim, fontFamily: 'monospace' }}>{item.sku}</div>
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 700,
+          fontFamily: 'var(--num)',
+          color: done ? colors.green : colors.text,
+          flexShrink: 0,
+        }}
+      >
+        {item.scanned_qty}/{item.qty}
+      </div>
+    </div>
+  );
+}
+
+// The item-scan screen — shown only while actively scanning (IN_PROGRESS
+// with item data). Fully-scanned rows sink to the bottom (stable within
+// each group) so the operator never has to scroll past done items to see
+// what's left, no matter how long the order is.
+function ItemScanCard({ order, receivedAt, items, flash }) {
+  const remaining = items.filter((it) => it.scanned_qty < it.qty);
+  const done = items.filter((it) => it.scanned_qty >= it.qty);
+
+  return (
+    <div style={card()}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 13, color: colors.textDim }}>
+          Order <span style={{ color: colors.text, fontWeight: 600, fontFamily: 'monospace' }}>{order.order_sn}</span>
+          {order.order_sn.startsWith('MOCK-') && (
+            <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.orange, padding: '2px 6px', borderRadius: 4 }}>
+              DEBUG
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: colors.textFaint }}>Diterima {formatReceivedAt(receivedAt)}</div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+        {[...remaining, ...done].map((it) => (
+          <ItemRow key={it.sku} item={it} flashType={flash?.sku === it.sku ? flash.type : null} />
+        ))}
+      </div>
+
+      <ScannerStatusBar />
+    </div>
+  );
+}
+
+// Persistent hardware-reassurance strip at the bottom of every screen —
+// purely a "yes, it's listening" indicator, separate from the guidance/
+// status messages above it which carry the actual next-step instructions.
+function ScannerStatusBar() {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: '8px 12px',
+        borderRadius: 8,
+        background: colors.cardAlt,
+        border: `1px solid ${colors.border}`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 11,
+        color: colors.textDim,
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.green, flexShrink: 0 }} className="kelper-pulse" />
+      Barcode Scanner Active...
+    </div>
+  );
+}
+
+// Everything that ISN'T "actively scanning items" funnels through here —
+// no active order, waiting for item data, flagged as a problem, waiting on
+// a label confirm scan, finishing up, etc. Order context (when there is
+// one) sits above the message so it's never ambiguous which order a
+// transitional message refers to.
+function ActionMessageCard({ order, receivedAt, message, type }) {
+  const accent = type === 'error' ? colors.red : type === 'success' ? colors.green : colors.textDim;
+  return (
+    <div style={card()}>
+      {order && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${colors.border}`, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ fontSize: 13, color: colors.textDim }}>
+            Order <span style={{ color: colors.text, fontWeight: 600, fontFamily: 'monospace' }}>{order.order_sn}</span>
+            {order.order_sn.startsWith('MOCK-') && (
+              <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.orange, padding: '2px 6px', borderRadius: 4 }}>
+                DEBUG
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: colors.textFaint }}>Diterima {formatReceivedAt(receivedAt)}</div>
+        </div>
+      )}
+
+      <div style={{ padding: '28px 12px', textAlign: 'center', fontSize: 16, fontWeight: 600, color: accent, lineHeight: 1.5 }}>
+        {message}
+      </div>
+
+      <ScannerStatusBar />
+    </div>
+  );
 }
 
 const COMMANDS = [
@@ -70,6 +243,9 @@ function PackingStation() {
   const [busyLabel, setBusyLabel] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [queueCounts, setQueueCounts] = useState({ ready_to_pack: 0, deferred_ready: 0 });
+  // Which item row to flash green/red right after a scan, and for how long —
+  // cleared automatically so it never lingers past the next scan.
+  const [flash, setFlash] = useState(null); // { sku, type: 'success' | 'error' }
   const inputRef = useRef(null);
   const testScanInputRef = useRef(null);
   const submittingRef = useRef(false); // reentrancy guard — a real scanner can fire faster than a request round-trips
@@ -213,6 +389,13 @@ function PackingStation() {
   function notify(text, type = 'info') {
     setInfoMessage(text);
     setInfoType(type);
+  }
+
+  // Briefly highlights one item row green (correct scan) or red (rejected
+  // scan) — cleared on a timer so it never lingers into the next scan.
+  function flashRow(sku, type) {
+    setFlash({ sku, type });
+    setTimeout(() => setFlash((f) => (f?.sku === sku && f?.type === type ? null : f)), 700);
   }
 
   // The "what to do next" bar is always derived from current state — never
@@ -585,9 +768,27 @@ function PackingStation() {
         }
         // otherwise treat it as an item SKU scan — the server auto-decides
         // ship-today vs. defer-to-tomorrow once every item is scanned
-        const data = await post('/packing/scan-item', { session_id: state.session.id, sku: value });
-        setLastSku(value);
-        return applyState(data);
+        try {
+          const data = await post('/packing/scan-item', { session_id: state.session.id, sku: value });
+          setLastSku(value);
+          // Which row actually incremented — the scanned value can be a
+          // barcode, not the SKU itself, so this can't just flash `value`
+          // directly; diffing against the pre-scan counts finds the real one.
+          const grown = data.items.find((it) => {
+            const before = state.items.find((b) => b.sku === it.sku);
+            return before && it.scanned_qty > before.scanned_qty;
+          });
+          if (grown) flashRow(grown.sku, 'success');
+          return applyState(data);
+        } catch (err) {
+          // A rejected scan that still matches a known row (already fully
+          // scanned) gets a red flash on that row; one that matches nothing
+          // (wrong item entirely) has no row to flash, so it's left to the
+          // status message below instead.
+          const match = state.items.find((it) => it.sku === value || it.barcode === value);
+          if (match) flashRow(match.sku, 'error');
+          throw err;
+        }
       }
 
       notify('Unexpected state — scan NEXT_ORDER to reset.', 'error');
@@ -687,132 +888,133 @@ function PackingStation() {
     );
   }
 
-  const showGreen = state?.allComplete && state.session.status === 'IN_PROGRESS';
   const guidance = getGuidance();
+  // The item-scan list only makes sense while actively scanning a real
+  // order — paused, no order, or any transitional status (awaiting label
+  // scan, finishing up, flagged, etc.) all fall through to the single
+  // unified ActionMessageCard instead.
+  const showItemScan = !paused && mode === 'packing' && state && state.session.status === 'IN_PROGRESS' && state.items.length > 0;
 
   return (
-    <div style={{ display: 'flex', gap: 24, maxWidth: 924, margin: '20px auto', alignItems: 'flex-start', textAlign: 'left' }}>
-      <div
-        style={{
-          width: 260,
-          flexShrink: 0,
-          fontFamily: 'var(--sans)',
-          background: '#1a1a1a',
-          color: 'white',
-          borderRadius: 8,
-          padding: 20,
-          fontSize: 12,
-        }}
-      >
-        <div style={{ fontSize: 10, opacity: 0.6, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+    <div style={{ display: 'flex', gap: 16, maxWidth: 980, margin: '20px auto', padding: '0 16px 24px', alignItems: 'flex-start', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+      <div style={card({ width: 230, flexShrink: 0, fontSize: 12 })}>
+        <div style={{ fontSize: 10, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
           Commands
         </div>
         {operatorName ? (
           COMMANDS.map(({ cmd, desc }) => (
-            <div key={cmd} style={{ marginBottom: 8 }}>
-              <div style={{ fontFamily: 'monospace', color: '#a5d6a7' }}>{cmd}</div>
-              <div style={{ opacity: 0.85 }}>{desc}</div>
+            <div key={cmd} style={{ marginBottom: 10 }}>
+              <div style={{ fontFamily: 'monospace', color: colors.green, fontSize: 11.5 }}>{cmd}</div>
+              <div style={{ color: colors.textDim, lineHeight: 1.4 }}>{desc}</div>
             </div>
           ))
         ) : (
-          <div style={{ opacity: 0.85 }}>Scan your operator barcode to see available commands.</div>
+          <div style={{ color: colors.textDim }}>Scan your operator barcode to see available commands.</div>
         )}
-      </div>
 
-      <div
-        style={{
-          flex: 1,
-          fontFamily: 'var(--sans)',
-          padding: 24,
-          background: showGreen ? '#2e7d32' : '#1a1a1a',
-          color: 'white',
-          borderRadius: 8,
-          transition: 'background 0.2s',
-        }}
-      >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <h2>{mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'} — {stationId}</h2>
-        <div style={{ textAlign: 'right', fontSize: 12, lineHeight: 1.7 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-            <span style={{ fontSize: 14, fontWeight: 'bold' }}>
-              {operatorName || 'Not logged in'} {paused && '(PAUSED)'}
-            </span>
-            {operatorName && <button onClick={handleLogout} style={{ fontSize: 12 }}>Logout</button>}
-          </div>
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${colors.border}`, color: colors.textFaint, lineHeight: 1.8 }}>
           <div>Last sync: {formatTime(lastSyncAt)}</div>
           <div>Next sync: {formatTime(lastSyncAt && lastSyncAt + SYNC_INTERVAL_MS)}</div>
-          <div>New orders to process: {queueCounts.ready_to_pack}</div>
-          <div>Orders from yesterday to process: {queueCounts.deferred_ready}</div>
+          <div>Order baru: {queueCounts.ready_to_pack}</div>
+          <div>Order kemarin: {queueCounts.deferred_ready}</div>
         </div>
       </div>
 
-      {mode === 'shipping' ? (
-        <div>
-          <p style={{ opacity: 0.85 }}>
-            Scan each packed label's barcode as the courier takes it — confirms pickup and clears it from the Ready to Pickup pool.
-            This is independent of whatever the packing side is doing; no order needs to be "current" here.
-          </p>
-          {pickupLog.length === 0 ? (
-            <p style={{ opacity: 0.6 }}>No pickups confirmed yet this session.</p>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #555' }}>
-                  <th>Order</th><th>Confirmed at</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pickupLog.map((entry) => (
-                  <tr key={`${entry.order_sn}-${entry.at}`} style={{ color: '#a5d6a7' }}>
-                    <td>{entry.order_sn}</td>
-                    <td>{formatTime(entry.at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      ) : state ? (
-        <div>
-          <p>
-            Order: <strong>{state.order.order_sn}</strong> — {state.order.buyer_name}
-            {state.order.order_sn.startsWith('MOCK-') && (
-              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 'bold', color: '#000', background: '#ffca28', padding: '2px 6px', borderRadius: 4 }}>
-                DEBUG
-              </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
+              {mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'}
+            </div>
+            <div style={{ fontSize: 12, color: colors.textDim }}>{stationId}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+              {operatorName || 'Not logged in'}{paused ? ' (PAUSED)' : ''}
+            </div>
+            {operatorName && (
+              <button
+                onClick={handleLogout}
+                style={{ fontSize: 11, padding: '3px 10px', marginTop: 4, background: colors.cardAlt, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 6, cursor: 'pointer', fontFamily: 'var(--sans)' }}
+              >
+                Logout
+              </button>
             )}
-          </p>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #555' }}>
-                <th>SKU</th><th>Product</th><th>Barcode</th><th>Scanned / Qty</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.items.map((it) => (
-                <tr key={it.sku} style={{ color: it.scanned_qty === it.qty ? '#a5d6a7' : 'white' }}>
-                  <td>{it.sku}</td>
-                  <td>{it.product_name}</td>
-                  <td style={{ fontFamily: 'monospace', color: it.barcode ? 'inherit' : '#888' }}>{it.barcode || '—'}</td>
-                  <td>{it.scanned_qty} / {it.qty}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {['AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP'].includes(state.session.status) && (
-            <a
-              href={`${API_BASE}/packing/label/${state.session.id}`}
-              target="_blank"
-              rel="noreferrer"
-              style={{ color: '#90caf9', display: 'inline-block', marginBottom: 16 }}
-            >
-              View {state.order.order_sn.startsWith('MOCK-') ? 'mock' : 'real Shopee'} label PDF (tracking: {state.session.tracking_no})
-            </a>
-          )}
+          </div>
         </div>
-      ) : (
-        <p>{operatorName ? 'No active order.' : 'Scan your operator barcode below to log in.'}</p>
-      )}
+
+        {mode === 'shipping' ? (
+          <div style={card()}>
+            <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 14, lineHeight: 1.5 }}>
+              Scan each packed label's barcode as the courier takes it — confirms pickup and clears it from the Ready to Pickup pool. Independent of whatever the packing side is doing.
+            </div>
+            {pickupLog.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textFaint, fontSize: 13 }}>Belum ada pickup dikonfirmasi sesi ini.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {pickupLog.map((entry) => (
+                  <div key={`${entry.order_sn}-${entry.at}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+                    <span style={{ fontFamily: 'monospace', color: colors.green }}>{entry.order_sn}</span>
+                    <span style={{ color: colors.textDim }}>{formatTime(entry.at)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <ScannerStatusBar />
+          </div>
+        ) : showItemScan ? (
+          <ItemScanCard order={state.order} receivedAt={state.order.created_at} items={state.items} flash={flash} />
+        ) : (
+          <ActionMessageCard
+            order={state?.order}
+            receivedAt={state?.order?.created_at}
+            type={busy ? 'info' : guidance.type}
+            message={
+              <>
+                {busy ? (<><span className="kelper-spinner" />{busyLabel}</>) : guidance.text}
+                {!busy && state && ['AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP'].includes(state.session.status) && (
+                  <div style={{ marginTop: 16 }}>
+                    <a
+                      href={`${API_BASE}/packing/label/${state.session.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: colors.blue, fontSize: 13, fontWeight: 500 }}
+                    >
+                      Lihat label {state.order.order_sn.startsWith('MOCK-') ? 'mock' : 'Shopee'} PDF (resi: {state.session.tracking_no})
+                    </a>
+                  </div>
+                )}
+              </>
+            }
+          />
+        )}
+
+        <input
+          ref={inputRef}
+          value={scanValue}
+          onChange={(e) => setScanValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
+          onBlur={() => inputRef.current && inputRef.current.focus()}
+          autoFocus
+          placeholder={busy ? 'Please wait... (scans still accepted)' : !operatorName ? 'Scan operator barcode...' : mode === 'shipping' ? 'Scan a packed label...' : 'Scan here (command or SKU)...'}
+          style={scanInputStyle}
+        />
+
+        {infoMessage && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 10,
+              fontSize: 13,
+              background: infoType === 'error' ? colors.redDim : infoType === 'success' ? colors.greenDim : colors.cardAlt,
+              color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim,
+              border: `1px solid ${infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.border}`,
+            }}
+          >
+            {infoMessage}
+          </div>
+        )}
+      </div>
 
       <style>{`
         @keyframes kelper-spin { to { transform: rotate(360deg); } }
@@ -820,13 +1022,15 @@ function PackingStation() {
           display: inline-block;
           width: 14px;
           height: 14px;
-          border: 2px solid rgba(255,255,255,0.4);
-          border-top-color: #fff;
+          border: 2px solid ${colors.textFaint};
+          border-top-color: ${colors.text};
           border-radius: 50%;
           animation: kelper-spin 0.7s linear infinite;
           margin-right: 8px;
           vertical-align: middle;
         }
+        @keyframes kelper-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+        .kelper-pulse { animation: kelper-pulse 1.4s ease-in-out infinite; }
         /* No mouse on the real station once setup is done — this rule only
            exists in the DOM while this screen is mounted, so Station Setup
            (rendered separately, before stationReady) keeps the normal cursor.
@@ -834,47 +1038,6 @@ function PackingStation() {
            buttons (text caret, pointer), which plain inheritance can't. */
         *, *::before, *::after { cursor: none !important; }
       `}</style>
-
-      <div
-        style={{
-          padding: 12,
-          borderRadius: 4,
-          marginBottom: 16,
-          background: busy ? '#37474f' : guidance.type === 'error' ? '#c62828' : guidance.type === 'success' ? '#1b5e20' : '#333',
-        }}
-      >
-        {busy ? (<><span className="kelper-spinner" />{busyLabel}</>) : guidance.text}
-      </div>
-
-      <input
-        ref={inputRef}
-        value={scanValue}
-        onChange={(e) => setScanValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
-        onBlur={() => inputRef.current && inputRef.current.focus()}
-        autoFocus
-        placeholder={busy ? 'Please wait... (scans still accepted)' : !operatorName ? 'Scan operator barcode...' : mode === 'shipping' ? 'Scan a packed label...' : 'Scan here (command or SKU)...'}
-        style={{ ...inputStyle, background: '#000', color: '#0f0', fontFamily: 'monospace', fontSize: 18 }}
-      />
-
-      {infoMessage && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 10, opacity: 0.6, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
-            Status
-          </div>
-          <div
-            style={{
-              padding: 10,
-              borderRadius: 4,
-              fontSize: 13,
-              background: infoType === 'error' ? '#c62828' : infoType === 'success' ? '#1b5e20' : '#333',
-            }}
-          >
-            {infoMessage}
-          </div>
-        </div>
-      )}
-      </div>
 
       <iframe ref={printFrameRef} title="label-print" style={{ display: 'none' }} />
     </div>
@@ -921,13 +1084,18 @@ const setupSubmitStyle = {
   fontFamily: 'var(--sans)',
 };
 
-const inputStyle = {
+const scanInputStyle = {
   display: 'block',
   width: '100%',
-  padding: 10,
-  marginTop: 4,
-  marginBottom: 12,
+  padding: '14px 16px',
   boxSizing: 'border-box',
+  background: colors.bg,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  color: colors.green,
+  fontFamily: 'monospace',
+  fontSize: 18,
+  outline: 'none',
 };
 
 export default PackingStation;
