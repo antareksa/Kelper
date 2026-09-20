@@ -33,4 +33,30 @@ async function getShopAffiliatePerformance(accessToken, shopId, { startDate, end
   return res.json();
 }
 
-module.exports = { getShopAffiliatePerformance };
+// Same request/signing shape as getShopAffiliatePerformance above (see its
+// comment) — different path, same principal_id-as-shop_id assumption for a
+// single-shop Brand Portal authorization. Used for Pengunjung (unique_visitors
+// in the response), though it also carries much richer sales/conversion
+// data we aren't using yet.
+async function getShopSalesPerformanceDetail(accessToken, shopId, { startDate, endDate, timezone = 'GMT+7', granularity = 'day' }) {
+  const path = '/api/v2/principal/get_shop_sales_performance_detail';
+  const timestamp = Math.floor(Date.now() / 1000);
+  const sign = signShop(BRAND_CREDENTIALS.partnerId, path, timestamp, accessToken, shopId, BRAND_CREDENTIALS.partnerKey);
+  const params = new URLSearchParams({
+    partner_id: BRAND_CREDENTIALS.partnerId,
+    timestamp: String(timestamp),
+    sign,
+    shop_id: shopId,
+    principal_id: shopId,
+    access_token: accessToken,
+  });
+
+  const res = await fetch(`${SHOPEE_API_BASE}${path}?${params.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start_date: startDate, end_date: endDate, timezone, granularity }),
+  });
+  return res.json();
+}
+
+module.exports = { getShopAffiliatePerformance, getShopSalesPerformanceDetail };

@@ -35,4 +35,12 @@ function dateStringWIB(daysAgo = 0) {
   return d.toISOString().slice(0, 10);
 }
 
-module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, dateStringWIB };
+// DD-MM-YYYY for `daysAgo` days back, WIB wall-clock date — the format
+// Shopee's Ads Performance APIs (get_all_cpc_ads_hourly/daily_performance)
+// expect, unlike the YYYY-MM-DD the Brand Portal APIs use.
+function dateStringDDMMYYYYWIB(daysAgo = 0) {
+  const [year, month, day] = dateStringWIB(daysAgo).split('-');
+  return `${day}-${month}-${year}`;
+}
+
+module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, dateStringWIB, dateStringDDMMYYYYWIB };

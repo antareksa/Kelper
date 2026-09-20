@@ -1,12 +1,12 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
-const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail } = require('./shopee/client');
-const { getShopAffiliatePerformance } = require('./shopee/brandClient');
+const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance } = require('./shopee/client');
+const { getShopAffiliatePerformance, getShopSalesPerformanceDetail } = require('./shopee/brandClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
 const { getSetting } = require('./settings');
-const { dateStringWIB } = require('./wib');
+const { dateStringWIB, dateStringDDMMYYYYWIB } = require('./wib');
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -514,6 +514,68 @@ async function fetchAffiliatePerformance(shopId) {
   insertAffiliatePerformance.run(shopId, yesterday, summary.sales_confirmed ?? 0, summary.orders_confirmed ?? 0, summary.buyers_confirmed ?? 0, now());
 }
 
+const insertShopPerformance = db.prepare(`
+  INSERT OR REPLACE INTO shop_performance_daily (shop_id, date, unique_visitors, fetched_at)
+  VALUES (?, ?, ?, ?)
+`);
+
+// Fetches YESTERDAY's Pengunjung (unique_visitors) once per shop per day —
+// same 1-day reporting lag and once-daily reasoning as fetchAffiliatePerformance
+// above, just a different Brand Portal endpoint.
+async function fetchShopPerformance(shopId) {
+  const yesterday = dateStringWIB(1);
+  const already = db
+    .prepare('SELECT 1 FROM shop_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, yesterday);
+  if (already) return;
+
+  const accessToken = await getValidBrandAccessToken(shopId);
+  const result = await getShopSalesPerformanceDetail(accessToken, shopId, {
+    startDate: yesterday,
+    endDate: yesterday,
+    timezone: 'GMT+7',
+    granularity: 'day',
+  });
+  if (result.error) {
+    console.error(`[server] get_shop_sales_performance_detail failed for shop ${shopId}: ${result.message || result.error}`);
+    return;
+  }
+
+  const summary = result.response?.summary?.[0] || { unique_visitors: 0 };
+  insertShopPerformance.run(shopId, yesterday, summary.unique_visitors ?? 0, now());
+}
+
+const ADS_REFETCH_INTERVAL_SECONDS = 5 * 60;
+const insertAdsPerformance = db.prepare(`
+  INSERT OR REPLACE INTO ads_performance_daily (shop_id, date, expense, fetched_at)
+  VALUES (?, ?, ?, ?)
+`);
+
+// Fetches TODAY's Iklan (ad expenditure) — unlike the two Brand Portal
+// fetches above, this one covers today and is refetched periodically
+// through the day (every ADS_REFETCH_INTERVAL_SECONDS) since ad spend
+// keeps accruing, not once-and-done. Uses the main app's own token (Ads
+// Performance is a "Seller In House System" permission, not Brand Portal),
+// via the hourly endpoint since the daily one rejects start_date ==
+// end_date (today).
+async function fetchAdsPerformance(shopId) {
+  const today = dateStringWIB(0);
+  const existing = db
+    .prepare('SELECT fetched_at FROM ads_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, today);
+  if (existing && now() - existing.fetched_at < ADS_REFETCH_INTERVAL_SECONDS) return;
+
+  const accessToken = await getValidAccessToken(shopId);
+  const result = await getAllCpcAdsHourlyPerformance(accessToken, shopId, dateStringDDMMYYYYWIB(0));
+  if (result.error) {
+    console.error(`[server] get_all_cpc_ads_hourly_performance failed for shop ${shopId}: ${result.message || result.error}`);
+    return;
+  }
+
+  const totalExpense = (result.response || []).reduce((sum, hour) => sum + (hour.expense || 0), 0);
+  insertAdsPerformance.run(shopId, today, totalExpense, now());
+}
+
 // Runs inside the Dashboard Station's server process (see server.js) — the
 // background loop that keeps local order/shipment data in sync with Shopee,
 // independent of whatever the Dashboard or any Packing Station happens to
@@ -535,6 +597,21 @@ function startShopeeSync() {
         await fetchAffiliatePerformance(shopId);
       } catch (err) {
         console.error(`[server] Affiliasi fetch failed for shop ${shopId}: ${err.message}`);
+      }
+      try {
+        await fetchShopPerformance(shopId);
+      } catch (err) {
+        console.error(`[server] Pengunjung fetch failed for shop ${shopId}: ${err.message}`);
+      }
+    }
+
+    // Ads spend uses the main app's own token, independent of the order-sync
+    // pause toggle and of whether Brand Portal is connected at all.
+    for (const { shop_id: shopId } of shops) {
+      try {
+        await fetchAdsPerformance(shopId);
+      } catch (err) {
+        console.error(`[server] Iklan fetch failed for shop ${shopId}: ${err.message}`);
       }
     }
 

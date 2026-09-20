@@ -155,6 +155,31 @@ db.exec(`
     PRIMARY KEY (shop_id, date)
   );
 
+  -- Pengunjung (unique_visitors) from Shopee's Brand Portal API
+  -- (get_shop_sales_performance_detail) — same once-daily, yesterday-only
+  -- pattern as affiliate_performance_daily above, and the same reason
+  -- (Shopee's data has a 1-day reporting lag).
+  CREATE TABLE IF NOT EXISTS shop_performance_daily (
+    shop_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    unique_visitors INTEGER,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (shop_id, date)
+  );
+
+  -- Iklan (Ads Expenditure) from Shopee's Ads API
+  -- (get_all_cpc_ads_hourly_performance) — this one covers TODAY (unlike
+  -- the two Brand Portal tables above), refetched periodically through the
+  -- day rather than once, since "today" changes as more ad spend happens.
+  -- See shopeeSync.js's fetchAdsPerformance.
+  CREATE TABLE IF NOT EXISTS ads_performance_daily (
+    shop_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    expense REAL,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (shop_id, date)
+  );
+
   -- Small runtime-mutable key/value store for toggles an admin flips from
   -- the UI (e.g. pausing order sync) — deliberately NOT config.json, which
   -- is git-tracked deployment config and would get silently reverted by the

@@ -204,6 +204,13 @@ function getEscrowDetail(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/payment/get_escrow_detail', accessToken, shopId, { order_sn: orderSn });
 }
 
+// performanceDate in DD-MM-YYYY (see wib.js's dateStringDDMMYYYYWIB) — must
+// be today or up to 6 months ago; today can only be queried via this hourly
+// endpoint, not the daily one (which requires start_date != end_date).
+function getAllCpcAdsHourlyPerformance(accessToken, shopId, performanceDate) {
+  return shopGet('/api/v2/ads/get_all_cpc_ads_hourly_performance', accessToken, shopId, { performance_date: performanceDate });
+}
+
 function getTrackingNumber(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/logistics/get_tracking_number', accessToken, shopId, { order_sn: orderSn });
 }
@@ -252,6 +259,7 @@ module.exports = {
   getChannelList,
   getPackageDetail,
   getEscrowDetail,
+  getAllCpcAdsHourlyPerformance,
   getItemList,
   getItemBaseInfo,
   getModelList,

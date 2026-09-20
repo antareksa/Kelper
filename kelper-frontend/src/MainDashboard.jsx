@@ -73,16 +73,18 @@ function BlockedCard({ label, note }) {
   );
 }
 
-// Margin/Layanan/Biaya Pesanan/Affiliasi are all real now. Affiliasi comes
-// from a separate source (Brand Portal, fetched once daily) with its own
-// 1-day reporting lag, so it's never "today" — the label says which day it
-// actually is. Iklan still needs Shopee's Ads Performance API, which
-// nothing in this app calls yet, so it stays explicitly marked rather than
-// showing a fabricated number.
-function ProfitFunnel({ laba, layanan, biayaPesanan, affiliasi }) {
+// All five funnel steps are real now. Affiliasi comes from a separate
+// source (Brand Portal, fetched once daily) with its own 1-day reporting
+// lag, so it's never "today" — the label says which day it actually is.
+// Iklan is genuinely today's spend so far (refetched every few minutes —
+// see shopeeSync.js's fetchAdsPerformance), same as Margin/Layanan/Biaya
+// Pesanan. `blocked` only fires transiently, before the first fetch has
+// happened yet (e.g. right after connecting Brand Portal, or right after
+// server startup for Iklan).
+function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   const steps = [
     { label: 'Margin (Estimasi)', value: formatRupiah(laba), color: colors.green, blocked: false },
-    { label: 'Iklan', color: colors.blue, blocked: true },
+    { label: 'Iklan', value: iklan != null ? formatRupiah(iklan) : null, color: colors.blue, blocked: iklan == null },
     { label: 'Layanan', value: formatRupiah(layanan), color: colors.blue, blocked: false },
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
     {
@@ -194,13 +196,37 @@ function ProductList({ products }) {
   );
 }
 
-function CostBreakdown() {
+// Ranks today's cost figures against each other — all three now have a real
+// data source (see ProfitFunnel), so this went from a permanent "not
+// connected" placeholder to an actual breakdown.
+function CostBreakdown({ iklan, layanan, biayaPesanan }) {
+  const costs = [
+    { label: 'Iklan', value: iklan },
+    { label: 'Layanan', value: layanan },
+    { label: 'Biaya Pesanan', value: biayaPesanan },
+  ]
+    .filter((c) => c.value != null)
+    .sort((a, b) => b.value - a.value);
+  const total = costs.reduce((sum, c) => sum + c.value, 0);
+
   return (
-    <div style={{ ...card({ flex: 1 }), opacity: 0.65 }}>
-      <CardHeader label="Biaya Terbesar" />
-      <div style={{ padding: '20px 0', textAlign: 'center', color: colors.textFaint, fontSize: 12.5, lineHeight: 1.5 }}>
-        Belum terhubung ke Shopee Ads API — biaya iklan tidak tersedia. Layanan, Biaya Pesanan, &amp; Affiliasi sudah tersedia di Profit Funnel di atas.
-      </div>
+    <div style={card({ flex: 1 })}>
+      <CardHeader label="Biaya Terbesar Hari Ini" />
+      {costs.length === 0 || total === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>Belum ada biaya tercatat hari ini.</div>
+      ) : (
+        costs.map((c) => (
+          <div key={c.label} style={{ padding: '8px 0', borderBottom: `1px solid ${colors.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+              <span style={{ color: colors.text }}>{c.label}</span>
+              <span style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(c.value)}</span>
+            </div>
+            <div style={{ height: 5, borderRadius: 3, background: colors.cardAlt, overflow: 'hidden' }}>
+              <div style={{ width: `${(c.value / total) * 100}%`, height: '100%', background: colors.orange }} />
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -267,7 +293,7 @@ function MainDashboard() {
   return (
     <div style={{ color: colors.text }}>
       <div style={{ background: colors.orangeDim, border: `1px solid ${colors.orange}`, color: '#f0c674', borderRadius: 10, padding: '8px 12px', fontSize: 12, marginBottom: 16, lineHeight: 1.5 }}>
-        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim. Iklan dan Pengunjung belum terhubung ke API terkait.
+        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim.
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -300,11 +326,15 @@ function MainDashboard() {
           value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
           trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari kemarin' }}
         />
-        <BlockedCard label="Pengunjung" note="Perlu akses Shopee Analytics/Traffic API — belum diintegrasikan." />
+        {data.pengunjung ? (
+          <KpiCard label={`Pengunjung (${data.pengunjung.date})`} value={String(data.pengunjung.uniqueVisitors)} />
+        ) : (
+          <BlockedCard label="Pengunjung" note="Belum ada data — menunggu fetch harian pertama dari Brand Portal." />
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasi={data.affiliasi} />
+        <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} iklan={data.today.iklan} affiliasi={data.affiliasi} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
@@ -313,7 +343,7 @@ function MainDashboard() {
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <ProductList products={data.topProducts} />
-        <CostBreakdown />
+        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} />
       </div>
 
       <BocorList leaking={data.leaking} />

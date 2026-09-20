@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { startOfDayWIB } = require('../wib');
+const { startOfDayWIB, dateStringWIB } = require('../wib');
 
 const router = express.Router();
 
@@ -197,6 +197,19 @@ router.get('/summary', (req, res) => {
     .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? ORDER BY date DESC LIMIT 1')
     .get(shopId);
 
+  // Same "latest fetched row, null if never fetched" pattern as Affiliasi —
+  // see shopeeSync.js's fetchShopPerformance.
+  const shopPerformanceRow = db
+    .prepare('SELECT date, unique_visitors FROM shop_performance_daily WHERE shop_id = ? ORDER BY date DESC LIMIT 1')
+    .get(shopId);
+
+  // Iklan, unlike Affiliasi/Pengunjung, genuinely is "today" — see
+  // shopeeSync.js's fetchAdsPerformance (refetched every few minutes, not
+  // once daily).
+  const adsRow = db
+    .prepare('SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, dateStringWIB(0));
+
   res.json({
     today: {
       orderCount: today.orderCount,
@@ -204,6 +217,7 @@ router.get('/summary', (req, res) => {
       laba: today.laba,
       layanan: today.layanan,
       biayaPesanan: today.biayaPesanan,
+      iklan: adsRow ? adsRow.expense : null,
       marginPct: marginPctToday,
     },
     affiliasi: affiliateRow
@@ -213,6 +227,9 @@ router.get('/summary', (req, res) => {
           ordersConfirmed: affiliateRow.orders_confirmed,
           buyersConfirmed: affiliateRow.buyers_confirmed,
         }
+      : null,
+    pengunjung: shopPerformanceRow
+      ? { date: shopPerformanceRow.date, uniqueVisitors: shopPerformanceRow.unique_visitors }
       : null,
     trend: {
       orderCountPct: pctChange(today.orderCount, yesterday.orderCount),
@@ -228,12 +245,10 @@ router.get('/summary', (req, res) => {
     todayHourly: { omzet: hourlyOmzet, laba: hourlyLaba },
     topProducts,
     leaking,
-    // Layanan/Biaya Pesanan (escrow) and Affiliasi (Brand Portal) are now
-    // real — only ads/visitor metrics still have no data source (Ads
-    // Performance API isn't integrated, and Pengunjung has no known API at
-    // all yet), so those stay an explicit "not connected" state instead of
-    // a fabricated number.
-    blocked: ['ads', 'pengunjung'],
+    // Every metric this Dashboard shows now has a real data source
+    // (escrow, Ads Performance, Brand Portal) — kept as an empty array
+    // rather than removed, since the frontend still checks it per metric.
+    blocked: [],
   });
 });
 
