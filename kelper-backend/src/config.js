@@ -26,7 +26,7 @@ const DEFAULTS = {
     staleCheckIntervalMs: 60000,
   },
   sync: {
-    pollIntervalMs: 30000,
+    pollIntervalMs: 5000,
     autoBookShipping: true,
   },
   packing: {
