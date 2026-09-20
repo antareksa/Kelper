@@ -129,33 +129,6 @@ function ItemScanCard({ order, receivedAt, items, flash }) {
           <ItemRow key={it.sku} item={it} flashType={flash?.sku === it.sku ? flash.type : null} />
         ))}
       </div>
-
-      <ScannerStatusBar />
-    </div>
-  );
-}
-
-// Persistent hardware-reassurance strip at the bottom of every screen —
-// purely a "yes, it's listening" indicator, separate from the guidance/
-// status messages above it which carry the actual next-step instructions.
-function ScannerStatusBar() {
-  return (
-    <div
-      style={{
-        marginTop: 14,
-        padding: '8px 12px',
-        borderRadius: 8,
-        background: colors.cardAlt,
-        border: `1px solid ${colors.border}`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        fontSize: 11,
-        color: colors.textDim,
-      }}
-    >
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.green, flexShrink: 0 }} className="kelper-pulse" />
-      Barcode Scanner Active...
     </div>
   );
 }
@@ -186,8 +159,46 @@ function ActionMessageCard({ order, receivedAt, message, type }) {
       <div style={{ padding: '28px 12px', textAlign: 'center', fontSize: 16, fontWeight: 600, color: accent, lineHeight: 1.5 }}>
         {message}
       </div>
+    </div>
+  );
+}
 
-      <ScannerStatusBar />
+// The bottom bar doubles as both the scan-capture point and the feedback
+// channel: "Barcode Scanner Active..." when idle, or the latest scan result
+// (colored per type) right after one — one place to look, instead of a
+// separate status box the operator's eyes have to jump to. The actual
+// input is functionally real (ref, focus, keystrokes) but visually
+// invisible; this div is what's actually seen.
+function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message, type }) {
+  const accent = type === 'error' ? colors.red : type === 'success' ? colors.green : colors.textDim;
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        onBlur={onBlur}
+        autoFocus
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, border: 'none', padding: 0 }}
+      />
+      <div
+        style={{
+          padding: '14px 16px',
+          borderRadius: 10,
+          background: colors.cardAlt,
+          border: `1px solid ${message ? accent : colors.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          fontSize: 13,
+          fontWeight: message ? 600 : 400,
+          color: accent,
+        }}
+      >
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors.green, flexShrink: 0 }} className="kelper-pulse" />
+        {message || 'Barcode Scanner Active...'}
+      </div>
     </div>
   );
 }
@@ -778,7 +789,10 @@ function PackingStation() {
             const before = state.items.find((b) => b.sku === it.sku);
             return before && it.scanned_qty > before.scanned_qty;
           });
-          if (grown) flashRow(grown.sku, 'success');
+          if (grown) {
+            flashRow(grown.sku, 'success');
+            notify(`${grown.product_name} scanned (${grown.scanned_qty}/${grown.qty})`, 'success');
+          }
           return applyState(data);
         } catch (err) {
           // A rejected scan that still matches a known row (already fully
@@ -896,55 +910,32 @@ function PackingStation() {
   const showItemScan = !paused && mode === 'packing' && state && state.session.status === 'IN_PROGRESS' && state.items.length > 0;
 
   return (
-    <div style={{ display: 'flex', gap: 16, maxWidth: 980, margin: '20px auto', padding: '0 16px 24px', alignItems: 'flex-start', textAlign: 'left', fontFamily: 'var(--sans)' }}>
-      <div style={card({ width: 230, flexShrink: 0, fontSize: 12 })}>
-        <div style={{ fontSize: 10, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
-          Commands
+    <div style={{ width: '100%', minHeight: '100vh', boxSizing: 'border-box', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, background: colors.bg, textAlign: 'left', fontFamily: 'var(--sans)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
+            {mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'}
+          </div>
+          <div style={{ fontSize: 12, color: colors.textDim }}>{stationId}</div>
         </div>
-        {operatorName ? (
-          COMMANDS.map(({ cmd, desc }) => (
-            <div key={cmd} style={{ marginBottom: 10 }}>
-              <div style={{ fontFamily: 'monospace', color: colors.green, fontSize: 11.5 }}>{cmd}</div>
-              <div style={{ color: colors.textDim, lineHeight: 1.4 }}>{desc}</div>
-            </div>
-          ))
-        ) : (
-          <div style={{ color: colors.textDim }}>Scan your operator barcode to see available commands.</div>
-        )}
-
-        <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${colors.border}`, color: colors.textFaint, lineHeight: 1.8 }}>
-          <div>Last sync: {formatTime(lastSyncAt)}</div>
-          <div>Next sync: {formatTime(lastSyncAt && lastSyncAt + SYNC_INTERVAL_MS)}</div>
-          <div>Order baru: {queueCounts.ready_to_pack}</div>
-          <div>Order kemarin: {queueCounts.deferred_ready}</div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+            {operatorName || 'Not logged in'}{paused ? ' (PAUSED)' : ''}
+          </div>
+          {operatorName && (
+            <button
+              onClick={handleLogout}
+              style={{ fontSize: 11, padding: '3px 10px', marginTop: 4, background: colors.cardAlt, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 6, cursor: 'pointer', fontFamily: 'var(--sans)' }}
+            >
+              Logout
+            </button>
+          )}
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
-              {mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'}
-            </div>
-            <div style={{ fontSize: 12, color: colors.textDim }}>{stationId}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
-              {operatorName || 'Not logged in'}{paused ? ' (PAUSED)' : ''}
-            </div>
-            {operatorName && (
-              <button
-                onClick={handleLogout}
-                style={{ fontSize: 11, padding: '3px 10px', marginTop: 4, background: colors.cardAlt, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 6, cursor: 'pointer', fontFamily: 'var(--sans)' }}
-              >
-                Logout
-              </button>
-            )}
-          </div>
-        </div>
-
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {mode === 'shipping' ? (
-          <div style={card()}>
+          <div style={{ ...card(), flex: 1 }}>
             <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 14, lineHeight: 1.5 }}>
               Scan each packed label's barcode as the courier takes it — confirms pickup and clears it from the Ready to Pickup pool. Independent of whatever the packing side is doing.
             </div>
@@ -960,7 +951,6 @@ function PackingStation() {
                 ))}
               </div>
             )}
-            <ScannerStatusBar />
           </div>
         ) : showItemScan ? (
           <ItemScanCard order={state.order} receivedAt={state.order.created_at} items={state.items} flash={flash} />
@@ -988,33 +978,17 @@ function PackingStation() {
             }
           />
         )}
-
-        <input
-          ref={inputRef}
-          value={scanValue}
-          onChange={(e) => setScanValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
-          onBlur={() => inputRef.current && inputRef.current.focus()}
-          autoFocus
-          placeholder={busy ? 'Please wait... (scans still accepted)' : !operatorName ? 'Scan operator barcode...' : mode === 'shipping' ? 'Scan a packed label...' : 'Scan here (command or SKU)...'}
-          style={scanInputStyle}
-        />
-
-        {infoMessage && (
-          <div
-            style={{
-              padding: '10px 14px',
-              borderRadius: 10,
-              fontSize: 13,
-              background: infoType === 'error' ? colors.redDim : infoType === 'success' ? colors.greenDim : colors.cardAlt,
-              color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim,
-              border: `1px solid ${infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.border}`,
-            }}
-          >
-            {infoMessage}
-          </div>
-        )}
       </div>
+
+      <ScanFeedbackBar
+        inputRef={inputRef}
+        value={scanValue}
+        onChange={(e) => setScanValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
+        onBlur={() => inputRef.current && inputRef.current.focus()}
+        message={infoMessage}
+        type={infoType}
+      />
 
       <style>{`
         @keyframes kelper-spin { to { transform: rotate(360deg); } }
@@ -1082,20 +1056,6 @@ const setupSubmitStyle = {
   fontWeight: 600,
   cursor: 'pointer',
   fontFamily: 'var(--sans)',
-};
-
-const scanInputStyle = {
-  display: 'block',
-  width: '100%',
-  padding: '14px 16px',
-  boxSizing: 'border-box',
-  background: colors.bg,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  color: colors.green,
-  fontFamily: 'monospace',
-  fontSize: 18,
-  outline: 'none',
 };
 
 export default PackingStation;
