@@ -29,8 +29,11 @@ function pickPickupOption(pickup) {
 // they can be tuned without a code change if sandbox/production latency differs.
 async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
   const { maxAttempts: trackAttempts, delayMs: trackDelay } = cfg.trackingPoll;
+  const pollStartedAt = Date.now();
   let trackingNumber = '';
+  let attemptsUsed = 0;
   for (let attempt = 0; attempt < trackAttempts && !trackingNumber; attempt += 1) {
+    attemptsUsed = attempt + 1;
     if (attempt > 0) await new Promise((r) => setTimeout(r, trackDelay));
     const trackingResult = await getTrackingNumber(accessToken, shopId, orderSn);
     if (trackingResult.error) {
@@ -39,6 +42,11 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
     trackingNumber = trackingResult.response.tracking_number;
   }
   if (!trackingNumber) throw new Error('Tracking number was not assigned in time');
+  // Temporary observability: how long Shopee actually takes to assign a
+  // tracking number after booking, in practice — nothing logged this
+  // before, so there was no way to answer "what's the average" without
+  // guessing. Remove once we've gathered enough real samples.
+  console.log(`[server] tracking number assigned for ${orderSn} after ${Date.now() - pollStartedAt}ms (${attemptsUsed} attempt(s))`);
 
   const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber);
   if (docResult.error) {
