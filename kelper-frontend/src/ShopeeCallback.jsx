@@ -27,15 +27,7 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
         setMessage('Connected! Returning to Shopee config...');
-        setTimeout(() => {
-          // Land back on the config page (where the connection widgets
-          // live) rather than the Dashboard's default /home — onDone
-          // (App.jsx's backToLanding) re-derives the view from whatever
-          // pathname is current, so setting it here before calling onDone
-          // is what actually decides where that ends up.
-          window.history.replaceState(null, '', '/config/shopee');
-          onDone();
-        }, 1200);
+        setTimeout(backToConfig, 1200);
       } catch (err) {
         setError(err.message);
       }
@@ -43,13 +35,21 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Either outcome sends the person back to the page where they clicked
+  // Connect in the first place, so they can see the result and retry
+  // without hunting for the Dashboard's default /home.
+  function backToConfig() {
+    window.history.replaceState(null, '', '/config/shopee');
+    onDone();
+  }
+
   return (
     <div style={{ fontFamily: 'var(--sans)', textAlign: 'center', marginTop: 120 }}>
       <h2>{title}</h2>
       {error ? (
         <>
           <p style={{ color: '#c62828' }}>Failed: {error}</p>
-          <button onClick={onDone} style={{ padding: '8px 16px', marginTop: 12 }}>Back to main menu</button>
+          <button onClick={backToConfig} style={{ padding: '8px 16px', marginTop: 12 }}>Back to main menu</button>
         </>
       ) : (
         <p>{message}</p>
