@@ -53,13 +53,24 @@ if ! command -v make >/dev/null 2>&1; then
 fi
 
 # 2. Backend dependencies (production only, no devDependencies).
+#
+# --cache pins npm's cache to a directory inside the app itself instead of
+# the default ~/.npm — this run consistently fails with EACCES on
+# root-owned /root/.npm/_cacache files when triggered by the auto-deploy
+# systemd timer specifically (never when run interactively as this same
+# user), despite the timer's unit explicitly setting HOME=%h (the user's
+# real home). Never got to the bottom of why systemd's non-interactive npm
+# resolves its cache under /root anyway — this sidesteps the mystery
+# entirely rather than depending on npm's home-dir resolution working
+# correctly in every execution context.
+NPM_CACHE_DIR="$APP_DIR/.npm-cache"
 echo "==> Installing backend dependencies"
-(cd "$APP_DIR/kelper-backend" && npm ci --omit=dev)
+(cd "$APP_DIR/kelper-backend" && npm ci --omit=dev --cache "$NPM_CACHE_DIR")
 
 # 3. Build the frontend into kelper-frontend/dist — this is what server.js
 #    serves in production; there is no `vite dev` running here.
 echo "==> Building frontend"
-(cd "$APP_DIR/kelper-frontend" && npm ci && npm run build)
+(cd "$APP_DIR/kelper-frontend" && npm ci --cache "$NPM_CACHE_DIR" && npm run build)
 
 # 4. Sanity-check the one thing this script can't do for you.
 if [ ! -f "$APP_DIR/kelper-backend/.env.production" ]; then
