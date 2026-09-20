@@ -73,18 +73,24 @@ function BlockedCard({ label, note }) {
   );
 }
 
-// Margin/Layanan/Biaya Pesanan are real (Layanan & Biaya Pesanan come from
-// Shopee's escrow data for orders that have shipped — see dashboard.js).
-// Iklan and Affiliasi still need Shopee's Ads Performance / Brand Portal
-// APIs, which nothing in this app calls yet, so those two stay explicitly
-// marked rather than showing a fabricated number.
-function ProfitFunnel({ laba, layanan, biayaPesanan }) {
+// Margin/Layanan/Biaya Pesanan/Affiliasi are all real now. Affiliasi comes
+// from a separate source (Brand Portal, fetched once daily) with its own
+// 1-day reporting lag, so it's never "today" — the label says which day it
+// actually is. Iklan still needs Shopee's Ads Performance API, which
+// nothing in this app calls yet, so it stays explicitly marked rather than
+// showing a fabricated number.
+function ProfitFunnel({ laba, layanan, biayaPesanan, affiliasi }) {
   const steps = [
     { label: 'Margin (Estimasi)', value: formatRupiah(laba), color: colors.green, blocked: false },
     { label: 'Iklan', color: colors.blue, blocked: true },
     { label: 'Layanan', value: formatRupiah(layanan), color: colors.blue, blocked: false },
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
-    { label: 'Affiliasi', color: colors.orange, blocked: true },
+    {
+      label: affiliasi ? `Affiliasi (${affiliasi.date})` : 'Affiliasi',
+      value: affiliasi ? formatRupiah(affiliasi.salesConfirmed) : null,
+      color: colors.orange,
+      blocked: !affiliasi,
+    },
   ];
   return (
     <div style={card({ flex: 1 })}>
@@ -193,7 +199,7 @@ function CostBreakdown() {
     <div style={{ ...card({ flex: 1 }), opacity: 0.65 }}>
       <CardHeader label="Biaya Terbesar" />
       <div style={{ padding: '20px 0', textAlign: 'center', color: colors.textFaint, fontSize: 12.5, lineHeight: 1.5 }}>
-        Belum terhubung ke Shopee Ads/Affiliate API — biaya iklan dan afiliasi tidak tersedia. Layanan &amp; Biaya Pesanan sudah tersedia di Profit Funnel di atas.
+        Belum terhubung ke Shopee Ads API — biaya iklan tidak tersedia. Layanan, Biaya Pesanan, &amp; Affiliasi sudah tersedia di Profit Funnel di atas.
       </div>
     </div>
   );
@@ -261,7 +267,7 @@ function MainDashboard() {
   return (
     <div style={{ color: colors.text }}>
       <div style={{ background: colors.orangeDim, border: `1px solid ${colors.orange}`, color: '#f0c674', borderRadius: 10, padding: '8px 12px', fontSize: 12, marginBottom: 16, lineHeight: 1.5 }}>
-        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim. Iklan, Affiliasi, dan Pengunjung belum terhubung ke API terkait.
+        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim. Iklan dan Pengunjung belum terhubung ke API terkait.
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -298,7 +304,7 @@ function MainDashboard() {
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} />
+        <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasi={data.affiliasi} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>

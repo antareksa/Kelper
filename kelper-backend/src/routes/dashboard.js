@@ -186,6 +186,17 @@ router.get('/summary', (req, res) => {
     `)
     .all(shopId);
 
+  // Affiliasi comes from a completely separate source (Brand Portal's
+  // get_shop_affiliate_performance, fetched once daily — see
+  // shopeeSync.js's fetchAffiliatePerformance) with its own 1-day reporting
+  // lag, so it's never "today" data — always whatever the latest fetched
+  // row is (normally yesterday). null when nothing's been fetched yet
+  // (Brand Portal not connected, or the first fetch hasn't run) rather than
+  // a fabricated 0.
+  const affiliateRow = db
+    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? ORDER BY date DESC LIMIT 1')
+    .get(shopId);
+
   res.json({
     today: {
       orderCount: today.orderCount,
@@ -195,6 +206,14 @@ router.get('/summary', (req, res) => {
       biayaPesanan: today.biayaPesanan,
       marginPct: marginPctToday,
     },
+    affiliasi: affiliateRow
+      ? {
+          date: affiliateRow.date,
+          salesConfirmed: affiliateRow.sales_confirmed,
+          ordersConfirmed: affiliateRow.orders_confirmed,
+          buyersConfirmed: affiliateRow.buyers_confirmed,
+        }
+      : null,
     trend: {
       orderCountPct: pctChange(today.orderCount, yesterday.orderCount),
       omzetPct: pctChange(today.omzet, yesterday.omzet),
@@ -209,11 +228,12 @@ router.get('/summary', (req, res) => {
     todayHourly: { omzet: hourlyOmzet, laba: hourlyLaba },
     topProducts,
     leaking,
-    // Layanan/Biaya Pesanan are now real (see sumOrdersInRange above) — only
-    // ads/affiliate/visitor metrics still have no data source (Ads
-    // Performance and Brand Portal APIs aren't integrated), so those stay an
-    // explicit "not connected" state instead of a fabricated number.
-    blocked: ['ads', 'affiliasi', 'pengunjung'],
+    // Layanan/Biaya Pesanan (escrow) and Affiliasi (Brand Portal) are now
+    // real — only ads/visitor metrics still have no data source (Ads
+    // Performance API isn't integrated, and Pengunjung has no known API at
+    // all yet), so those stay an explicit "not connected" state instead of
+    // a fabricated number.
+    blocked: ['ads', 'pengunjung'],
   });
 });
 

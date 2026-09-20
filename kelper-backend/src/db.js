@@ -140,6 +140,21 @@ db.exec(`
     fetched_at INTEGER NOT NULL
   );
 
+  -- Daily Affiliasi snapshot from Shopee's Brand Portal API
+  -- (get_shop_affiliate_performance) — fetched once per calendar day, for
+  -- the previous day only, since Shopee's own data has a 1-day reporting
+  -- lag (today's figures aren't available yet). See shopeeSync.js's
+  -- fetchAffiliatePerformance.
+  CREATE TABLE IF NOT EXISTS affiliate_performance_daily (
+    shop_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    sales_confirmed REAL,
+    orders_confirmed INTEGER,
+    buyers_confirmed INTEGER,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (shop_id, date)
+  );
+
   -- Small runtime-mutable key/value store for toggles an admin flips from
   -- the UI (e.g. pausing order sync) — deliberately NOT config.json, which
   -- is git-tracked deployment config and would get silently reverted by the

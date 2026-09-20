@@ -1,10 +1,12 @@
 const crypto = require('crypto');
 const db = require('./db');
-const { getValidAccessToken } = require('./shopee/tokenStore');
+const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
 const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail } = require('./shopee/client');
+const { getShopAffiliatePerformance } = require('./shopee/brandClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
 const { getSetting } = require('./settings');
+const { dateStringWIB } = require('./wib');
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -472,6 +474,43 @@ async function syncAndLabelOrders(shopId) {
   await fillMissingIncomeData(accessToken, shopId);
 }
 
+const insertAffiliatePerformance = db.prepare(`
+  INSERT OR REPLACE INTO affiliate_performance_daily
+    (shop_id, date, sales_confirmed, orders_confirmed, buyers_confirmed, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+// Fetches YESTERDAY's Affiliasi summary once per shop per day — Shopee's own
+// data has a 1-day reporting lag (today's figures error with "end_date is
+// not ready"), so there's nothing to gain from checking more often than
+// once a day, and once fetched a past day's numbers don't change. Runs
+// independently of the main order-sync's isSyncEnabled pause toggle — this
+// has nothing to do with order fetching, and pausing one shouldn't silently
+// pause the other.
+async function fetchAffiliatePerformance(shopId) {
+  const yesterday = dateStringWIB(1);
+  const already = db
+    .prepare('SELECT 1 FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, yesterday);
+  if (already) return;
+
+  const accessToken = await getValidBrandAccessToken(shopId);
+  const result = await getShopAffiliatePerformance(accessToken, shopId, {
+    startDate: yesterday,
+    endDate: yesterday,
+    timezone: 'GMT+7',
+    granularity: 'day',
+  });
+  if (result.error) {
+    console.error(`[server] get_shop_affiliate_performance failed for shop ${shopId}: ${result.message || result.error}`);
+    return;
+  }
+
+  const summary = result.response?.summary?.[0];
+  if (!summary) return; // no affiliate activity that day — nothing to store, will show as 0 either way
+  insertAffiliatePerformance.run(shopId, yesterday, summary.sales_confirmed ?? null, summary.orders_confirmed ?? null, summary.buyers_confirmed ?? null, now());
+}
+
 // Runs inside the Dashboard Station's server process (see server.js) — the
 // background loop that keeps local order/shipment data in sync with Shopee,
 // independent of whatever the Dashboard or any Packing Station happens to
@@ -486,6 +525,16 @@ function startShopeeSync() {
         console.error(`[server] tick failed for shop ${shopId}: ${err.message}`);
       }
     }
+
+    const brandShops = db.prepare('SELECT shop_id FROM shopee_brand_tokens').all();
+    for (const { shop_id: shopId } of brandShops) {
+      try {
+        await fetchAffiliatePerformance(shopId);
+      } catch (err) {
+        console.error(`[server] Affiliasi fetch failed for shop ${shopId}: ${err.message}`);
+      }
+    }
+
     setTimeout(tick, getConfig().sync.pollIntervalMs);
   }
   tick();

@@ -27,4 +27,12 @@ function startOfTodayWIB() {
   return startOfDayWIB(0);
 }
 
-module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB };
+// YYYY-MM-DD for `daysAgo` days back, WIB wall-clock date — the format
+// Shopee's date-range APIs (e.g. get_shop_affiliate_performance) expect.
+function dateStringWIB(daysAgo = 0) {
+  const wib = nowInWIB();
+  const d = new Date(Date.UTC(wib.getUTCFullYear(), wib.getUTCMonth(), wib.getUTCDate() - daysAgo));
+  return d.toISOString().slice(0, 10);
+}
+
+module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, dateStringWIB };
