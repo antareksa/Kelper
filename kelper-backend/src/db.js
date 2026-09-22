@@ -222,6 +222,14 @@ const newOrderCols = {
   // Learned as a side effect of booking (see shipping.js) — used to fetch
   // item details via get_package_detail when order/get_order_detail fails.
   package_number: 'TEXT',
+  // Client-requested (2026-09-23): distinct from label_ready (Shopee has
+  // given us a tracking number + PDF — booking succeeded) — label_printed
+  // means the operator has actually scanned the physical printed label back
+  // to confirm it came out correctly (see routes/packing.js's
+  // /confirm-print, the only place this is ever set to 1). A durable
+  // per-order record of "this order's real label has been confirmed
+  // printed", queryable without reconstructing it from session status.
+  label_printed: 'INTEGER NOT NULL DEFAULT 0',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

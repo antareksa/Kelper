@@ -31,7 +31,7 @@ function getSessionWithOrder(sessionId) {
   const session = db.prepare('SELECT * FROM packing_sessions WHERE id = ?').get(sessionId);
   if (!session) return null;
   const order = db.prepare(`
-    SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, logistics_channel_id, shipping_carrier, tracking_no, label_ready
+    SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
     FROM orders WHERE order_sn = ?
   `).get(session.order_sn);
   const items = db.prepare('SELECT * FROM order_items WHERE order_sn = ?').all(session.order_sn);
@@ -418,6 +418,7 @@ router.post('/confirm-print', (req, res) => {
   }
 
   db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP' WHERE id = ?").run(session_id);
+  db.prepare('UPDATE orders SET label_printed = 1 WHERE order_sn = ?').run(state.order.order_sn);
   res.json(getSessionWithOrder(session_id));
 });
 
@@ -556,7 +557,7 @@ router.get('/order-lists', (req, res) => {
 
   const onProgressCheck = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.label_ready, o.label_printed
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN') AND o.shop_id = ?
