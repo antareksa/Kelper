@@ -5,7 +5,7 @@ const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getOrderDetail } = require('../shopee/client');
 const { getConfig } = require('../config');
 const { isProduction } = require('../env');
-const { getOrderDelaySeconds, getPackingSettings, setPackingSettings } = require('../packingSettings');
+const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour } = require('../packingSettings');
 
 const router = express.Router();
 
@@ -60,7 +60,10 @@ function getSessionWithOrder(sessionId) {
   // here, and .every() on an empty array is vacuously true — without this
   // guard that order would look "fully scanned" the instant it's opened.
   const allComplete = itemsWithProgress.length > 0 && itemsWithProgress.every((it) => it.scanned_qty === it.qty);
-  return { session, order, items: itemsWithProgress, allComplete };
+  // Lets the frontend pick the right "please wait" copy for a just-deferred
+  // order (real label coming soon vs. only a temp barcode until work hour
+  // reopens) without duplicating the WIB work-hour window logic client-side.
+  return { session, order, items: itemsWithProgress, allComplete, withinWorkHour: isWithinWorkHour() };
 }
 
 // Once items are scanned, the ship-today/pack-besok choice is no longer
@@ -428,14 +431,19 @@ router.post('/confirm-pickup', (req, res) => {
     return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scannedOrderSn} is not in the Ready to Pickup pool` });
   }
 
-  db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(now(), session.id);
+  const pickedUpAt = now();
+  db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(pickedUpAt, session.id);
   db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(scannedOrderSn);
 
   // Shopee "confirm pickup" API: not currently used anywhere in this
   // codebase, and unconfirmed whether one exists/is required for
   // pickup-method orders — call it here if/when that's settled.
 
-  res.json({ ok: true, order_sn: scannedOrderSn });
+  // created_at/picked_up_at let the Shipping Mode screen show the same
+  // "ORDER ID / DITERIMA / DIPICKUP EKSPEDISI" confirmation as the wireframe,
+  // instead of just an ok flag.
+  const order = db.prepare('SELECT created_at FROM orders WHERE order_sn = ?').get(scannedOrderSn);
+  res.json({ ok: true, order_sn: scannedOrderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
 });
 
 // REPRINT RESI — returns the existing label, never creates a new shipment

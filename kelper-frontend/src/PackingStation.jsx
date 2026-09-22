@@ -11,16 +11,9 @@ import { renderCode39Svg } from './Barcode';
 const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
 const SHOP_ID = 227886187;
 
-function formatTime(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-// orders.created_at is unix SECONDS (server-side, see shopeeSync.js's now())
-// — unlike formatTime above, which takes the millisecond timestamps this
-// same file generates client-side (Date.now(), pickupLog entries).
+// orders.created_at / packing_sessions.completed_at are unix SECONDS
+// (server-side, see shopeeSync.js's now()), not the millisecond timestamps
+// Date.now() would give client-side.
 function formatReceivedAt(tsSeconds) {
   if (!tsSeconds) return '—';
   const d = new Date(tsSeconds * 1000);
@@ -112,12 +105,16 @@ const PANEL_COLORS = {
   error: { bg: colors.redDim, border: colors.red },
 };
 
-// The item-scan screen — shown only while actively scanning (IN_PROGRESS
-// with item data). Left: a single big image of the current item to scan
-// (the next one not yet fully scanned). Right: the full item list,
+// The item-scan screen — shown while actively scanning (IN_PROGRESS with
+// item data) and, briefly, right after finishing a Pack Besok order
+// (DEFERRED_READY) while its temp barcode label prints — see
+// `waitingMessage`. Left: a single big image of the current item to scan
+// (the next one not yet fully scanned) — sized 2:1 against the list on the
+// right, matching the wireframe (the list only needs to show short rows,
+// the image is the whole point of this screen). Right: the full item list,
 // fully-scanned rows sunk to the bottom (stable within each group) so the
 // operator never has to scroll past done items to see what's left.
-function ItemScanCard({ order, receivedAt, items, flash, allComplete }) {
+function ItemScanCard({ order, receivedAt, items, flash, allComplete, waitingMessage }) {
   const remaining = items.filter((it) => it.scanned_qty < it.qty);
   const done = items.filter((it) => it.scanned_qty >= it.qty);
   const current = remaining[0];
@@ -146,18 +143,20 @@ function ItemScanCard({ order, receivedAt, items, flash, allComplete }) {
       </div>
 
       <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
-        <div style={{ ...panelStyle, flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+        <div style={{ ...panelStyle, flex: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '24px' }}>
           {current ? (
             <>
-              <ItemThumb imageUrl={current.image_url} sku={current.sku} size={240} />
-              <div style={{ marginTop: 20, fontSize: 20, fontWeight: 700, color: colors.text }}>{current.sku}</div>
-              <div style={{ fontSize: 14, color: colors.textDim, marginTop: 4 }}>{current.product_name}</div>
-              <div style={{ fontSize: 32, fontWeight: 700, fontFamily: 'var(--num)', color: colors.text, marginTop: 18 }}>
+              <ItemThumb imageUrl={current.image_url} sku={current.sku} size={320} />
+              <div style={{ marginTop: 24, fontSize: 22, fontWeight: 700, color: colors.text }}>{current.sku}</div>
+              <div style={{ fontSize: 15, color: colors.textDim, marginTop: 4 }}>{current.product_name}</div>
+              <div style={{ fontSize: 36, fontWeight: 700, fontFamily: 'var(--num)', color: colors.text, marginTop: 20 }}>
                 {current.scanned_qty}/{current.qty}
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 16, fontWeight: 600, color: colors.green }}>Semua item sudah discan</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: colors.green, lineHeight: 1.5, maxWidth: 420 }}>
+              {waitingMessage || 'Semua item sudah discan'}
+            </div>
           )}
         </div>
 
@@ -281,7 +280,7 @@ function PackingStation() {
   const [hwCheckStatus, setHwCheckStatus] = useState('idle'); // idle | awaiting_scan | pass | fail
 
   const [mode, setMode] = useState('packing'); // packing | shipping — toggled by scanning SHIPPING_MODE / PACKING_MODE
-  const [pickupLog, setPickupLog] = useState([]); // recent Shipping Mode confirmations, most recent first
+  const [lastPickup, setLastPickup] = useState(null); // { order_sn, created_at, picked_up_at } — most recent Shipping Mode confirmation
   const [state, setState] = useState(null); // { session, order, items, allComplete, tracking_no, internal_barcode }
   const [lastSku, setLastSku] = useState(null);
   const [infoMessage, setInfoMessage] = useState('');
@@ -435,12 +434,17 @@ function PackingStation() {
     if (!operatorName) return { text: 'Scan your operator barcode to log in.', type: 'info' };
     if (mode === 'shipping') return { text: 'Shipping Mode — scan a packed label to confirm pickup. Scan PACKING_MODE to go back.', type: 'info' };
     if (paused) return { text: 'Station paused. Scan RESUME to continue.', type: 'info' };
-    if (!state) return { text: 'No orders ready right now — checking automatically. Scan NEXT_ORDER to check now.', type: 'info' };
+    if (!state) return { text: 'Menunggu orderan masuk...', type: 'info' };
     const { session, allComplete } = state;
 
     if (session.status === 'DONE') return { text: 'Order done! Grabbing next order...', type: 'success' };
     if (session.status === 'DEFERRED_READY') {
-      return { text: `Set aside. Internal barcode: ${session.internal_barcode}. Grabbing next order...`, type: 'success' };
+      // Normally shown inside ItemScanCard instead (see `waitingMessage` in
+      // the main render) — this is only a fallback for the rare case where
+      // item data isn't available and ItemScanCard can't render.
+      return state.withinWorkHour
+        ? { text: 'Mohon tunggu label resi. Scan label resi jika sudah di tempel', type: 'success' }
+        : { text: 'Mohon tunggu label barcode sementara. Scan label resi sementara jika sudah di tempel', type: 'success' };
     }
     if (session.status === 'EXCEPTION') {
       return { text: 'Order flagged as a problem (MASALAH) — needs manual resolution.', type: 'error' };
@@ -470,12 +474,13 @@ function PackingStation() {
       // This only ever fires once per order, the moment it's first set
       // aside because it has no real label yet (see finalizeCompletedOrder)
       // — resuming it once labeled moves it straight to AWAITING_LABEL_SCAN
-      // instead, so there's no risk of printing this a second time.
-      // Without a physical label here, the internal_barcode only ever
-      // existed as on-screen text for the 1.2s before this auto-advances —
-      // nothing was left on the actual parked package to scan back later.
+      // instead, so there's no risk of printing this a second time. 3s
+      // (not the old 1.2s) so the operator actually has time to read the
+      // "wait for the label, scan it once attached" message (see
+      // ItemScanCard's waitingMessage) and see the temp barcode print
+      // before the station moves on to the next order.
       printBesokLabel(data.session, data.order);
-      setTimeout(() => grabNextOrder(), 1200);
+      setTimeout(() => grabNextOrder(), 3000);
     } else if (data.session?.status === 'AWAITING_LABEL_SCAN') {
       // Print, then stop and wait — the operator must scan the label back to
       // confirm it actually came out before this station moves on. That
@@ -772,7 +777,7 @@ function PackingStation() {
       submittingRef.current = true;
       try {
         const data = await post('/packing/confirm-pickup', { order_sn: value });
-        setPickupLog((log) => [{ order_sn: data.order_sn, at: Date.now() }, ...log].slice(0, 20));
+        setLastPickup({ order_sn: data.order_sn, created_at: data.created_at, picked_up_at: data.picked_up_at });
         return notify(`${data.order_sn} confirmed picked up.`, 'success');
       } catch (err) {
         return notify(err.message, 'error');
@@ -971,9 +976,13 @@ function PackingStation() {
   const guidance = getGuidance();
   // The item-scan list only makes sense while actively scanning a real
   // order — paused, no order, or any transitional status (awaiting label
-  // scan, finishing up, flagged, etc.) all fall through to the single
-  // unified ActionMessageCard instead.
-  const showItemScan = !paused && mode === 'packing' && state && state.session.status === 'IN_PROGRESS' && state.items.length > 0;
+  // scan, flagged, etc.) all fall through to the single unified
+  // ActionMessageCard instead. DEFERRED_READY is included on purpose: right
+  // after a Pack Besok order finishes, it briefly shows the same two-panel
+  // layout with a "please wait for the label" message instead of the
+  // current item (see ItemScanCard's `waitingMessage`), matching the
+  // wireframe rather than switching to a different single-panel screen.
+  const showItemScan = !paused && mode === 'packing' && state && ['IN_PROGRESS', 'DEFERRED_READY'].includes(state.session.status) && state.items.length > 0;
 
   return (
     <div style={{ width: '100%', minHeight: '100vh', boxSizing: 'border-box', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, background: colors.bg, textAlign: 'left', fontFamily: 'var(--sans)' }}>
@@ -1001,25 +1010,31 @@ function PackingStation() {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {mode === 'shipping' ? (
-          <div style={{ ...card(), flex: 1 }}>
-            <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 14, lineHeight: 1.5 }}>
-              Scan each packed label's barcode as the courier takes it — confirms pickup and clears it from the Ready to Pickup pool. Independent of whatever the packing side is doing.
-            </div>
-            {pickupLog.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textFaint, fontSize: 13 }}>Belum ada pickup dikonfirmasi sesi ini.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {pickupLog.map((entry) => (
-                  <div key={`${entry.order_sn}-${entry.at}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
-                    <span style={{ fontFamily: 'monospace', color: colors.green }}>{entry.order_sn}</span>
-                    <span style={{ color: colors.textDim }}>{formatTime(entry.at)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          lastPickup ? (
+            <ActionMessageCard
+              order={{ order_sn: lastPickup.order_sn }}
+              receivedAt={lastPickup.created_at}
+              type="info"
+              message={`DIPICKUP EKSPEDISI - ${formatReceivedAt(lastPickup.picked_up_at)}`}
+            />
+          ) : (
+            <ActionMessageCard type="info" message="Scan label resi untuk mulai proses pickup order oleh ekpedisi" />
+          )
         ) : showItemScan ? (
-          <ItemScanCard order={state.order} receivedAt={state.order.created_at} items={state.items} flash={flash} allComplete={state.allComplete} />
+          <ItemScanCard
+            order={state.order}
+            receivedAt={state.order.created_at}
+            items={state.items}
+            flash={flash}
+            allComplete={state.allComplete}
+            waitingMessage={
+              state.session.status === 'DEFERRED_READY'
+                ? state.withinWorkHour
+                  ? 'Mohon tunggu label resi. Scan label resi jika sudah di tempel'
+                  : 'Mohon tunggu label barcode sementara. Scan label resi sementara jika sudah di tempel'
+                : null
+            }
+          />
         ) : (
           <ActionMessageCard
             order={state?.order}
