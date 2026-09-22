@@ -90,6 +90,7 @@ function finalizeCompletedOrder(state, res) {
       SET shipping_choice = 'KIRIM_HARI_INI', tracking_no = ?, status = 'AWAITING_LABEL_SCAN'
       WHERE id = ?
     `).run(state.order.tracking_no, state.session.id);
+    console.log(`[server] bucket: ${state.order.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — frontend will now attempt to print the label`);
   } else {
     const internalBarcode = `BESOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
     db.prepare(`
@@ -98,6 +99,7 @@ function finalizeCompletedOrder(state, res) {
       WHERE id = ?
     `).run(internalBarcode, state.session.id);
     db.prepare("UPDATE orders SET status = 'DEFERRED' WHERE order_sn = ?").run(state.order.order_sn);
+    console.log(`[server] bucket: ${state.order.order_sn} -> Ready to Process Tomorrow (temp barcode ${internalBarcode})`);
   }
 
   res.json(getSessionWithOrder(state.session.id));
@@ -228,6 +230,7 @@ router.post('/next-order', async (req, res) => {
     // allComplete + the order's internal_barcode) which one to look for.
     db.prepare("UPDATE packing_sessions SET station_id = ?, operator_name = ?, status = 'RESUMING' WHERE id = ?")
       .run(station_id, operator_name || null, pick.session_id);
+    console.log(`[server] bucket: ${pick.order_sn} -> On Progress Check (RESUMING, auto-assigned to ${station_id}) — awaiting temp barcode scan`);
     return res.json(getSessionWithOrder(pick.session_id));
   }
 
@@ -405,6 +408,7 @@ router.post('/resume-besok', async (req, res) => {
   if (!session) return res.status(404).json({ error: 'barcode_not_found' });
 
   const order = db.prepare('SELECT order_sn, shop_id, status, tracking_no FROM orders WHERE order_sn = ?').get(session.order_sn);
+  console.log(`[server] bucket: ${order.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — barcode ${internal_barcode} confirmed, frontend will now attempt to print the real label`);
   await finalizeLeftover(session, order, res);
 });
 
@@ -433,6 +437,7 @@ router.post('/confirm-print', (req, res) => {
 
   db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP' WHERE id = ?").run(session_id);
   db.prepare('UPDATE orders SET label_printed = 1 WHERE order_sn = ?').run(state.order.order_sn);
+  console.log(`[server] bucket: ${state.order.order_sn} -> Ready to Pickup (label_printed confirmed via scan)`);
   res.json(getSessionWithOrder(session_id));
 });
 

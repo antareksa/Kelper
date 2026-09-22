@@ -227,6 +227,7 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
 
     db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
       .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
+    console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked, tracking ${trackingNumber})`);
   } catch (err) {
     console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
   }
