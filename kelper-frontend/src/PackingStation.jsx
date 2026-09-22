@@ -520,6 +520,16 @@ function PackingStation() {
       const blobUrl = URL.createObjectURL(blob);
       const iframe = printFrameRef.current;
       if (!iframe) return;
+      // If this order was ever deferred, printBesokLabel already set srcdoc
+      // on this exact iframe element for its temp barcode — srcdoc always
+      // takes precedence over src per spec, so without clearing it first,
+      // the assignment below is silently ignored and the iframe keeps
+      // showing the old temp barcode forever, never loading (or printing)
+      // the real label. Confirmed against production: a fresh order's
+      // label printed fine (srcdoc was never set for it), a resumed Pack
+      // Besok order's real label never printed (srcdoc was already set by
+      // its own earlier defer step).
+      iframe.removeAttribute('srcdoc');
       iframe.onload = () => {
         // A brand-new kiosk window may not have finished enumerating system
         // printers yet — printing immediately can make Chrome fall back to
@@ -545,6 +555,11 @@ function PackingStation() {
   function printBesokLabel(session, order) {
     const iframe = printFrameRef.current;
     if (!iframe || !session?.internal_barcode) return;
+    // srcdoc always wins over src per spec, so this isn't strictly needed
+    // for THIS assignment to take effect — but clearing it keeps the iframe
+    // from holding a stale blob: reference from a previous autoPrintLabel
+    // call once this session's real label eventually gets reprinted later.
+    iframe.removeAttribute('src');
     iframe.onload = () => {
       setTimeout(() => {
         iframe.contentWindow.focus();
