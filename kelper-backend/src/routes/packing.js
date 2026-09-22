@@ -180,13 +180,20 @@ router.post('/next-order', async (req, res) => {
   //     work hour — there's no way to fetch its label too early since it
   //     literally doesn't exist yet, unlike the old "before today's WIB
   //     midnight" heuristic this replaces.
-  //   - fresh: label_ready is no longer required at all — an order past its
-  //     buyer-cancellation delay is claimable/packable whether or not it has
-  //     a real label yet (see finalizeCompletedOrder). The delay filter
-  //     (getOrderDelaySeconds) is what used to be enforced indirectly via
-  //     label_ready = 1, since booking never used to happen before the delay
-  //     elapsed — now it must be checked directly here instead.
+  //   - fresh: DURING work hour, an order must already be booked
+  //     (label_ready = 1) before it's claimable — a station must never grab
+  //     it while shopeeSync.js's bookAndLabelPendingOrders is still in
+  //     flight for it, or a fast operator can finish scanning before that
+  //     booking call returns and get needlessly deferred to a temp barcode
+  //     even though a real label was moments away (confirmed happening in
+  //     production: order 260923QAHDPSY8 was claimed and fully scanned in
+  //     3s while its own booking call, already ~10s in, hadn't finished).
+  //     OUTSIDE work hour, no booking is going to happen at all until the
+  //     window reopens, so label_ready is irrelevant and the delay
+  //     (getOrderDelaySeconds) is the only gate — that's the whole point of
+  //     letting an order be packed with just a temp barcode.
   const cutoff = now() - getOrderDelaySeconds();
+  const withinWorkHour = isWithinWorkHour();
   const pick = db.prepare(`
     SELECT * FROM (
       SELECT ps.id AS session_id, ps.order_sn AS order_sn, ps.started_at AS age, o.is_instant AS is_instant, 'leftover' AS pool
@@ -197,10 +204,11 @@ router.post('/next-order', async (req, res) => {
       SELECT NULL AS session_id, o.order_sn AS order_sn, o.created_at AS age, o.is_instant AS is_instant, 'fresh' AS pool
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+        AND (o.label_ready = 1 OR ? = 0)
     )
     ORDER BY is_instant DESC, CASE pool WHEN 'leftover' THEN 0 ELSE 1 END ASC, age ASC
     LIMIT 1
-  `).get(shop_id, shop_id, cutoff);
+  `).get(shop_id, shop_id, cutoff, withinWorkHour ? 1 : 0);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
@@ -479,13 +487,21 @@ router.get('/session/:id', (req, res) => {
 });
 
 // Admin/dashboard view of the pools from the flow diagram:
-// - "Ready to check": past its buyer-cancellation delay and not claimed by
-//   any Packing Station — labeled or not (as of the 2026-09-22 work-hour
-//   redesign, a station can claim and pack an order before it has a real
-//   Shopee label; see finalizeCompletedOrder). label_ready is included per
-//   row so the frontend can badge "label siap" vs "menunggu label" — this
-//   used to be a separate "Processing" bucket, now merged in since label
-//   status no longer changes what a station can do with the order.
+// - "Processing": ONLY exists during work hour — past its buyer-cancellation
+//   delay, not yet labeled, waiting on shopeeSync.js's
+//   bookAndLabelPendingOrders to actually book it with Shopee. Outside work
+//   hour this bucket is always empty, since nothing is being booked at all
+//   until the window reopens — such an order goes straight to Ready to
+//   Check instead (see below).
+// - "Ready to check": claimable by a station right now. During work hour
+//   that means already labeled (o.label_ready = 1) — a station must never
+//   grab an order while its booking call is still in flight, or an
+//   operator fast enough to finish scanning before that call returns gets
+//   it needlessly deferred to a temp barcode (this exact race hit
+//   production on order 260923QAHDPSY8). Outside work hour label_ready is
+//   irrelevant, since no booking is happening regardless — being past the
+//   delay is enough (see finalizeCompletedOrder for what happens once all
+//   items are scanned in that case).
 // - "On progress check": actively being packed right now — a Packing
 //   Station has claimed it and is scanning items (or re-validating a resumed leftover),
 //   or has printed a label and is waiting on the operator's confirm-scan
@@ -504,6 +520,7 @@ router.get('/order-lists', (req, res) => {
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
   const cutoff = now() - getOrderDelaySeconds();
+  const withinWorkHour = isWithinWorkHour();
 
   const waitingList = db
     .prepare(`
@@ -514,18 +531,28 @@ router.get('/order-lists', (req, res) => {
     `)
     .all(shop_id, cutoff);
 
+  const processing = db
+    .prepare(`
+      SELECT order_sn, buyer_name, created_at
+      FROM orders
+      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
+      ORDER BY created_at ASC
+    `)
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0);
+
   const readyToCheck = db
     .prepare(`
       SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+        AND (o.label_ready = 1 OR ? = 0)
         AND NOT EXISTS (
           SELECT 1 FROM packing_sessions ps
           WHERE ps.order_sn = o.order_sn AND ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP')
         )
       ORDER BY o.is_instant DESC, o.created_at ASC
     `)
-    .all(shop_id, cutoff);
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0);
 
   const onProgressCheck = db
     .prepare(`
@@ -557,7 +584,7 @@ router.get('/order-lists', (req, res) => {
     `)
     .all(shop_id);
 
-  res.json({ waitingList, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
+  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
 });
 
 // Packing Station configuration (client-requested 2026-09-22) — Delay, Max

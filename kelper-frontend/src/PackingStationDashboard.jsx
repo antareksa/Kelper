@@ -72,15 +72,18 @@ function ActiveStation() {
 }
 
 // The pools from the packing flow diagram: orders past their buyer-
-// cancellation delay and not yet claimed by a station, labeled or not
-// ("Ready to Check" — a station can pack an order before it has a real
-// label, see the backend's finalizeCompletedOrder), orders a Packing Station
-// has claimed and is actively scanning right now ("On Progress Check"),
-// orders packed today with a real label waiting for Shipping Mode to
-// confirm the courier took them ("Ready to Pickup"), and orders already
+// cancellation delay but, during work hour, not yet booked with Shopee
+// ("Processing" — always empty outside work hour, since nothing's being
+// booked until the window reopens); orders actually claimable by a station
+// right now ("Ready to Check" — during work hour that means already
+// labeled, outside work hour label status doesn't matter, see the
+// backend's /next-order and finalizeCompletedOrder); orders a Packing
+// Station has claimed and is actively scanning right now ("On Progress
+// Check"); orders packed today with a real label waiting for Shipping Mode
+// to confirm the courier took them ("Ready to Pickup"); and orders already
 // scanned but still waiting on a real label ("Ready to Process Tomorrow").
 function OrderLists() {
-  const [lists, setLists] = useState({ waitingList: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
+  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
   // null = still checking on first load, not "paused" — the toggle button
   // stays disabled until we actually know, so a click can't race a stale
@@ -174,6 +177,7 @@ function OrderLists() {
 
   const columns = [
     { key: 'waitingList', title: 'Waiting List' },
+    { key: 'processing', title: 'Processing' },
     { key: 'readyToCheck', title: 'Ready to Check' },
     { key: 'onProgressCheck', title: 'On Progress Check' },
     { key: 'readyForPickup', title: 'Ready to Pickup' },
