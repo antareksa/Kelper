@@ -29,9 +29,6 @@ const DEFAULTS = {
     pollIntervalMs: 5000,
     autoBookShipping: true,
   },
-  packing: {
-    shipCutoffHour: 16,
-  },
 };
 
 function deepMerge(base, override) {

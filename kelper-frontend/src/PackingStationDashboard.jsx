@@ -71,17 +71,16 @@ function ActiveStation() {
   );
 }
 
-// The pools from the packing flow diagram: orders discovered from Shopee
-// that the server hasn't finished booking/labeling yet ("Processing"),
-// orders discovered + labeled but no Packing Station has claimed yet ("Ready
-// to Check"), orders a Packing Station has claimed and is actively scanning
-// right now ("On Progress Check"), orders packed today with a real label
-// waiting for Shipping Mode to confirm the courier took them ("Ready to
-// Pickup"), and
-// orders deferred to tomorrow, already scanned, waiting to be resumed
-// ("Ready to Process Tomorrow").
+// The pools from the packing flow diagram: orders past their buyer-
+// cancellation delay and not yet claimed by a station, labeled or not
+// ("Ready to Check" — a station can pack an order before it has a real
+// label, see the backend's finalizeCompletedOrder), orders a Packing Station
+// has claimed and is actively scanning right now ("On Progress Check"),
+// orders packed today with a real label waiting for Shipping Mode to
+// confirm the courier took them ("Ready to Pickup"), and orders already
+// scanned but still waiting on a real label ("Ready to Process Tomorrow").
 function OrderLists() {
-  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
+  const [lists, setLists] = useState({ waitingList: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
   // null = still checking on first load, not "paused" — the toggle button
   // stays disabled until we actually know, so a click can't race a stale
@@ -175,7 +174,6 @@ function OrderLists() {
 
   const columns = [
     { key: 'waitingList', title: 'Waiting List' },
-    { key: 'processing', title: 'Processing' },
     { key: 'readyToCheck', title: 'Ready to Check' },
     { key: 'onProgressCheck', title: 'On Progress Check' },
     { key: 'readyForPickup', title: 'Ready to Pickup' },
@@ -185,7 +183,10 @@ function OrderLists() {
   const settingsChanged = settings && settingsDraft && (
     settings.orderDelayMinutes !== settingsDraft.orderDelayMinutes ||
     settings.maxConcurrentBookings !== settingsDraft.maxConcurrentBookings ||
-    settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck
+    settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
+    settings.workHourStartHour !== settingsDraft.workHourStartHour ||
+    settings.workHourEndHour !== settingsDraft.workHourEndHour ||
+    settings.workHourEnabled !== settingsDraft.workHourEnabled
   );
 
   return (
@@ -272,6 +273,51 @@ function OrderLists() {
             style={settingsInputStyle}
           />
         </div>
+        <div>
+          <label style={settingsLabelStyle}>Jam Kerja Mulai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.workHourStartHour ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, workHourStartHour: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Jam Kerja Selesai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.workHourEndHour ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, workHourEndHour: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Jam Kerja</label>
+          <button
+            type="button"
+            disabled={!settingsDraft}
+            onClick={() => setSettingsDraft((s) => ({ ...s, workHourEnabled: !s.workHourEnabled }))}
+            style={{
+              padding: '9px 14px',
+              borderRadius: 8,
+              border: 'none',
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: !settingsDraft ? 'default' : 'pointer',
+              background: settingsDraft?.workHourEnabled ? colors.greenDim : colors.redDim,
+              color: settingsDraft?.workHourEnabled ? colors.green : colors.red,
+              opacity: !settingsDraft ? 0.5 : 1,
+            }}
+          >
+            {settingsDraft?.workHourEnabled ? 'Aktif' : 'Nonaktif'}
+          </button>
+        </div>
         <button
           onClick={saveSettings}
           disabled={!settingsChanged || savingSettings}
@@ -317,6 +363,11 @@ function OrderLists() {
                     {row.status === 'AWAITING_LABEL_SCAN' && (
                       <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
                         Waiting on confirm-scan — check the printer
+                      </div>
+                    )}
+                    {key === 'readyToCheck' && (
+                      <div style={{ color: row.label_ready ? colors.green : colors.textFaint, marginTop: 2 }}>
+                        {row.label_ready ? 'Label siap' : 'Menunggu label'}
                       </div>
                     )}
                   </div>

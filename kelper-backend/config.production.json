@@ -18,8 +18,5 @@
   "sync": {
     "pollIntervalMs": 5000,
     "autoBookShipping": true
-  },
-  "packing": {
-    "shipCutoffHour": 16
   }
 }

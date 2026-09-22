@@ -468,9 +468,9 @@ function PackingStation() {
       setTimeout(() => grabNextOrder(), 800);
     } else if (data.session?.status === 'DEFERRED_READY') {
       // This only ever fires once per order, the moment it's first set
-      // aside past the ship cutoff (see finalizeCompletedOrder) — resuming
-      // it tomorrow moves it straight to AWAITING_LABEL_SCAN instead, so
-      // there's no risk of printing this a second time for the same order.
+      // aside because it has no real label yet (see finalizeCompletedOrder)
+      // — resuming it once labeled moves it straight to AWAITING_LABEL_SCAN
+      // instead, so there's no risk of printing this a second time.
       // Without a physical label here, the internal_barcode only ever
       // existed as on-screen text for the 1.2s before this auto-advances —
       // nothing was left on the actual parked package to scan back later.

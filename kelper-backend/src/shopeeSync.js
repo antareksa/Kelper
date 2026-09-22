@@ -10,6 +10,7 @@ const {
   getOrderDelaySeconds,
   getMaxConcurrentBookings,
   getMaxReadyToCheck,
+  isWithinWorkHour,
 } = require('./packingSettings');
 const { dateStringWIB, dateStringDDMMYYYYWIB } = require('./wib');
 
@@ -212,24 +213,47 @@ const countReadyToCheck = db.prepare(`
     )
 `);
 
+// Shared by both booking paths below: books the real shipment with Shopee
+// (respects config.shipping.useMassShip) and downloads the label once,
+// storing both locally. Idempotent and safe to retry — an order that fails
+// here simply stays label_ready = 0 and gets picked up again next tick.
+async function bookOneOrder(accessToken, shopId, orderSn) {
+  try {
+    const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
+    const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
+    if (!docResult.pdf) {
+      throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
+    }
+
+    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
+      .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
+  } catch (err) {
+    console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
+  }
+}
+
 // Phase 2 — book & label: for any local order still missing a label, book
-// the real shipment now (respects config.shipping.useMassShip) and download
-// the label once, storing it locally. This is what lets Packing Station
-// never call Shopee at pack-time — it just reads what's already stored.
-// Idempotent and safe to retry: an order that fails here simply stays
-// label_ready = 0 and gets picked up again on the next tick.
+// it now. This is what lets Packing Station never call Shopee at pack-time —
+// it just reads what's already stored (or, per the client-requested
+// 2026-09-22 work-hour redesign, packs first using a temp barcode and gets
+// the real label later — see finalizeCompletedOrder/bookDeferredOrders).
 //
-// Client-requested (2026-09-22) gating, applied before any Shopee call:
+// Gating, applied before any Shopee call:
+//   - workHourStartHour/workHourEndHour: Shopee bookings only happen inside
+//     this WIB window (default 08:00-16:00) — outside it, this is a no-op
+//     entirely, and orders simply wait unlabeled (still claimable/packable —
+//     see routes/packing.js's next-order).
 //   - orderDelayMinutes: an order created less than this many minutes ago is
-//     left alone entirely (still label_ready = 0, shown as "Waiting List" —
-//     see routes/packing.js) so the buyer has a real window to cancel before
-//     a shipment is committed.
+//     left alone entirely (shown as "Waiting List" — see routes/packing.js)
+//     so the buyer has a real window to cancel before a shipment is committed.
 //   - maxReadyToCheck: if the "Ready to Check" pool is already at/over this
 //     cap, only book enough of the oldest eligible orders to fill the
-//     remaining slots — the rest stay in Processing until a station clears
-//     some of the backlog, rather than piling up more printed labels than
+//     remaining slots — the rest stay unlabeled until a station clears some
+//     of the backlog, rather than piling up more printed labels than
 //     stations can realistically work through.
 async function bookAndLabelPendingOrders(accessToken, shopId) {
+  if (!isWithinWorkHour()) return;
+
   const cutoff = now() - getOrderDelaySeconds();
   let pending = db
     .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0 AND created_at <= ? ORDER BY created_at ASC")
@@ -251,20 +275,34 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   // discoverOnly being blocked by booking, just one level deeper. Safe to
   // parallelize: each iteration only ever reads/writes its own order_sn's
   // row. maxConcurrentBookings caps how many run at once (0 = unbounded).
-  await mapWithConcurrency(pending, getMaxConcurrentBookings(), async ({ order_sn: orderSn }) => {
-    try {
-      const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
-      const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
-      if (!docResult.pdf) {
-        throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
-      }
+  await mapWithConcurrency(pending, getMaxConcurrentBookings(), ({ order_sn: orderSn }) => bookOneOrder(accessToken, shopId, orderSn));
+}
 
-      db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
-        .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
-    } catch (err) {
-      console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
-    }
-  });
+// Client-requested (2026-09-22): orders that were already fully packed (all
+// items scanned) before ever getting a real Shopee label — either discovered
+// outside work hour, or set aside as a leftover the previous day — sit as
+// packing_sessions.status = 'DEFERRED_READY' with only a temp barcode
+// (BESOK-XXXX, see PackingStation.jsx's printBesokLabel) stuck on the box.
+// Once work hour opens, sweep these and book them for real: orders.status
+// stays 'DEFERRED' and the session stays 'DEFERRED_READY' — this only fills
+// in tracking_no/label_pdf/label_ready so next-order's leftover pool and
+// resume-besok (both gated on label_ready = 1) find it ready to hand to a
+// station for the temp-barcode-scan -> real-label-print -> confirm-scan flow.
+async function bookDeferredOrders(accessToken, shopId) {
+  if (!isWithinWorkHour()) return;
+
+  const pending = db
+    .prepare(`
+      SELECT o.order_sn AS order_sn
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0
+      ORDER BY ps.last_activity_at ASC
+    `)
+    .all(shopId);
+  if (pending.length === 0) return;
+
+  await mapWithConcurrency(pending, getMaxConcurrentBookings(), ({ order_sn: orderSn }) => bookOneOrder(accessToken, shopId, orderSn));
 }
 
 // Client-requested (2026-09-22): an order the buyer cancels (whether during
@@ -589,6 +627,7 @@ async function bookAndEnrichOnly(shopId) {
   // sync.autoBookShipping, editable without a restart.
   if (getConfig().sync.autoBookShipping) {
     await bookAndLabelPendingOrders(accessToken, shopId);
+    await bookDeferredOrders(accessToken, shopId);
   }
   await detectCancelledOrders(accessToken, shopId);
   await fillMissingIncomeData(accessToken, shopId);
