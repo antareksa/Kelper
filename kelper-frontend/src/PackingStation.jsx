@@ -467,6 +467,14 @@ function PackingStation() {
     if (data.session?.status === 'DONE') {
       setTimeout(() => grabNextOrder(), 800);
     } else if (data.session?.status === 'DEFERRED_READY') {
+      // This only ever fires once per order, the moment it's first set
+      // aside past the ship cutoff (see finalizeCompletedOrder) — resuming
+      // it tomorrow moves it straight to AWAITING_LABEL_SCAN instead, so
+      // there's no risk of printing this a second time for the same order.
+      // Without a physical label here, the internal_barcode only ever
+      // existed as on-screen text for the 1.2s before this auto-advances —
+      // nothing was left on the actual parked package to scan back later.
+      printBesokLabel(data.session, data.order);
       setTimeout(() => grabNextOrder(), 1200);
     } else if (data.session?.status === 'AWAITING_LABEL_SCAN') {
       // Print, then stop and wait — the operator must scan the label back to
@@ -508,6 +516,54 @@ function PackingStation() {
     } catch {
       // best-effort — the "View real Shopee label PDF" link still works as a fallback
     }
+  }
+
+  // Prints a physical Code 39 barcode label for a Pack Besok order's
+  // internal_barcode (BESOK-XXXX), so there's something real to stick on the
+  // parked package and scan back tomorrow — RESUME_BESOK already looks this
+  // exact value up (see handleScanSubmit's `value.startsWith('BESOK-')`
+  // branch), it just had nothing physical printed for it until now.
+  function printBesokLabel(session, order) {
+    const iframe = printFrameRef.current;
+    if (!iframe || !session?.internal_barcode) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        focusScanInput();
+      }, 1000);
+    };
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            @page { size: ${paperWidthMm}mm ${paperHeightMm}mm; margin: 0; }
+            html, body {
+              width: ${paperWidthMm}mm;
+              height: ${paperHeightMm}mm;
+              margin: 0;
+              overflow: hidden;
+            }
+            body {
+              font-family: monospace;
+              box-sizing: border-box;
+              padding: 8mm;
+              text-align: center;
+              page-break-after: avoid;
+              page-break-inside: avoid;
+            }
+            svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>
+          <h2>PACK BESOK</h2>
+          ${renderCode39Svg(session.internal_barcode)}
+          <p style="letter-spacing: 2px;">${session.internal_barcode}</p>
+          <p style="font-size: 11px;">Order: ${order?.order_sn ?? '—'}</p>
+          <p style="font-size: 11px;">Tempel di paket, scan besok untuk lanjutkan.</p>
+        </body>
+      </html>
+    `;
   }
 
   // Pure hardware sanity check — no backend involved. Builds a tiny static
