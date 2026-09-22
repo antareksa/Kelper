@@ -592,12 +592,19 @@ router.get('/order-lists', (req, res) => {
 // `settings` table (see packingSettings.js), not config.json, so an admin's
 // edit from the UI persists across deploys instead of being reverted by the
 // next git pull.
+// currentlyWithinWorkHour is computed fresh on every call, separate from
+// the workHourEnabled/Start/End settings themselves — the settings say what
+// the rule IS, this says what it currently EVALUATES to. Without this, the
+// UI's Aktif/Nonaktif toggle (which only says whether the rule is being
+// enforced at all) reads as if it means "we're in work hours right now",
+// which is a different question and was genuinely confusing when the two
+// disagreed (rule enabled, but the clock is at 2am).
 router.get('/settings', (req, res) => {
-  res.json(getPackingSettings());
+  res.json({ ...getPackingSettings(), currentlyWithinWorkHour: isWithinWorkHour() });
 });
 
 router.post('/settings', (req, res) => {
-  res.json(setPackingSettings(req.body || {}));
+  res.json({ ...setPackingSettings(req.body || {}), currentlyWithinWorkHour: isWithinWorkHour() });
 });
 
 // Test-only helper: simulate a Shopee cancellation happening overnight, to

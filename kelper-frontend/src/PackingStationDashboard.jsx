@@ -100,14 +100,21 @@ function OrderLists() {
   const [settings, setSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  // Separate from settings/settingsDraft on purpose: this is a live clock
+  // readout ("is it work hour right now"), not part of the editable form —
+  // it needs to keep refreshing on the same cadence as the order lists
+  // without ever overwriting settingsDraft mid-edit.
+  const [currentlyWithinWorkHour, setCurrentlyWithinWorkHour] = useState(null);
 
   useEffect(() => {
     load();
     loadSyncStatus();
     loadSettings();
+    loadWorkHourStatus();
     const interval = setInterval(() => {
       load();
       loadSyncStatus();
+      loadWorkHourStatus();
     }, REFRESH_MS);
     return () => clearInterval(interval);
   }, []);
@@ -143,6 +150,15 @@ function OrderLists() {
     }
   }
 
+  async function loadWorkHourStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/packing/settings`);
+      if (res.ok) setCurrentlyWithinWorkHour((await res.json()).currentlyWithinWorkHour);
+    } catch {
+      // best-effort — badge just keeps showing whatever was last known
+    }
+  }
+
   async function saveSettings() {
     setSavingSettings(true);
     try {
@@ -155,6 +171,7 @@ function OrderLists() {
         const data = await res.json();
         setSettings(data);
         setSettingsDraft(data);
+        setCurrentlyWithinWorkHour(data.currentlyWithinWorkHour);
       }
     } finally {
       setSavingSettings(false);
@@ -302,7 +319,12 @@ function OrderLists() {
           />
         </div>
         <div>
-          <label style={settingsLabelStyle}>Jam Kerja</label>
+          {/* Renamed from just "Jam Kerja" — that read as "are we currently
+              in work hours", which is a different question from what this
+              toggle actually controls (whether the restriction is enforced
+              at all). The live answer to "are we in work hours right now"
+              is the separate read-only badge below instead. */}
+          <label style={settingsLabelStyle}>Batasi Jam Kerja</label>
           <button
             type="button"
             disabled={!settingsDraft}
@@ -321,6 +343,21 @@ function OrderLists() {
           >
             {settingsDraft?.workHourEnabled ? 'Aktif' : 'Nonaktif'}
           </button>
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Status Sekarang</label>
+          <div
+            style={{
+              padding: '9px 14px',
+              borderRadius: 8,
+              fontWeight: 600,
+              fontSize: 13,
+              background: currentlyWithinWorkHour ? colors.greenDim : colors.orangeDim,
+              color: currentlyWithinWorkHour ? colors.green : colors.orange,
+            }}
+          >
+            {currentlyWithinWorkHour === null ? 'Memeriksa...' : currentlyWithinWorkHour ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
+          </div>
         </div>
         <button
           onClick={saveSettings}
