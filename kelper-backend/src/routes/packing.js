@@ -147,14 +147,19 @@ async function finalizeLeftover(session, order, res) {
 // DEFERRED_READY) the way it used to — client-requested (2026-09-23): a Pack
 // Besok box can only ever be identified by its own temp barcode, so resuming
 // one must always go through an explicit /resume-besok scan of that exact
-// code. Auto-picking a leftover here (as the old combined-pool query did)
-// silently resumed a session — including via the station's own 3s idle
-// auto-retry — without the operator ever scanning anything, which both
-// defeats the "must scan the temp barcode to resume" requirement and leaves
-// the operator with no way to know which physical box the system just
-// picked (confirmed against production: order 260923QG061V7A reached
-// AWAITING_LABEL_SCAN with no record of its BESOK- barcode ever being
-// scanned to get there).
+// code — EXCEPT it does not immediately print anything for one: a labeled
+// Pack Besok leftover is auto-assigned into RESUMING and handed back as-is,
+// still requiring the operator to scan its own BESOK- barcode (see
+// /resume-besok, which now also accepts a RESUMING session already assigned
+// to a station) before finalizeLeftover ever runs. Client-requested
+// (2026-09-23): "Ready to Check" orders — including labeled leftovers — are
+// automatically brought to whichever station is free, but the operator must
+// still physically confirm they have the right box via that scan; auto-
+// picking straight into a print (the old behavior) skipped that
+// confirmation and left the operator with no way to know which box the
+// system had picked (confirmed against production on order 260923QG061V7A).
+// An unlabeled leftover (still in Processing/Ready to Process Tomorrow) is
+// never auto-picked here — nothing to hand a station yet.
 router.post('/next-order', async (req, res) => {
   const { station_id, shop_id, operator_name } = req.body;
   if (!station_id || !shop_id) {
@@ -196,15 +201,34 @@ router.post('/next-order', async (req, res) => {
   const cutoff = now() - getOrderDelaySeconds();
   const withinWorkHour = isWithinWorkHour();
   const pick = db.prepare(`
-    SELECT order_sn, is_instant FROM orders
-    WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ?
-      AND (label_ready = 1 OR ? = 0)
-    ORDER BY is_instant DESC, created_at ASC
+    SELECT * FROM (
+      SELECT ps.id AS session_id, ps.order_sn AS order_sn, ps.started_at AS age, o.is_instant AS is_instant, 'leftover' AS pool
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
+      UNION ALL
+      SELECT NULL AS session_id, o.order_sn AS order_sn, o.created_at AS age, o.is_instant AS is_instant, 'fresh' AS pool
+      FROM orders o
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+        AND (o.label_ready = 1 OR ? = 0)
+    )
+    ORDER BY is_instant DESC, CASE pool WHEN 'leftover' THEN 0 ELSE 1 END ASC, age ASC
     LIMIT 1
-  `).get(shop_id, cutoff, withinWorkHour ? 1 : 0);
+  `).get(shop_id, shop_id, cutoff, withinWorkHour ? 1 : 0);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
+  }
+
+  if (pick.pool === 'leftover') {
+    // Auto-assign only — deliberately does NOT call finalizeLeftover here.
+    // The operator still has to scan this exact session's BESOK- barcode
+    // (see /resume-besok) before anything prints; this just brings the
+    // order to the station and tells it (via getSessionWithOrder's
+    // allComplete + the order's internal_barcode) which one to look for.
+    db.prepare("UPDATE packing_sessions SET station_id = ?, operator_name = ?, status = 'RESUMING' WHERE id = ?")
+      .run(station_id, operator_name || null, pick.session_id);
+    return res.json(getSessionWithOrder(pick.session_id));
   }
 
   const sessionId = db.transaction(() => {
@@ -347,11 +371,18 @@ router.post('/resume-besok', async (req, res) => {
   // then. Checked separately from the claim below so an operator scanning
   // it too early gets told that specifically, instead of a generic
   // "barcode not found".
+  //
+  // Status can be DEFERRED_READY (a direct lookup — the operator already
+  // knows this barcode, e.g. from the Ready to Process Tomorrow list) or
+  // RESUMING (this session was already auto-assigned to a station by
+  // /next-order — see there — and this scan is the required confirmation
+  // before finalizeLeftover actually runs). Either way the barcode itself
+  // is what's being verified, not who claimed it first.
   const found = db
     .prepare(`
       SELECT o.label_ready FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.internal_barcode = ? AND ps.status = 'DEFERRED_READY'
+      WHERE ps.internal_barcode = ? AND ps.status IN ('DEFERRED_READY', 'RESUMING')
     `)
     .get(internal_barcode);
   if (found && !found.label_ready) {
@@ -363,7 +394,7 @@ router.post('/resume-besok', async (req, res) => {
       .prepare(`
         SELECT ps.* FROM packing_sessions ps
         JOIN orders o ON o.order_sn = ps.order_sn
-        WHERE ps.internal_barcode = ? AND ps.status = 'DEFERRED_READY' AND o.label_ready = 1
+        WHERE ps.internal_barcode = ? AND ps.status IN ('DEFERRED_READY', 'RESUMING') AND o.label_ready = 1
       `)
       .get(internal_barcode);
     if (!s) return null;

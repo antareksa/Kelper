@@ -438,6 +438,15 @@ function PackingStation() {
     const { session, allComplete } = state;
 
     if (session.status === 'DONE') return { text: 'Order done! Grabbing next order...', type: 'success' };
+    // Client-requested (2026-09-23): "Ready to Check" auto-assigns a labeled
+    // Pack Besok order to this station (see /next-order), but the operator
+    // still has to physically confirm they have the right box by scanning
+    // its own temp barcode before anything prints — this state is that
+    // wait. Items are already done (that's why it's a leftover at all), so
+    // this deliberately isn't the item-scan screen.
+    if (session.status === 'RESUMING') {
+      return { text: `Order ${state.order.order_sn} sudah siap diproses. Scan barcode sementara ${session.internal_barcode} untuk melanjutkan.`, type: 'info' };
+    }
     if (session.status === 'DEFERRED_READY') {
       // Normally shown inside ItemScanCard instead (see `waitingMessage` in
       // the main render) — this is only a fallback for the rare case where
@@ -822,6 +831,17 @@ function PackingStation() {
           return;
         }
         return notify('No active order. Scan NEXT_ORDER first.', 'error');
+      }
+
+      // RESUMING: this order was auto-assigned to the station (see
+      // /next-order's leftover pool) but nothing's printed yet — the
+      // operator must scan this exact session's own temp barcode first, to
+      // physically confirm they have the right box, before the real label
+      // gets printed. Same /resume-besok endpoint a manual barcode lookup
+      // uses; it now accepts an already-assigned RESUMING session too.
+      if (state.session.status === 'RESUMING') {
+        const data = await post('/packing/resume-besok', { internal_barcode: value });
+        return applyState(data);
       }
 
       // AWAITING_LABEL_SCAN blocks here until the operator scans the printed
