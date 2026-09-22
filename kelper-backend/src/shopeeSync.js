@@ -6,6 +6,11 @@ const { getShopAffiliatePerformance, getShopSalesPerformanceDetail } = require('
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
 const { getSetting } = require('./settings');
+const {
+  getOrderDelaySeconds,
+  getMaxConcurrentBookings,
+  getMaxReadyToCheck,
+} = require('./packingSettings');
 const { dateStringWIB, dateStringDDMMYYYYWIB } = require('./wib');
 
 function now() {
@@ -170,16 +175,72 @@ async function fillMissingOrderDetails(accessToken, shopId) {
   fillMany(returned);
 }
 
+// Runs `fn` over `items` with at most `limit` in flight at once (0/falsy =
+// no cap, i.e. all at once — the original unbounded behavior). A simple
+// worker-pool rather than chunking into batches of `limit`: chunking would
+// leave idle slots whenever one item in a batch finishes faster than its
+// batch-mates, since the whole batch has to finish before the next one
+// starts. Mirrors Promise.allSettled's contract (never rejects; each result
+// is fulfilled/rejected) so callers don't need two different result shapes
+// depending on whether a limit is set.
+async function mapWithConcurrency(items, limit, fn) {
+  if (!limit || limit >= items.length) return Promise.allSettled(items.map(fn));
+
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, worker));
+  return results;
+}
+
+const countReadyToCheck = db.prepare(`
+  SELECT COUNT(*) as c FROM orders o
+  WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 1
+    AND NOT EXISTS (
+      SELECT 1 FROM packing_sessions ps
+      WHERE ps.order_sn = o.order_sn AND ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP')
+    )
+`);
+
 // Phase 2 — book & label: for any local order still missing a label, book
 // the real shipment now (respects config.shipping.useMassShip) and download
 // the label once, storing it locally. This is what lets Packing Station
 // never call Shopee at pack-time — it just reads what's already stored.
 // Idempotent and safe to retry: an order that fails here simply stays
 // label_ready = 0 and gets picked up again on the next tick.
+//
+// Client-requested (2026-09-22) gating, applied before any Shopee call:
+//   - orderDelayMinutes: an order created less than this many minutes ago is
+//     left alone entirely (still label_ready = 0, shown as "Waiting List" —
+//     see routes/packing.js) so the buyer has a real window to cancel before
+//     a shipment is committed.
+//   - maxReadyToCheck: if the "Ready to Check" pool is already at/over this
+//     cap, only book enough of the oldest eligible orders to fill the
+//     remaining slots — the rest stay in Processing until a station clears
+//     some of the backlog, rather than piling up more printed labels than
+//     stations can realistically work through.
 async function bookAndLabelPendingOrders(accessToken, shopId) {
-  const pending = db
-    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0")
-    .all(shopId);
+  const cutoff = now() - getOrderDelaySeconds();
+  let pending = db
+    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0 AND created_at <= ? ORDER BY created_at ASC")
+    .all(shopId, cutoff);
+
+  const maxReadyToCheck = getMaxReadyToCheck();
+  if (maxReadyToCheck > 0) {
+    const slots = Math.max(0, maxReadyToCheck - countReadyToCheck.get(shopId).c);
+    pending = pending.slice(0, slots);
+  }
+  if (pending.length === 0) return;
 
   // Concurrent, not sequential — confirmed via real production timing logs
   // that a single order's wait for Shopee to assign a tracking number
@@ -189,25 +250,55 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   // order A's entire wait finished — the same shape of problem as
   // discoverOnly being blocked by booking, just one level deeper. Safe to
   // parallelize: each iteration only ever reads/writes its own order_sn's
-  // row, and Promise.allSettled (not Promise.all) keeps one order's
-  // rejection from stopping the others, matching the original per-order
-  // try/catch exactly.
-  await Promise.allSettled(
-    pending.map(async ({ order_sn: orderSn }) => {
-      try {
-        const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
-        const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
-        if (!docResult.pdf) {
-          throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
-        }
-
-        db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
-          .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
-      } catch (err) {
-        console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
+  // row. maxConcurrentBookings caps how many run at once (0 = unbounded).
+  await mapWithConcurrency(pending, getMaxConcurrentBookings(), async ({ order_sn: orderSn }) => {
+    try {
+      const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
+      const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
+      if (!docResult.pdf) {
+        throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
       }
-    })
-  );
+
+      db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
+        .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
+    } catch (err) {
+      console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
+    }
+  });
+}
+
+// Client-requested (2026-09-22): an order the buyer cancels (whether during
+// the delay window above or any time before a station claims it) must
+// disappear from Waiting List/Processing/Ready to Check on its own, not sit
+// there looking actionable. The Push Mechanism (webhook.js) reacts fast when
+// Shopee actually sends order_status_push, but Shopee's own guidance is that
+// push can be delayed, duplicated, or dropped — so this periodic recheck is
+// the safety net, run every enrichment tick against everything not yet
+// claimed by a station. Reuses the same order_status field finalizeLeftover
+// (routes/packing.js) already trusts for cancellation detection on resumed
+// leftovers — just applied continuously instead of only at next-day resume.
+const CANCELLATION_CHECK_BATCH_SIZE = 50; // Shopee's own cap on order_sn_list length
+async function detectCancelledOrders(accessToken, shopId) {
+  const unclaimed = db
+    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND order_sn NOT LIKE 'MOCK-%'")
+    .all(shopId)
+    .map((o) => o.order_sn);
+  if (unclaimed.length === 0) return;
+
+  for (let i = 0; i < unclaimed.length; i += CANCELLATION_CHECK_BATCH_SIZE) {
+    const batch = unclaimed.slice(i, i + CANCELLATION_CHECK_BATCH_SIZE);
+    const detail = await getOrderDetail(accessToken, shopId, batch, 'order_status');
+    if (detail.error) {
+      console.error(`[server] get_order_detail (cancellation check) failed for shop ${shopId}: ${detail.message || detail.error}`);
+      continue;
+    }
+    for (const order of detail.response?.order_list || []) {
+      if (order.order_status === 'CANCELLED') {
+        db.prepare("UPDATE orders SET status = 'CANCELLED' WHERE order_sn = ?").run(order.order_sn);
+        console.log(`[server] order ${order.order_sn} was cancelled by the buyer — removed from queue (shop ${shopId})`);
+      }
+    }
+  }
 }
 
 const insertIncome = db.prepare(`
@@ -499,6 +590,7 @@ async function bookAndEnrichOnly(shopId) {
   if (getConfig().sync.autoBookShipping) {
     await bookAndLabelPendingOrders(accessToken, shopId);
   }
+  await detectCancelledOrders(accessToken, shopId);
   await fillMissingIncomeData(accessToken, shopId);
 }
 

@@ -1,4 +1,5 @@
 const express = require('express');
+const { checkLocked, recordFailure, recordSuccess } = require('../loginGuard');
 
 const router = express.Router();
 
@@ -7,9 +8,25 @@ const router = express.Router();
 // the placeholder screen. Needs real auth (hashed passwords, sessions) before
 // any actual dashboard data is wired up.
 router.post('/login', (req, res) => {
+  const ip = req.ip;
+  const retryAfterSeconds = checkLocked(ip);
+  if (retryAfterSeconds > 0) {
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    return res.status(429).json({
+      error: 'too_many_attempts',
+      message: `Too many failed login attempts. Try again in ${retryAfterSeconds}s.`,
+      retryAfterSeconds,
+    });
+  }
+
   const { username, password } = req.body;
   const ok = username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD;
-  if (!ok) return res.status(401).json({ error: 'invalid_credentials', message: 'Wrong username or password' });
+  if (!ok) {
+    recordFailure(ip);
+    return res.status(401).json({ error: 'invalid_credentials', message: 'Wrong username or password' });
+  }
+
+  recordSuccess(ip);
   res.json({ ok: true });
 });
 

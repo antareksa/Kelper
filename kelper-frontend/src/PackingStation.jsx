@@ -56,15 +56,15 @@ function ItemThumb({ imageUrl, sku, size = 44 }) {
   );
 }
 
-// One item row in the active scan list. `flashType` briefly overrides the
-// row's background right after a scan targets this exact SKU (see
-// PackingStation's flashRow) — green for a correct scan, red for a
-// rejected one (already fully scanned) — independent of the row's
-// steady-state "done" tint (done rows remain green after the flash fades).
-function ItemRow({ item, flashType }) {
+// One item row in the active scan list. Steady-state only now — the
+// transient red/green scan feedback lives on the two big panels instead
+// (see ItemScanCard's `panelState`), not per row. `isCurrent` just gives the
+// next-expected item (the one shown big on the left) a subtle highlight
+// here on the right so the two panels visibly agree on what's up next.
+function ItemRow({ item, isCurrent }) {
   const done = item.scanned_qty >= item.qty;
-  const bg = flashType === 'success' ? colors.greenDim : flashType === 'error' ? colors.redDim : done ? colors.greenDim : 'transparent';
-  const border = flashType === 'success' ? colors.green : flashType === 'error' ? colors.red : done ? colors.green : colors.border;
+  const bg = done ? colors.greenDim : isCurrent ? colors.cardHover : 'transparent';
+  const border = done ? colors.green : isCurrent ? colors.textDim : colors.border;
 
   return (
     <div
@@ -101,17 +101,39 @@ function ItemRow({ item, flashType }) {
   );
 }
 
+// Both big panels share one color state, driven from the same place:
+//   - 'success' (green, permanent): every item on the order is done.
+//   - 'success'/'error' (temporary, ~3s): right after a scan, correct or
+//     rejected — set by PackingStation's flashPanel, cleared automatically.
+//   - 'active' (yellow): the steady "scanning in progress" state otherwise.
+const PANEL_COLORS = {
+  active: { bg: colors.yellowDim, border: colors.yellow },
+  success: { bg: colors.greenDim, border: colors.green },
+  error: { bg: colors.redDim, border: colors.red },
+};
+
 // The item-scan screen — shown only while actively scanning (IN_PROGRESS
-// with item data). Fully-scanned rows sink to the bottom (stable within
-// each group) so the operator never has to scroll past done items to see
-// what's left, no matter how long the order is.
-function ItemScanCard({ order, receivedAt, items, flash }) {
+// with item data). Left: a single big image of the current item to scan
+// (the next one not yet fully scanned). Right: the full item list,
+// fully-scanned rows sunk to the bottom (stable within each group) so the
+// operator never has to scroll past done items to see what's left.
+function ItemScanCard({ order, receivedAt, items, flash, allComplete }) {
   const remaining = items.filter((it) => it.scanned_qty < it.qty);
   const done = items.filter((it) => it.scanned_qty >= it.qty);
+  const current = remaining[0];
+
+  const panelState = allComplete ? 'success' : flash?.type || 'active';
+  const { bg: panelBg, border: panelBorder } = PANEL_COLORS[panelState];
+  const panelStyle = {
+    ...card(),
+    background: panelBg,
+    border: `2px solid ${panelBorder}`,
+    transition: 'background 0.2s ease, border-color 0.2s ease',
+  };
 
   return (
-    <div style={card()}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ fontSize: 13, color: colors.textDim }}>
           Order <span style={{ color: colors.text, fontWeight: 600, fontFamily: 'monospace' }}>{order.order_sn}</span>
           {order.order_sn.startsWith('MOCK-') && (
@@ -123,10 +145,27 @@ function ItemScanCard({ order, receivedAt, items, flash }) {
         <div style={{ fontSize: 11, color: colors.textFaint }}>Diterima {formatReceivedAt(receivedAt)}</div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-        {[...remaining, ...done].map((it) => (
-          <ItemRow key={it.sku} item={it} flashType={flash?.sku === it.sku ? flash.type : null} />
-        ))}
+      <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+        <div style={{ ...panelStyle, flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+          {current ? (
+            <>
+              <ItemThumb imageUrl={current.image_url} sku={current.sku} size={240} />
+              <div style={{ marginTop: 20, fontSize: 20, fontWeight: 700, color: colors.text }}>{current.sku}</div>
+              <div style={{ fontSize: 14, color: colors.textDim, marginTop: 4 }}>{current.product_name}</div>
+              <div style={{ fontSize: 32, fontWeight: 700, fontFamily: 'var(--num)', color: colors.text, marginTop: 18 }}>
+                {current.scanned_qty}/{current.qty}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 16, fontWeight: 600, color: colors.green }}>Semua item sudah discan</div>
+          )}
+        </div>
+
+        <div style={{ ...panelStyle, flex: 1, display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto' }}>
+          {[...remaining, ...done].map((it) => (
+            <ItemRow key={it.sku} item={it} isCurrent={current?.sku === it.sku} />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -251,9 +290,10 @@ function PackingStation() {
   const [paused, setPaused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
-  // Which item row to flash green/red right after a scan, and for how long —
-  // cleared automatically so it never lingers past the next scan.
-  const [flash, setFlash] = useState(null); // { sku, type: 'success' | 'error' }
+  // Which color the two big scan panels (image + list) flash right after a
+  // scan, and for how long — cleared automatically so it falls back to the
+  // steady yellow "active" state before the next scan.
+  const [flash, setFlash] = useState(null); // { type: 'success' | 'error' }
   const inputRef = useRef(null);
   const testScanInputRef = useRef(null);
   const submittingRef = useRef(false); // reentrancy guard — a real scanner can fire faster than a request round-trips
@@ -382,11 +422,11 @@ function PackingStation() {
     setInfoType(type);
   }
 
-  // Briefly highlights one item row green (correct scan) or red (rejected
-  // scan) — cleared on a timer so it never lingers into the next scan.
-  function flashRow(sku, type) {
-    setFlash({ sku, type });
-    setTimeout(() => setFlash((f) => (f?.sku === sku && f?.type === type ? null : f)), 700);
+  // Briefly colors both scan panels green (correct scan) or red (rejected
+  // scan) for 3s, then falls back to the steady yellow "active" state.
+  function flashPanel(type) {
+    setFlash({ type });
+    setTimeout(() => setFlash((f) => (f?.type === type ? null : f)), 3000);
   }
 
   // The "what to do next" bar is always derived from current state — never
@@ -595,6 +635,10 @@ function PackingStation() {
     try {
       const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: overrideOperatorName ?? operatorName });
       setLastSku(null);
+      // Otherwise a still-ticking flash from the order that just finished
+      // (e.g. the permanent green "all complete" state) would visibly bleed
+      // onto this freshly loaded order for whatever's left of its timer.
+      setFlash(null);
       applyState(data);
     } catch (err) {
       setState(null);
@@ -751,25 +795,22 @@ function PackingStation() {
         try {
           const data = await post('/packing/scan-item', { session_id: state.session.id, sku: value });
           setLastSku(value);
-          // Which row actually incremented — the scanned value can be a
-          // barcode, not the SKU itself, so this can't just flash `value`
+          // Which item actually incremented — the scanned value can be a
+          // barcode, not the SKU itself, so this can't just check `value`
           // directly; diffing against the pre-scan counts finds the real one.
           const grown = data.items.find((it) => {
             const before = state.items.find((b) => b.sku === it.sku);
             return before && it.scanned_qty > before.scanned_qty;
           });
           if (grown) {
-            flashRow(grown.sku, 'success');
+            flashPanel('success');
             notify(`${grown.product_name} scanned (${grown.scanned_qty}/${grown.qty})`, 'success');
           }
           return applyState(data);
         } catch (err) {
-          // A rejected scan that still matches a known row (already fully
-          // scanned) gets a red flash on that row; one that matches nothing
-          // (wrong item entirely) has no row to flash, so it's left to the
-          // status message below instead.
-          const match = state.items.find((it) => it.sku === value || it.barcode === value);
-          if (match) flashRow(match.sku, 'error');
+          // Any rejected scan (wrong item, already fully scanned, or not
+          // part of this order at all) flashes both panels red.
+          flashPanel('error');
           throw err;
         }
       }
@@ -902,7 +943,7 @@ function PackingStation() {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {mode === 'shipping' ? (
           <div style={{ ...card(), flex: 1 }}>
             <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 14, lineHeight: 1.5 }}>
@@ -922,7 +963,7 @@ function PackingStation() {
             )}
           </div>
         ) : showItemScan ? (
-          <ItemScanCard order={state.order} receivedAt={state.order.created_at} items={state.items} flash={flash} />
+          <ItemScanCard order={state.order} receivedAt={state.order.created_at} items={state.items} flash={flash} allComplete={state.allComplete} />
         ) : (
           <ActionMessageCard
             order={state?.order}

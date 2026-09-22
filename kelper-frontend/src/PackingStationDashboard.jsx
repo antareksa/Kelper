@@ -81,7 +81,7 @@ function ActiveStation() {
 // orders deferred to tomorrow, already scanned, waiting to be resumed
 // ("Ready to Process Tomorrow").
 function OrderLists() {
-  const [lists, setLists] = useState({ processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
+  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
   // null = still checking on first load, not "paused" — the toggle button
   // stays disabled until we actually know, so a click can't race a stale
@@ -89,9 +89,20 @@ function OrderLists() {
   const [syncEnabled, setSyncEnabled] = useState(null);
   const [toggling, setToggling] = useState(false);
 
+  // Packing Station configuration (client-requested 2026-09-22): Delay
+  // (minutes an order sits in Waiting List before it's eligible for
+  // booking/shipping), Max Process Order (concurrent Shopee bookings), Max
+  // Ready to Check (cap on the booked-but-unclaimed pool). Loaded once, then
+  // only re-fetched after a successful save — no need to poll settings on
+  // the same 3s cadence as the order lists themselves.
+  const [settings, setSettings] = useState(null);
+  const [settingsDraft, setSettingsDraft] = useState(null);
+  const [savingSettings, setSavingSettings] = useState(false);
+
   useEffect(() => {
     load();
     loadSyncStatus();
+    loadSettings();
     const interval = setInterval(() => {
       load();
       loadSyncStatus();
@@ -117,6 +128,37 @@ function OrderLists() {
     }
   }
 
+  async function loadSettings() {
+    try {
+      const res = await fetch(`${API_BASE}/packing/settings`);
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(data);
+        setSettingsDraft(data);
+      }
+    } catch {
+      // best-effort — form just stays disabled/empty until this succeeds
+    }
+  }
+
+  async function saveSettings() {
+    setSavingSettings(true);
+    try {
+      const res = await fetch(`${API_BASE}/packing/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsDraft),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(data);
+        setSettingsDraft(data);
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
   async function toggleSync() {
     setToggling(true);
     try {
@@ -132,6 +174,7 @@ function OrderLists() {
   }
 
   const columns = [
+    { key: 'waitingList', title: 'Waiting List' },
     { key: 'processing', title: 'Processing' },
     { key: 'readyToCheck', title: 'Ready to Check' },
     { key: 'onProgressCheck', title: 'On Progress Check' },
@@ -139,9 +182,15 @@ function OrderLists() {
     { key: 'readyTomorrow', title: 'Ready to Process Tomorrow' },
   ];
 
+  const settingsChanged = settings && settingsDraft && (
+    settings.orderDelayMinutes !== settingsDraft.orderDelayMinutes ||
+    settings.maxConcurrentBookings !== settingsDraft.maxConcurrentBookings ||
+    settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
-      <div style={{ ...card(), display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, gap: 16 }}>
+      <div style={{ ...card(), display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, gap: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           <span
             aria-hidden
@@ -181,6 +230,64 @@ function OrderLists() {
           }}
         >
           {syncEnabled ? 'Jeda Fetching' : 'Mulai Fetching'}
+        </button>
+      </div>
+
+      <div style={{ ...card(), display: 'flex', alignItems: 'flex-end', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5, alignSelf: 'center', marginRight: 4 }}>
+          Konfigurasi Packing Station
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Delay (menit)</label>
+          <input
+            type="number"
+            min="0"
+            disabled={!settingsDraft}
+            value={settingsDraft?.orderDelayMinutes ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, orderDelayMinutes: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Max Process Order</label>
+          <input
+            type="number"
+            min="0"
+            placeholder="0 = tanpa batas"
+            disabled={!settingsDraft}
+            value={settingsDraft?.maxConcurrentBookings ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, maxConcurrentBookings: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Max Ready to Check</label>
+          <input
+            type="number"
+            min="0"
+            placeholder="0 = tanpa batas"
+            disabled={!settingsDraft}
+            value={settingsDraft?.maxReadyToCheck ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, maxReadyToCheck: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <button
+          onClick={saveSettings}
+          disabled={!settingsChanged || savingSettings}
+          style={{
+            padding: '9px 16px',
+            borderRadius: 8,
+            border: 'none',
+            fontWeight: 600,
+            fontSize: 13,
+            cursor: !settingsChanged || savingSettings ? 'default' : 'pointer',
+            background: colors.text,
+            color: colors.bg,
+            opacity: !settingsChanged || savingSettings ? 0.5 : 1,
+          }}
+        >
+          {savingSettings ? 'Menyimpan...' : 'Simpan'}
         </button>
       </div>
 
@@ -331,6 +438,24 @@ const inputStyle = {
   border: `1px solid ${colors.border}`,
   borderRadius: 6,
   color: colors.text,
+};
+
+const settingsLabelStyle = {
+  display: 'block',
+  fontSize: 11.5,
+  color: colors.textDim,
+  marginBottom: 4,
+};
+
+const settingsInputStyle = {
+  width: 130,
+  padding: '8px 10px',
+  boxSizing: 'border-box',
+  background: colors.cardAlt,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 6,
+  color: colors.text,
+  fontSize: 13,
 };
 
 const buttonStyle = {

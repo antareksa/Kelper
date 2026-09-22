@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { startOfDayWIB, dateStringWIB } = require('../wib');
+const { getSetting, setSetting } = require('../settings');
 
 const router = express.Router();
 
@@ -210,6 +211,10 @@ router.get('/summary', (req, res) => {
     .prepare('SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date = ?')
     .get(shopId, dateStringWIB(0));
 
+  // Client-requested (2026-09-22): a configurable percentage added on top of
+  // raw Shopee ad spend for display — see /dashboard/settings below.
+  const adsTaxPercentage = Number(getSetting('adsTaxPercentage', '0'));
+
   res.json({
     today: {
       orderCount: today.orderCount,
@@ -217,7 +222,7 @@ router.get('/summary', (req, res) => {
       laba: today.laba,
       layanan: today.layanan,
       biayaPesanan: today.biayaPesanan,
-      iklan: adsRow ? adsRow.expense : null,
+      iklan: adsRow ? adsRow.expense * (1 + adsTaxPercentage / 100) : null,
       marginPct: marginPctToday,
     },
     affiliasi: affiliateRow
@@ -250,6 +255,20 @@ router.get('/summary', (req, res) => {
     // rather than removed, since the frontend still checks it per metric.
     blocked: [],
   });
+});
+
+// Dashboard configuration (client-requested 2026-09-22) — currently just Ads
+// tax percentage, stored in the same `settings` key/value table Packing
+// Station's settings use (see settings.js), so an admin's edit persists
+// across deploys instead of being reverted by the next git pull.
+router.get('/settings', (req, res) => {
+  res.json({ adsTaxPercentage: Number(getSetting('adsTaxPercentage', '0')) });
+});
+
+router.post('/settings', (req, res) => {
+  const { adsTaxPercentage } = req.body || {};
+  if (adsTaxPercentage != null) setSetting('adsTaxPercentage', Math.max(0, Number(adsTaxPercentage)));
+  res.json({ adsTaxPercentage: Number(getSetting('adsTaxPercentage', '0')) });
 });
 
 module.exports = router;

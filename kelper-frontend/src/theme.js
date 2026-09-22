@@ -14,6 +14,8 @@ export const colors = {
   redDim: 'rgba(239, 68, 68, 0.14)',
   orange: '#f97316',
   orangeDim: 'rgba(249, 115, 22, 0.14)',
+  yellow: '#eab308',
+  yellowDim: 'rgba(234, 179, 8, 0.14)',
   blue: '#3b82f6',
 };
 

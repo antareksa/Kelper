@@ -6,6 +6,7 @@ const { getOrderDetail } = require('../shopee/client');
 const { getConfig } = require('../config');
 const { getWIBHour, startOfDayWIB } = require('../wib');
 const { isProduction } = require('../env');
+const { getOrderDelaySeconds, getPackingSettings, setPackingSettings } = require('../packingSettings');
 
 const router = express.Router();
 
@@ -475,18 +476,35 @@ router.get('/session/:id', (req, res) => {
 //   waiting for Shipping Mode to confirm the courier took it.
 // - "Ready to process tomorrow": deferred (Pack Besok) — already scanned,
 //   waiting to be resumed and given a real label the next day.
+//
+// "Waiting List" (client-requested 2026-09-22): an order newer than the
+// configured delay (see packingSettings.js) sits here instead of Processing
+// — gives the buyer a window to cancel before Shopee commits to shipping it.
+// shopeeSync.js's bookAndLabelPendingOrders enforces the same cutoff, so an
+// order never actually leaves this bucket for real until the delay is up.
 router.get('/order-lists', (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const cutoff = now() - getOrderDelaySeconds();
+
+  const waitingList = db
+    .prepare(`
+      SELECT order_sn, buyer_name, created_at
+      FROM orders
+      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0 AND created_at > ?
+      ORDER BY created_at ASC
+    `)
+    .all(shop_id, cutoff);
 
   const processing = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at
       FROM orders
-      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0
+      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0 AND created_at <= ?
       ORDER BY created_at ASC
     `)
-    .all(shop_id);
+    .all(shop_id, cutoff);
 
   const readyToCheck = db
     .prepare(`
@@ -531,7 +549,20 @@ router.get('/order-lists', (req, res) => {
     `)
     .all(shop_id);
 
-  res.json({ processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
+  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
+});
+
+// Packing Station configuration (client-requested 2026-09-22) — Delay, Max
+// Process Order (concurrent bookings), Max Ready to Check. Stored in the
+// `settings` table (see packingSettings.js), not config.json, so an admin's
+// edit from the UI persists across deploys instead of being reverted by the
+// next git pull.
+router.get('/settings', (req, res) => {
+  res.json(getPackingSettings());
+});
+
+router.post('/settings', (req, res) => {
+  res.json(setPackingSettings(req.body || {}));
 });
 
 // Test-only helper: simulate a Shopee cancellation happening overnight, to

@@ -188,6 +188,17 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- Brute-force guard for /admin/login (see loginGuard.js), keyed by client
+  -- IP. A dedicated table rather than the generic settings key/value store
+  -- above since this needs one row per IP, not one row per config key — and
+  -- persisted rather than in-memory so a lockout survives a server restart
+  -- (deploys restart the process).
+  CREATE TABLE IF NOT EXISTS login_attempts (
+    ip TEXT PRIMARY KEY,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0
+  );
 `);
 
 // Non-destructive migration for existing local databases created before

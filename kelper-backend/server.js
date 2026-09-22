@@ -21,6 +21,11 @@ const webhookRoutes = require('./src/routes/webhook');
 const { startShopeeSync } = require('./src/shopeeSync');
 
 const app = express();
+// Production sits behind Caddy (one reverse-proxy hop) — without this,
+// req.ip would be Caddy's own loopback address for every request, which
+// would make the login brute-force guard (loginGuard.js) share one lockout
+// across every visitor instead of tracking per real client IP.
+app.set('trust proxy', 1);
 // Mounted before the app-wide express.json() below: push signature
 // verification needs the exact raw request bytes, so this one route gets
 // express.raw() instead of the parsed-JSON body every other route uses.
