@@ -142,12 +142,19 @@ async function finalizeLeftover(session, order, res) {
   }
 }
 
-// B. NEXT ORDER — pulls the single highest-priority order from one combined
-// pool: yesterday's leftovers (packing_sessions DEFERRED_READY) and today's
-// fresh orders (orders READY_TO_PACK, already labeled by the server).
-// Priority: Instant-shipment orders first (whichever pool), then leftovers,
-// then fresh — FIFO by age within each tier. Replaces the old separate
-// NEXT_ORDER_KEMAREN command entirely.
+// B. NEXT ORDER — pulls the single highest-priority fresh order (orders
+// READY_TO_PACK). Deliberately does NOT auto-pick leftovers (packing_sessions
+// DEFERRED_READY) the way it used to — client-requested (2026-09-23): a Pack
+// Besok box can only ever be identified by its own temp barcode, so resuming
+// one must always go through an explicit /resume-besok scan of that exact
+// code. Auto-picking a leftover here (as the old combined-pool query did)
+// silently resumed a session — including via the station's own 3s idle
+// auto-retry — without the operator ever scanning anything, which both
+// defeats the "must scan the temp barcode to resume" requirement and leaves
+// the operator with no way to know which physical box the system just
+// picked (confirmed against production: order 260923QG061V7A reached
+// AWAITING_LABEL_SCAN with no record of its BESOK- barcode ever being
+// scanned to get there).
 router.post('/next-order', async (req, res) => {
   const { station_id, shop_id, operator_name } = req.body;
   if (!station_id || !shop_id) {
@@ -174,54 +181,30 @@ router.post('/next-order', async (req, res) => {
   // goes through Ready to Check exactly like a real one, and gets picked up
   // by the exact same query below.
   //
-  // Both pools are gated on label_ready now, not a wall-clock guess:
-  //   - leftover: a DEFERRED_READY session only becomes pickable once
-  //     shopeeSync.js's bookDeferredOrders has actually booked it during
-  //     work hour — there's no way to fetch its label too early since it
-  //     literally doesn't exist yet, unlike the old "before today's WIB
-  //     midnight" heuristic this replaces.
-  //   - fresh: DURING work hour, an order must already be booked
-  //     (label_ready = 1) before it's claimable — a station must never grab
-  //     it while shopeeSync.js's bookAndLabelPendingOrders is still in
-  //     flight for it, or a fast operator can finish scanning before that
-  //     booking call returns and get needlessly deferred to a temp barcode
-  //     even though a real label was moments away (confirmed happening in
-  //     production: order 260923QAHDPSY8 was claimed and fully scanned in
-  //     3s while its own booking call, already ~10s in, hadn't finished).
-  //     OUTSIDE work hour, no booking is going to happen at all until the
-  //     window reopens, so label_ready is irrelevant and the delay
-  //     (getOrderDelaySeconds) is the only gate — that's the whole point of
-  //     letting an order be packed with just a temp barcode.
+  // DURING work hour, an order must already be booked (label_ready = 1)
+  // before it's claimable — a station must never grab it while
+  // shopeeSync.js's bookAndLabelPendingOrders is still in flight for it, or
+  // a fast operator can finish scanning before that booking call returns
+  // and get needlessly deferred to a temp barcode even though a real label
+  // was moments away (confirmed happening in production: order
+  // 260923QAHDPSY8 was claimed and fully scanned in 3s while its own
+  // booking call, already ~10s in, hadn't finished). OUTSIDE work hour, no
+  // booking is going to happen at all until the window reopens, so
+  // label_ready is irrelevant and the delay (getOrderDelaySeconds) is the
+  // only gate — that's the whole point of letting an order be packed with
+  // just a temp barcode.
   const cutoff = now() - getOrderDelaySeconds();
   const withinWorkHour = isWithinWorkHour();
   const pick = db.prepare(`
-    SELECT * FROM (
-      SELECT ps.id AS session_id, ps.order_sn AS order_sn, ps.started_at AS age, o.is_instant AS is_instant, 'leftover' AS pool
-      FROM packing_sessions ps
-      JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
-      UNION ALL
-      SELECT NULL AS session_id, o.order_sn AS order_sn, o.created_at AS age, o.is_instant AS is_instant, 'fresh' AS pool
-      FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
-        AND (o.label_ready = 1 OR ? = 0)
-    )
-    ORDER BY is_instant DESC, CASE pool WHEN 'leftover' THEN 0 ELSE 1 END ASC, age ASC
+    SELECT order_sn, is_instant FROM orders
+    WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ?
+      AND (label_ready = 1 OR ? = 0)
+    ORDER BY is_instant DESC, created_at ASC
     LIMIT 1
-  `).get(shop_id, shop_id, cutoff, withinWorkHour ? 1 : 0);
+  `).get(shop_id, cutoff, withinWorkHour ? 1 : 0);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
-  }
-
-  if (pick.pool === 'leftover') {
-    db.transaction(() => {
-      db.prepare("UPDATE packing_sessions SET station_id = ?, operator_name = ?, status = 'RESUMING' WHERE id = ?")
-        .run(station_id, operator_name || null, pick.session_id);
-    })();
-    const session = db.prepare('SELECT * FROM packing_sessions WHERE id = ?').get(pick.session_id);
-    const order = db.prepare('SELECT order_sn, shop_id, status, tracking_no FROM orders WHERE order_sn = ?').get(pick.order_sn);
-    return finalizeLeftover(session, order, res);
   }
 
   const sessionId = db.transaction(() => {
@@ -487,31 +470,40 @@ router.get('/session/:id', (req, res) => {
   res.json(state);
 });
 
-// Admin/dashboard view of the pools from the flow diagram:
+// Admin/dashboard view of the pools from the flow diagram. Client-requested
+// (2026-09-23): "Processing" is any order currently having its book-ship
+// call attempted with Shopee — that definition is the same whether the
+// order is brand new or a Pack Besok leftover whose 8am sweep just started,
+// so both feed the same bucket:
 // - "Processing": ONLY exists during work hour — past its buyer-cancellation
-//   delay, not yet labeled, waiting on shopeeSync.js's
-//   bookAndLabelPendingOrders to actually book it with Shopee. Outside work
-//   hour this bucket is always empty, since nothing is being booked at all
-//   until the window reopens — such an order goes straight to Ready to
-//   Check instead (see below).
-// - "Ready to check": claimable by a station right now. During work hour
-//   that means already labeled (o.label_ready = 1) — a station must never
-//   grab an order while its booking call is still in flight, or an
+//   delay, not yet labeled. Covers two cases: (a) a fresh order waiting on
+//   shopeeSync.js's bookAndLabelPendingOrders, (b) a Pack Besok order
+//   (packing_sessions.status = DEFERRED_READY) waiting on
+//   bookDeferredOrders once work hour has opened. Outside work hour this
+//   bucket is always empty for case (a) since nothing's being booked at
+//   all; a Pack Besok order outside work hour sits in "Ready to process
+//   tomorrow" instead (see below), not here.
+// - "Ready to check": claimable right now. For a fresh order, during work
+//   hour that means already labeled (o.label_ready = 1) — a station must
+//   never grab one while its booking call is still in flight, or an
 //   operator fast enough to finish scanning before that call returns gets
 //   it needlessly deferred to a temp barcode (this exact race hit
-//   production on order 260923QAHDPSY8). Outside work hour label_ready is
-//   irrelevant, since no booking is happening regardless — being past the
-//   delay is enough (see finalizeCompletedOrder for what happens once all
-//   items are scanned in that case).
+//   production on order 260923QAHDPSY8); outside work hour label_ready is
+//   irrelevant, since no booking is happening regardless. A Pack Besok
+//   order also lands here once bookDeferredOrders labels it — but unlike a
+//   fresh order, it's only claimable via its own barcode scan
+//   (/resume-besok), never a generic NEXT_ORDER pick, hence
+//   internal_barcode being included on those rows.
 // - "On progress check": actively being packed right now — a Packing
 //   Station has claimed it and is scanning items (or re-validating a resumed leftover),
 //   or has printed a label and is waiting on the operator's confirm-scan
 //   (AWAITING_LABEL_SCAN) — still "in the station's hands", not yet ready.
 // - "Ready to pickup": label printed AND confirm-scanned back successfully,
 //   waiting for Shipping Mode to confirm the courier took it.
-// - "Ready to process tomorrow": deferred (Pack Besok) — already scanned,
-//   waiting on shopeeSync.js's bookDeferredOrders to fetch a real label the
-//   next time work hour opens.
+// - "Ready to process tomorrow": deferred (Pack Besok), unlabeled, AND work
+//   hour hasn't opened yet — genuinely just waiting. Moves to "Processing"
+//   the moment work hour opens, then "Ready to check" once labeled; never
+//   moves back here.
 //
 // "Waiting List" (client-requested 2026-09-22): an order newer than the
 // configured delay (see packingSettings.js) sits here — gives the buyer a
@@ -532,18 +524,26 @@ router.get('/order-lists', (req, res) => {
     `)
     .all(shop_id, cutoff);
 
+  // "Processing" = any order whose book-ship call with Shopee is currently
+  // being attempted — true for a brand-new order the same way it's true for
+  // a Pack Besok order once work hour opens and bookDeferredOrders starts
+  // sweeping it. Same rule, same bucket, regardless of which one it is.
   const processing = db
     .prepare(`
-      SELECT order_sn, buyer_name, created_at
-      FROM orders
+      SELECT order_sn, buyer_name, created_at FROM orders
       WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
+      UNION ALL
+      SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0);
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0);
 
   const readyToCheck = db
     .prepare(`
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, NULL AS internal_barcode
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
         AND (o.label_ready = 1 OR ? = 0)
@@ -551,9 +551,17 @@ router.get('/order-lists', (req, res) => {
           SELECT 1 FROM packing_sessions ps
           WHERE ps.order_sn = o.order_sn AND ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP')
         )
-      ORDER BY o.is_instant DESC, o.created_at ASC
+      UNION ALL
+      -- A Pack Besok order that's now labeled: claimable, but only via its
+      -- own barcode scan (resume-besok), not a generic NEXT_ORDER pick —
+      -- internal_barcode is included so ops can see which code to look for.
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, ps.internal_barcode
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
+      ORDER BY is_instant DESC, created_at ASC
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0);
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id);
 
   const onProgressCheck = db
     .prepare(`
@@ -575,15 +583,19 @@ router.get('/order-lists', (req, res) => {
     `)
     .all(shop_id);
 
+  // Only genuinely still waiting — work hour hasn't opened yet, so
+  // bookDeferredOrders hasn't even started trying to book it. Once work
+  // hour opens it moves to "Processing" above (booking in flight), then
+  // "Ready to Check" once labeled — never back here.
   const readyTomorrow = db
     .prepare(`
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.internal_barcode, o.buyer_name
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ?
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 0
       ORDER BY ps.started_at ASC
     `)
-    .all(shop_id);
+    .all(shop_id, withinWorkHour ? 1 : 0);
 
   res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
 });

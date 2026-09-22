@@ -411,6 +411,11 @@ function OrderLists() {
                         {row.label_ready ? 'Label siap' : 'Menunggu label'}
                       </div>
                     )}
+                    {key === 'readyToCheck' && row.internal_barcode && (
+                      <div style={{ color: colors.orange, marginTop: 2, fontFamily: 'ui-monospace, monospace' }}>
+                        Scan: {row.internal_barcode}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

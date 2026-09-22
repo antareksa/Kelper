@@ -241,7 +241,7 @@ function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message
 }
 
 const COMMANDS = [
-  { cmd: 'NEXT_ORDER', desc: 'Start processing the next available order — automatically picks the highest-priority one (Instant, then yesterday\'s leftovers, then fresh).' },
+  { cmd: 'NEXT_ORDER', desc: 'Start processing the next available fresh order — automatically picks the highest-priority one (Instant first). Does not resume Pack Besok leftovers; scan that specific order\'s BESOK- barcode instead.' },
   { cmd: 'PAUSE', desc: 'Pause the station (freezes scanning) while you step away.' },
   { cmd: 'RESUME', desc: 'Resume the station after a pause.' },
   { cmd: 'UNDO', desc: 'Revert your last item scan.' },
@@ -450,7 +450,12 @@ function PackingStation() {
       return { text: 'Order flagged as a problem (MASALAH) — needs manual resolution.', type: 'error' };
     }
     if (session.status === 'AWAITING_LABEL_SCAN') {
-      return { text: `Label printed for ${state.order.order_sn} — scan the label's barcode to confirm it printed correctly. If nothing came out (or it's wrong), scan REPRINT.`, type: 'info' };
+      // Never claim "printed" here — a browser has no way to know whether a
+      // physical page actually came out (no print-completion callback
+      // exists), and asserting success when we don't know it is exactly
+      // what left operators stuck staring at "scan to confirm" with nothing
+      // in hand. The scan itself is the only real confirmation there is.
+      return { text: `Printing label for ${state.order.order_sn} — scan its barcode once it's out to confirm. If nothing comes out, scan REPRINT.`, type: 'info' };
     }
     if (session.status === 'READY_FOR_PICKUP') {
       return { text: `Confirmed — put it on the package. Grabbing next order...`, type: 'success' };
