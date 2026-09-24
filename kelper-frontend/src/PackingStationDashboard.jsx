@@ -209,6 +209,21 @@ function OrderLists() {
     }
   }
 
+  // A number input controlled by `value={draft ?? ''}` with a plain
+  // Number(e.target.value) onChange can never actually go empty: clearing
+  // the field fires onChange with '', Number('') is 0, and the next render
+  // forces the DOM back to "0" — so a user trying to retype 60 as 22 ends
+  // up with the old digit still there ("022"), since the field can never
+  // pass through a genuinely empty state. Keeping '' as its own draft value
+  // (instead of coercing it to 0 immediately) lets the field actually clear;
+  // Number(e.target.value) still runs for any real digit input.
+  function handleSettingsNumberChange(key) {
+    return (e) => {
+      const v = e.target.value;
+      setSettingsDraft((s) => ({ ...s, [key]: v === '' ? '' : Number(v) }));
+    };
+  }
+
   async function toggleSync() {
     setToggling(true);
     try {
@@ -298,7 +313,7 @@ function OrderLists() {
             min="0"
             disabled={!settingsDraft}
             value={settingsDraft?.orderDelayMinutes ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, orderDelayMinutes: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('orderDelayMinutes')}
             style={settingsInputStyle}
           />
         </div>
@@ -310,7 +325,7 @@ function OrderLists() {
             placeholder="0 = tanpa batas"
             disabled={!settingsDraft}
             value={settingsDraft?.maxConcurrentBookings ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, maxConcurrentBookings: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('maxConcurrentBookings')}
             style={settingsInputStyle}
           />
         </div>
@@ -322,7 +337,7 @@ function OrderLists() {
             placeholder="0 = tanpa batas"
             disabled={!settingsDraft}
             value={settingsDraft?.maxReadyToCheck ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, maxReadyToCheck: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('maxReadyToCheck')}
             style={settingsInputStyle}
           />
         </div>
@@ -334,7 +349,7 @@ function OrderLists() {
             max="23"
             disabled={!settingsDraft}
             value={settingsDraft?.workHourStartHour ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, workHourStartHour: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('workHourStartHour')}
             style={settingsInputStyle}
           />
         </div>
@@ -346,7 +361,7 @@ function OrderLists() {
             max="23"
             disabled={!settingsDraft}
             value={settingsDraft?.workHourEndHour ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, workHourEndHour: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('workHourEndHour')}
             style={settingsInputStyle}
           />
         </div>
@@ -383,7 +398,7 @@ function OrderLists() {
             min="1"
             disabled={!settingsDraft}
             value={settingsDraft?.readyToCheckStuckSeconds ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, readyToCheckStuckSeconds: Number(e.target.value) }))}
+            onChange={handleSettingsNumberChange('readyToCheckStuckSeconds')}
             style={settingsInputStyle}
           />
         </div>
