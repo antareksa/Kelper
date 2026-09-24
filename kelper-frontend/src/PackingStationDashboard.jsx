@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { colors, card } from './theme';
 import { renderCode39Svg } from './Barcode';
+import { IconBolt, IconMoon, IconAlertTriangle } from './Icons';
 
 // A production build is served from the same origin as the API (Caddy
 // proxies both from one hostname), so relative paths just work and http://
@@ -19,6 +20,36 @@ function formatTime(ts) {
   const d = new Date(ts * 1000);
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// Order tags (client-requested 2026-09-25): Instant Shipping, Order from
+// Yesterday, Stuck in Ready to Check — computed server-side (see
+// routes/packing.js's computeTags) since "from yesterday"/"stuck" both need
+// facts (a session's start day, how long a row's been in a specific bucket)
+// the backend already has and the frontend would otherwise have to
+// re-derive. An order can carry any combination of these at once.
+const TAG_META = {
+  instant: { Icon: IconBolt, color: colors.blue, title: 'Instant Shipping' },
+  from_yesterday: { Icon: IconMoon, color: colors.orange, title: 'Order dari kemarin' },
+  stuck: { Icon: IconAlertTriangle, color: colors.red, title: 'Belum dicek — sudah lama di Ready to Check' },
+};
+
+function OrderTags({ tags }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+      {tags.map((tag) => {
+        const meta = TAG_META[tag];
+        if (!meta) return null;
+        const { Icon, color, title } = meta;
+        return (
+          <span key={tag} title={title} style={{ display: 'inline-flex', color }}>
+            <Icon size={13} />
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function ActiveStation() {
@@ -207,7 +238,8 @@ function OrderLists() {
     settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
     settings.workHourStartHour !== settingsDraft.workHourStartHour ||
     settings.workHourEndHour !== settingsDraft.workHourEndHour ||
-    settings.workHourEnabled !== settingsDraft.workHourEnabled
+    settings.workHourEnabled !== settingsDraft.workHourEnabled ||
+    settings.readyToCheckStuckSeconds !== settingsDraft.readyToCheckStuckSeconds
   );
 
   return (
@@ -345,6 +377,17 @@ function OrderLists() {
           </button>
         </div>
         <div>
+          <label style={settingsLabelStyle}>Stuck Threshold (detik)</label>
+          <input
+            type="number"
+            min="1"
+            disabled={!settingsDraft}
+            value={settingsDraft?.readyToCheckStuckSeconds ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, readyToCheckStuckSeconds: Number(e.target.value) }))}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
           <label style={settingsLabelStyle}>Status Sekarang</label>
           <div
             style={{
@@ -396,11 +439,12 @@ function OrderLists() {
                 rows.map((row) => (
                   <div key={row.order_sn} style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5 }}>
                     <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
-                    <div style={{ color: colors.textDim, marginTop: 2 }}>
-                      {row.buyer_name || '—'}
-                      {row.station_id && ` · ${row.station_id}`}
-                      {row.operator_name && ` (${row.operator_name})`}
-                    </div>
+                    {(row.station_id || row.operator_name) && (
+                      <div style={{ color: colors.textDim, marginTop: 2 }}>
+                        {row.station_id}
+                        {row.operator_name && ` (${row.operator_name})`}
+                      </div>
+                    )}
                     {row.status === 'AWAITING_LABEL_SCAN' && (
                       <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
                         Waiting on confirm-scan — check the printer
@@ -416,6 +460,7 @@ function OrderLists() {
                         Scan: {row.internal_barcode}
                       </div>
                     )}
+                    <OrderTags tags={row.tags} />
                   </div>
                 ))
               )}

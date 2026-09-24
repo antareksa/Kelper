@@ -129,6 +129,34 @@ export function IconTag({ size = 16 }) {
   );
 }
 
+// Order tags (Order Lists panel) — Instant Shipping, Order from Yesterday,
+// Stuck in Ready to Check.
+export function IconBolt({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M8.8 1.5 3 9h3.7l-.5 5.5L13 7H9.3l.5-5.5Z" />
+    </svg>
+  );
+}
+
+export function IconMoon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M13.5 9.8A5.8 5.8 0 0 1 6.2 2.5a5.8 5.8 0 1 0 7.3 7.3Z" />
+    </svg>
+  );
+}
+
+export function IconAlertTriangle({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M8 2.2 14.5 13.5h-13Z" />
+      <path d="M8 6.5v3" />
+      <circle cx="8" cy="11.5" r="0.7" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function IconChevronDown({ size = 12 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" {...base}>

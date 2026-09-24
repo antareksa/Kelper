@@ -230,6 +230,13 @@ const newOrderCols = {
   // per-order record of "this order's real label has been confirmed
   // printed", queryable without reconstructing it from session status.
   label_printed: 'INTEGER NOT NULL DEFAULT 0',
+  // Client-requested (2026-09-25): when label_ready last flipped to 1 (see
+  // shopeeSync.js's bookOneOrder/bookDebugOrder) — the moment an order
+  // actually entered the Ready to Check pool. Used to flag one that's sat
+  // there unclaimed too long (the "stuck" order tag), separate from
+  // created_at, since an order can wait a long time for its label before
+  // ever reaching Ready to Check at all.
+  label_ready_at: 'INTEGER',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

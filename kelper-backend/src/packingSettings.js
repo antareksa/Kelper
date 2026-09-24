@@ -34,6 +34,10 @@ const DEFAULTS = {
   // waiting for the clock. Stored as 'true'/'false' via settings.js, same
   // pattern as orders.js's syncEnabled.
   workHourEnabled: true,
+  // Client-requested (2026-09-25): how long an order can sit unclaimed in
+  // "Ready to Check" before the Order Lists panel flags it with the "stuck"
+  // tag — see routes/packing.js's /order-lists tag computation.
+  readyToCheckStuckSeconds: 300,
 };
 
 function getOrderDelayMinutes() {
@@ -69,6 +73,11 @@ function getWorkHourEnabled() {
   return getSetting('workHourEnabled', String(DEFAULTS.workHourEnabled)) === 'true';
 }
 
+function getReadyToCheckStuckSeconds() {
+  const v = Number(getSetting('readyToCheckStuckSeconds', String(DEFAULTS.readyToCheckStuckSeconds)));
+  return Number.isFinite(v) && v > 0 ? v : DEFAULTS.readyToCheckStuckSeconds;
+}
+
 // Explicit WIB, not the server's own system clock — a work hour meant for
 // "08:00-16:00 in Jakarta" must stay 08:00-16:00 Jakarta time regardless of
 // what timezone the machine running this happens to be set to. Disabling
@@ -89,16 +98,18 @@ function getPackingSettings() {
     workHourStartHour: getWorkHourStartHour(),
     workHourEndHour: getWorkHourEndHour(),
     workHourEnabled: getWorkHourEnabled(),
+    readyToCheckStuckSeconds: getReadyToCheckStuckSeconds(),
   };
 }
 
-function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled }) {
+function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds }) {
   if (orderDelayMinutes != null) setSetting('orderDelayMinutes', Math.max(0, Number(orderDelayMinutes)));
   if (maxConcurrentBookings != null) setSetting('maxConcurrentBookings', Math.max(0, Number(maxConcurrentBookings)));
   if (maxReadyToCheck != null) setSetting('maxReadyToCheck', Math.max(0, Number(maxReadyToCheck)));
   if (workHourStartHour != null) setSetting('workHourStartHour', Math.min(23, Math.max(0, Number(workHourStartHour))));
   if (workHourEndHour != null) setSetting('workHourEndHour', Math.min(23, Math.max(0, Number(workHourEndHour))));
   if (workHourEnabled != null) setSetting('workHourEnabled', workHourEnabled ? 'true' : 'false');
+  if (readyToCheckStuckSeconds != null) setSetting('readyToCheckStuckSeconds', Math.max(1, Number(readyToCheckStuckSeconds)));
   return getPackingSettings();
 }
 
@@ -110,6 +121,7 @@ module.exports = {
   getWorkHourStartHour,
   getWorkHourEndHour,
   getWorkHourEnabled,
+  getReadyToCheckStuckSeconds,
   isWithinWorkHour,
   getPackingSettings,
   setPackingSettings,

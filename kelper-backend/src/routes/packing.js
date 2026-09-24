@@ -5,7 +5,8 @@ const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getOrderDetail } = require('../shopee/client');
 const { getConfig } = require('../config');
 const { isProduction } = require('../env');
-const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour } = require('../packingSettings');
+const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
+const { startOfDayWIB } = require('../wib');
 
 const router = express.Router();
 
@@ -558,6 +559,23 @@ router.get('/session/:id', (req, res) => {
 // "Waiting List" (client-requested 2026-09-22): an order newer than the
 // configured delay (see packingSettings.js) sits here — gives the buyer a
 // window to cancel before it becomes claimable/packable at all.
+// Order tags (client-requested 2026-09-25) — computed here rather than
+// stored, since all three are derived facts (instant-shipping flag, whether
+// a packing session dates back to a previous WIB day, how long a row has
+// sat in Ready to Check) rather than independent state. `sessionStartedAt`
+// is null for a fresh order with no packing_sessions row yet — "from
+// yesterday" only ever applies to a Pack Besok order that's been through at
+// least one. `readyToCheckEnteredAt` is only passed for Ready to Check rows,
+// per the client's own definition of "stuck" (time in that bucket
+// specifically, not the order's total age).
+function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt }) {
+  const tags = [];
+  if (isInstant) tags.push('instant');
+  if (sessionStartedAt != null && sessionStartedAt < startOfDayWIB(0)) tags.push('from_yesterday');
+  if (readyToCheckEnteredAt != null && now() - readyToCheckEnteredAt > getReadyToCheckStuckSeconds()) tags.push('stuck');
+  return tags;
+}
+
 router.get('/order-lists', (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
@@ -567,12 +585,13 @@ router.get('/order-lists', (req, res) => {
 
   const waitingList = db
     .prepare(`
-      SELECT order_sn, buyer_name, created_at
+      SELECT order_sn, buyer_name, created_at, is_instant
       FROM orders
       WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at > ?
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff);
+    .all(shop_id, cutoff)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) }));
 
   // "Processing" = any order whose book-ship call with Shopee is currently
   // being attempted — true for a brand-new order the same way it's true for
@@ -580,58 +599,76 @@ router.get('/order-lists', (req, res) => {
   // sweeping it. Same rule, same bucket, regardless of which one it is.
   const processing = db
     .prepare(`
-      SELECT order_sn, buyer_name, created_at FROM orders
+      SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
       WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
+        -- Without this, a Pack Besok order (packing_sessions.status =
+        -- DEFERRED_READY) would match here too — orders.status stays
+        -- READY_TO_PACK for the whole Pack Besok flow, only the session's
+        -- own status changes — duplicating it alongside the leftover branch
+        -- below, which already covers it.
+        AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       UNION ALL
-      SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at
+      SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at, o.is_instant, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0);
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at }) }));
 
   const readyToCheck = db
     .prepare(`
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, NULL AS internal_barcode
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
         AND (o.label_ready = 1 OR ? = 0)
-        AND NOT EXISTS (
-          SELECT 1 FROM packing_sessions ps
-          WHERE ps.order_sn = o.order_sn AND ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP')
-        )
+        -- Any existing packing_sessions row (not just an active one) means
+        -- this order is already represented by a different bucket/branch —
+        -- a DEFERRED_READY one by the leftover branch below (once labeled)
+        -- or by Processing/Ready to Process Tomorrow (while not), so it
+        -- must never also leak into this "never touched yet" branch.
+        AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       UNION ALL
       -- A Pack Besok order that's now labeled: claimable, but only via its
       -- own barcode scan (resume-besok), not a generic NEXT_ORDER pick —
       -- internal_barcode is included so ops can see which code to look for.
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, ps.internal_barcode
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
       ORDER BY is_instant DESC, created_at ASC
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id);
+    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id)
+    .map((row) => {
+      // Fallback for a row labeled before label_ready_at existed (or, for the
+      // fresh/unlabeled-outside-work-hour case, one that was never booked at
+      // all) — entered the pool when it cleared its own delay.
+      const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds();
+      return { ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
+    });
 
   const onProgressCheck = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.label_ready, o.label_printed
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.is_instant, o.label_ready, o.label_printed
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN') AND o.shop_id = ?
       ORDER BY ps.started_at ASC
     `)
-    .all(shop_id);
+    .all(shop_id)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
   const readyForPickup = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.last_activity_at, o.tracking_no, o.buyer_name
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
       ORDER BY ps.last_activity_at ASC
     `)
-    .all(shop_id);
+    .all(shop_id)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
   // Only genuinely still waiting — work hour hasn't opened yet, so
   // bookDeferredOrders hasn't even started trying to book it. Once work
@@ -639,13 +676,14 @@ router.get('/order-lists', (req, res) => {
   // "Ready to Check" once labeled — never back here.
   const readyTomorrow = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.internal_barcode, o.buyer_name
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.internal_barcode, ps.started_at, o.buyer_name, o.is_instant
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 0
       ORDER BY ps.started_at ASC
     `)
-    .all(shop_id, withinWorkHour ? 1 : 0);
+    .all(shop_id, withinWorkHour ? 1 : 0)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
   res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
 });

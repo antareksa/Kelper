@@ -225,8 +225,8 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
       throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
     }
 
-    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
-      .run(trackingNumber, docResult.pdf, packageNumber, orderSn);
+    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
+      .run(trackingNumber, docResult.pdf, now(), packageNumber, orderSn);
     console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked, tracking ${trackingNumber})`);
   } catch (err) {
     console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
@@ -533,8 +533,8 @@ function createDebugOrder(shopId) {
 function bookDebugOrder(orderSn, shopId) {
   const trackingNo = `MOCKTRACK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   const labelPdf = buildMockPdf(orderSn, trackingNo);
-  db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1 WHERE order_sn = ?')
-    .run(trackingNo, labelPdf, orderSn);
+  db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ? WHERE order_sn = ?')
+    .run(trackingNo, labelPdf, now(), orderSn);
   for (const item of pickDebugOrderItems(shopId)) {
     db.prepare('INSERT INTO order_items (order_sn, sku, product_name, qty) VALUES (?, ?, ?, ?)')
       .run(orderSn, item.sku, item.product_name, item.qty);
