@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
-const { getOrderDetail } = require('../shopee/client');
+const { getOrderDetail, cancelOrder } = require('../shopee/client');
 const { getConfig } = require('../config');
 const { isProduction } = require('../env');
 const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
@@ -706,6 +706,140 @@ router.get('/settings', (req, res) => {
 
 router.post('/settings', (req, res) => {
   res.json({ ...setPackingSettings(req.body || {}), currentlyWithinWorkHour: isWithinWorkHour() });
+});
+
+// Client-requested (2026-09-25): the Order Detail popup's single source of
+// truth for "which bucket is this order in right now" — mirrors the bucket
+// rules /order-lists computes per-column, but for one order looked up
+// directly rather than derived from which list query happened to match it.
+// `rank` gates the popup's action buttons: only Ready to Check or later
+// (rank >= 2) is far enough along to offer Cancel/Force actions — an order
+// still in Waiting List or Processing hasn't been touched yet, and Ready to
+// Process Tomorrow is deliberately the same tier as Processing (nothing to
+// manage until work hour sweeps it forward).
+function resolveOrderBucket(orderSn) {
+  const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(orderSn);
+  if (!order) return null;
+  if (order.status === 'CANCELLED') return { order, session: null, bucket: 'Cancelled', rank: -1 };
+
+  const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ?').get(orderSn);
+  const withinWorkHour = isWithinWorkHour();
+  const cutoff = now() - getOrderDelaySeconds();
+
+  if (session) {
+    if (session.status === 'DEFERRED_READY') {
+      if (order.label_ready) return { order, session, bucket: 'Ready to Check', rank: 2 };
+      return { order, session, bucket: withinWorkHour ? 'Processing' : 'Ready to Process Tomorrow', rank: 1 };
+    }
+    if (['IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN'].includes(session.status)) {
+      return { order, session, bucket: 'On Progress Check', rank: 3 };
+    }
+    if (session.status === 'READY_FOR_PICKUP') {
+      return { order, session, bucket: 'Ready to Pickup', rank: 4 };
+    }
+    return { order, session, bucket: 'Exception', rank: -1 };
+  }
+
+  if (order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
+  if (!order.label_ready && withinWorkHour) return { order, session: null, bucket: 'Processing', rank: 1 };
+  return { order, session: null, bucket: 'Ready to Check', rank: 2 };
+}
+
+// Order Detail popup (client-requested 2026-09-25): clicking any order row
+// in the Order Lists panel. Returns just enough to render it — order_sn,
+// when it was received, its shipping carrier, current bucket, per-item scan
+// progress, and whether it's already far enough along (rank >= 2) for the
+// popup's Cancel/Force actions to be offered at all.
+router.get('/order-detail', (req, res) => {
+  const { order_sn } = req.query;
+  const resolved = resolveOrderBucket(order_sn);
+  if (!resolved) return res.status(404).json({ error: 'order_not_found' });
+  const { order, session, bucket, rank } = resolved;
+
+  const items = db.prepare('SELECT sku, product_name, qty FROM order_items WHERE order_sn = ?').all(order_sn);
+  const progressBySku = session
+    ? Object.fromEntries(
+        db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(session.id).map((p) => [p.sku, p.scanned_qty])
+      )
+    : {};
+
+  res.json({
+    order_sn: order.order_sn,
+    created_at: order.created_at,
+    shipping_carrier: order.shipping_carrier,
+    bucket,
+    canManage: rank >= 2,
+    forced: session?.forced === 1,
+    items: items.map((it) => ({ ...it, scanned_qty: progressBySku[it.sku] || 0 })),
+  });
+});
+
+// Admin override for a genuinely stuck order — forces it straight to Ready
+// to Pickup regardless of real scan/label progress. `forced` is recorded on
+// the session (see db.js migration) so a forced completion stays visibly
+// distinguishable from a normal one rather than looking identical in the
+// Ready to Pickup list. Creates a session from scratch if the order never
+// had one yet (still in Waiting List/Processing/fresh Ready to Check).
+router.post('/force-ready-for-pickup', (req, res) => {
+  const { order_sn } = req.body;
+  const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
+  if (!order) return res.status(404).json({ error: 'order_not_found' });
+
+  const force = db.transaction(() => {
+    const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order_sn);
+    if (session) {
+      db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP', forced = 1, completed_at = ?, last_activity_at = ? WHERE id = ?")
+        .run(now(), now(), session.id);
+    } else {
+      db.prepare(`
+        INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, started_at, completed_at, last_activity_at, forced)
+        VALUES (?, 'ADMIN', 'Forced (Admin)', 'READY_FOR_PICKUP', ?, ?, ?, 1)
+      `).run(order_sn, now(), now(), now());
+    }
+  });
+  force();
+
+  console.log(`[server] bucket: ${order_sn} -> Ready to Pickup (FORCED via admin override)`);
+  res.json({ ok: true, order_sn });
+});
+
+// Real seller-initiated cancellation (client-requested 2026-09-25) — calls
+// Shopee's own cancel_order so the shipment is actually cancelled on their
+// side too, not just hidden in our queue (see shopee/client.js's
+// cancelOrder for the reason code). Mock orders skip the Shopee call
+// entirely, same as everywhere else debug mode touches the API. Any
+// existing packing_sessions row is torn down the same way release-order
+// does, so a cancelled order also disappears from every other bucket.
+router.post('/cancel-order', async (req, res) => {
+  const { order_sn } = req.body;
+  const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
+  if (!order) return res.status(404).json({ error: 'order_not_found' });
+  if (order.status === 'CANCELLED') return res.json({ ok: true, order_sn, alreadyCancelled: true });
+
+  if (!isMockOrder(order_sn)) {
+    try {
+      const accessToken = await getValidAccessToken(order.shop_id);
+      const result = await cancelOrder(accessToken, order.shop_id, order_sn);
+      if (result.error) {
+        return res.status(502).json({ error: 'shopee_cancel_failed', message: result.message || result.error });
+      }
+    } catch (err) {
+      return res.status(502).json({ error: 'shopee_cancel_failed', message: err.message });
+    }
+  }
+
+  const cancel = db.transaction(() => {
+    const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order_sn);
+    if (session) {
+      db.prepare('DELETE FROM scan_progress WHERE session_id = ?').run(session.id);
+      db.prepare('DELETE FROM packing_sessions WHERE id = ?').run(session.id);
+    }
+    db.prepare("UPDATE orders SET status = 'CANCELLED' WHERE order_sn = ?").run(order_sn);
+  });
+  cancel();
+
+  console.log(`[server] order ${order_sn} cancelled via admin action (Order Detail popup)`);
+  res.json({ ok: true, order_sn });
 });
 
 // Test-only helper: simulate a Shopee cancellation happening overnight, to

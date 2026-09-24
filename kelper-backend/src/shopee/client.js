@@ -219,6 +219,19 @@ function shipOrder(accessToken, shopId, body) {
   return shopPost('/api/v2/logistics/ship_order', accessToken, shopId, body);
 }
 
+// Client-requested (2026-09-25): a real seller-initiated cancellation, not
+// just hiding the order locally — omitting item_list cancels the whole
+// order rather than specific line items. 'OUT_OF_STOCK' is the standard
+// reason Shopee accepts for a seller cancelling a READY_TO_SHIP order with
+// no buyer-initiated request behind it; there's no UI to pick a different
+// reason since the Order Detail popup only exposes one Cancel action.
+function cancelOrder(accessToken, shopId, orderSn, cancelReason = 'OUT_OF_STOCK') {
+  return shopPost('/api/v2/order/cancel_order', accessToken, shopId, {
+    order_sn: orderSn,
+    cancel_reason: cancelReason,
+  });
+}
+
 function createShippingDocument(accessToken, shopId, orderSn, trackingNumber) {
   return shopPost('/api/v2/logistics/create_shipping_document', accessToken, shopId, {
     order_list: [{ order_sn: orderSn, tracking_number: trackingNumber }],
@@ -267,6 +280,7 @@ module.exports = {
   massShipOrder,
   getTrackingNumber,
   shipOrder,
+  cancelOrder,
   createShippingDocument,
   getShippingDocumentResult,
   downloadShippingDocument,

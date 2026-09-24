@@ -22,6 +22,13 @@ function formatTime(ts) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+function formatDateTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())} ${pad(d.getMonth() + 1)} ${d.getFullYear()} - ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 // Order tags (client-requested 2026-09-25): Instant Shipping, Order from
 // Yesterday, Stuck in Ready to Check — computed server-side (see
 // routes/packing.js's computeTags) since "from yesterday"/"stuck" both need
@@ -51,6 +58,83 @@ function OrderTags({ tags }) {
     </div>
   );
 }
+
+// Order Detail popup (client-requested 2026-09-25) — opened by clicking any
+// order row in any Order Lists bucket. The Cancel/Force buttons only render
+// once the order is at least Ready to Check (detail.canManage, computed
+// server-side by resolveOrderBucket) — nothing to manage on an order that
+// hasn't even started its flow yet.
+function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForceReady, onCancelOrder, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card(), width: 560, maxWidth: '90vw', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: colors.text, marginBottom: 10 }}>ORDER ID - {orderSn}</div>
+
+        {loading ? (
+          <p style={{ color: colors.textDim, fontSize: 13 }}>Memuat...</p>
+        ) : error ? (
+          <p style={{ color: colors.red, fontSize: 13 }}>{error}</p>
+        ) : detail ? (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: colors.orange, marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div>DITERIMA - {formatDateTime(detail.created_at)}</div>
+                <div>SHIPPING - {detail.shipping_carrier || '—'}</div>
+              </div>
+              <div>CURRENT STATUS - {detail.bucket}{detail.forced ? ' (FORCED)' : ''}</div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+              {detail.items.length === 0 ? (
+                <p style={{ color: colors.textDim, fontSize: 13 }}>Belum ada data item.</p>
+              ) : (
+                detail.items.map((it) => (
+                  <div key={it.sku} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: 6, fontSize: 12.5 }}>
+                    <div>
+                      <div style={{ color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{it.sku}</div>
+                      <div style={{ color: colors.textDim, fontSize: 11 }}>{it.product_name}</div>
+                    </div>
+                    <div style={{ color: colors.text, fontFamily: 'var(--num)', fontWeight: 600 }}>{it.scanned_qty}/{it.qty}</div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {detail.canManage && (
+                  <>
+                    <button onClick={onForceReady} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: actionBusy ? 0.6 : 1 }}>
+                      Move to Ready to Pick Up
+                    </button>
+                    <button onClick={onCancelOrder} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.red, color: colors.red, opacity: actionBusy ? 0.6 : 1 }}>
+                      Cancel Order
+                    </button>
+                  </>
+                )}
+              </div>
+              <button onClick={onClose} disabled={actionBusy} style={modalButtonStyle}>Close</button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const modalButtonStyle = {
+  padding: '8px 14px',
+  borderRadius: 8,
+  border: `1px solid ${colors.border}`,
+  background: colors.cardAlt,
+  color: colors.text,
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
 
 function ActiveStation() {
   const [stations, setStations] = useState([]);
@@ -121,6 +205,16 @@ function OrderLists() {
   // guess of the state.
   const [syncEnabled, setSyncEnabled] = useState(null);
   const [toggling, setToggling] = useState(false);
+
+  // Order Detail popup (client-requested 2026-09-25) — opened by clicking any
+  // row in any bucket. Fetched fresh per open rather than reused from the
+  // row data already in `lists`, since the popup shows per-item scan
+  // progress the list rows don't carry.
+  const [selectedOrderSn, setSelectedOrderSn] = useState(null);
+  const [orderDetail, setOrderDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   // Packing Station configuration (client-requested 2026-09-22): Delay
   // (minutes an order sits in Waiting List before it's eligible for
@@ -235,6 +329,71 @@ function OrderLists() {
       if (res.ok) setSyncEnabled((await res.json()).enabled);
     } finally {
       setToggling(false);
+    }
+  }
+
+  async function openOrderDetail(orderSn) {
+    setSelectedOrderSn(orderSn);
+    setOrderDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/packing/order-detail?order_sn=${encodeURIComponent(orderSn)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      setOrderDetail(data);
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeOrderDetail() {
+    setSelectedOrderSn(null);
+    setOrderDetail(null);
+    setDetailError(null);
+  }
+
+  async function handleForceReady() {
+    if (!window.confirm(`Paksa order ${selectedOrderSn} langsung ke Ready to Pickup? Ini melewati proses scan/label normal.`)) return;
+    setActionBusy(true);
+    setDetailError(null);
+    try {
+      const res = await fetch(`${API_BASE}/packing/force-ready-for-pickup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_sn: selectedOrderSn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      closeOrderDetail();
+      load();
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleCancelOrder() {
+    if (!window.confirm(`Batalkan order ${selectedOrderSn} di Shopee? Tindakan ini akan membatalkan pesanan sungguhan dan tidak bisa dibatalkan.`)) return;
+    setActionBusy(true);
+    setDetailError(null);
+    try {
+      const res = await fetch(`${API_BASE}/packing/cancel-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_sn: selectedOrderSn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      closeOrderDetail();
+      load();
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -452,7 +611,11 @@ function OrderLists() {
                 <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Empty.</p>
               ) : (
                 rows.map((row) => (
-                  <div key={row.order_sn} style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5 }}>
+                  <div
+                    key={row.order_sn}
+                    onClick={() => openOrderDetail(row.order_sn)}
+                    style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5, cursor: 'pointer' }}
+                  >
                     <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
                     {(row.station_id || row.operator_name) && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
@@ -484,6 +647,19 @@ function OrderLists() {
         );
       })}
       </div>
+
+      {selectedOrderSn && (
+        <OrderDetailModal
+          orderSn={selectedOrderSn}
+          detail={orderDetail}
+          loading={detailLoading}
+          error={detailError}
+          actionBusy={actionBusy}
+          onForceReady={handleForceReady}
+          onCancelOrder={handleCancelOrder}
+          onClose={closeOrderDetail}
+        />
+      )}
     </div>
   );
 }

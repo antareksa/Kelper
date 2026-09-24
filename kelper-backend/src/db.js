@@ -207,6 +207,14 @@ const packingSessionCols = db.prepare("PRAGMA table_info(packing_sessions)").all
 if (!packingSessionCols.includes('last_activity_at')) {
   db.exec('ALTER TABLE packing_sessions ADD COLUMN last_activity_at INTEGER');
 }
+// Client-requested (2026-09-25): set only by the Order Detail popup's "Move
+// to Ready to Pickup" admin override (routes/packing.js's
+// /force-ready-for-pickup) — marks a session that skipped the normal
+// scan/label flow, so it stays visibly distinguishable from a genuinely
+// completed one instead of looking identical in Ready to Pickup.
+if (!packingSessionCols.includes('forced')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN forced INTEGER NOT NULL DEFAULT 0');
+}
 
 // Non-destructive migration for the server's background sync flow: orders
 // now carry their own pre-fetched shipment/label data instead of that being
