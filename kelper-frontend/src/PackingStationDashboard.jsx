@@ -64,7 +64,7 @@ function OrderTags({ tags }) {
 // once the order is at least Ready to Check (detail.canManage, computed
 // server-side by resolveOrderBucket) — nothing to manage on an order that
 // hasn't even started its flow yet.
-function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForceReady, onCancelOrder, onClose }) {
+function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForceReady, onForcePickup, onCancelOrder, onClose }) {
   return (
     <div
       onClick={onClose}
@@ -110,6 +110,11 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
                     <button onClick={onForceReady} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: actionBusy ? 0.6 : 1 }}>
                       Move to Ready to Pick Up
                     </button>
+                    {detail.bucket === 'Ready to Pickup' && (
+                      <button onClick={onForcePickup} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.blue, color: colors.blue, opacity: actionBusy ? 0.6 : 1 }}>
+                        Force Pickup
+                      </button>
+                    )}
                     <button onClick={onCancelOrder} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.red, color: colors.red, opacity: actionBusy ? 0.6 : 1 }}>
                       Cancel Order
                     </button>
@@ -356,7 +361,7 @@ function OrderLists() {
   }
 
   async function handleForceReady() {
-    if (!window.confirm(`Paksa order ${selectedOrderSn} langsung ke Ready to Pickup? Ini melewati proses scan/label normal.`)) return;
+    if (!window.confirm(`Are you sure? This will force order ${selectedOrderSn} straight to Ready to Pickup, skipping the normal scan/label process.`)) return;
     setActionBusy(true);
     setDetailError(null);
     try {
@@ -376,8 +381,32 @@ function OrderLists() {
     }
   }
 
+  // Same effect as Shipping Mode's real barcode scan (/confirm-pickup) —
+  // this just lets an admin trigger it here for an order already sitting in
+  // Ready to Pickup, without needing the physical label in hand.
+  async function handleForcePickup() {
+    if (!window.confirm(`Are you sure? This will mark order ${selectedOrderSn} as picked up, the same as scanning its label in Shipping Mode.`)) return;
+    setActionBusy(true);
+    setDetailError(null);
+    try {
+      const res = await fetch(`${API_BASE}/packing/confirm-pickup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_sn: selectedOrderSn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      closeOrderDetail();
+      load();
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   async function handleCancelOrder() {
-    if (!window.confirm(`Batalkan order ${selectedOrderSn} di Shopee? Tindakan ini akan membatalkan pesanan sungguhan dan tidak bisa dibatalkan.`)) return;
+    if (!window.confirm(`Are you sure? This will cancel order ${selectedOrderSn} on Shopee for real, and cannot be undone.`)) return;
     setActionBusy(true);
     setDetailError(null);
     try {
@@ -656,6 +685,7 @@ function OrderLists() {
           error={detailError}
           actionBusy={actionBusy}
           onForceReady={handleForceReady}
+          onForcePickup={handleForcePickup}
           onCancelOrder={handleCancelOrder}
           onClose={closeOrderDetail}
         />
