@@ -231,6 +231,33 @@ function CostBreakdown({ iklan, layanan, biayaPesanan }) {
   );
 }
 
+// Ranked on the client's own manually-entered dashboard stock (products.stock),
+// not Shopee's live stock — see the backend's stockRankSelect for why. Only
+// SKUs with a value show up at all, so an unfilled stock never masquerades
+// as "0, least in stock".
+function StockList({ label, items }) {
+  return (
+    <div style={card({ flex: 1 })}>
+      <CardHeader label={label} />
+      {items.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>
+          Belum ada produk dengan Stok Dashboard terisi.
+        </div>
+      ) : (
+        items.map((p) => (
+          <div key={p.sku} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+            <div>
+              <div style={{ color: colors.text }}>{p.name}</div>
+              <div style={{ color: colors.textDim, fontSize: 11 }}>{p.sku}</div>
+            </div>
+            <div style={{ color: colors.text, fontFamily: 'var(--num)', fontWeight: 600 }}>{p.stock}</div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function BocorList({ leaking }) {
   return (
     <div style={card({ flex: 1 })}>
@@ -344,6 +371,11 @@ function MainDashboard() {
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <ProductList products={data.topProducts} />
         <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+        <StockList label="5 Stok Dashboard Terbanyak" items={data.mostStock} />
+        <StockList label="5 Stok Dashboard Tersedikit" items={data.leastStock} />
       </div>
 
       <BocorList leaking={data.leaking} />

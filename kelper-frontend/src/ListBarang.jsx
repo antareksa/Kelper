@@ -24,7 +24,7 @@ function formatRupiah(value) {
 }
 
 const TABLE_GRID = '32px minmax(220px,2fr) 90px 100px 90px 100px 90px 130px 130px 44px';
-const SUB_GRID = '110px 1fr 60px 110px 100px 150px 100px 90px 80px 80px 120px 120px 90px';
+const SUB_GRID = '110px 1fr 90px 110px 100px 150px 100px 90px 80px 80px 120px 120px 90px';
 
 function SummaryCard({ label, value, accent }) {
   return (
@@ -116,7 +116,67 @@ function ImageHoverPreview({ src, anchorRect }) {
   );
 }
 
-function ProductRow({ product, expanded, onToggle }) {
+// Manually-entered stock, separate from Shopee's own "Stok" column — see
+// db.js's migration comment for why the client wants these to be able to
+// disagree. Saves on blur/Enter rather than per-keystroke; an empty field
+// clears it back to null (unknown), not 0.
+function StockInput({ sku, value, onSaved }) {
+  const [draft, setDraft] = useState(value == null ? '' : String(value));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(value == null ? '' : String(value));
+  }, [value]);
+
+  async function save() {
+    const trimmed = draft.trim();
+    const next = trimmed === '' ? null : Number(trimmed);
+    if (next === value) return;
+    if (next != null && (!Number.isInteger(next) || next < 0)) {
+      setDraft(value == null ? '' : String(value));
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/products/${encodeURIComponent(sku)}/stock`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock: next }),
+      });
+      if (res.ok) onSaved(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      min="0"
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      placeholder="—"
+      disabled={saving}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        background: colors.cardAlt,
+        border: `1px solid ${colors.border}`,
+        borderRadius: 6,
+        color: colors.text,
+        fontFamily: 'var(--num)',
+        fontSize: 12.5,
+        padding: '4px 6px',
+        opacity: saving ? 0.6 : 1,
+      }}
+    />
+  );
+}
+
+function ProductRow({ product, expanded, onToggle, onStockSaved }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -228,7 +288,9 @@ function ProductRow({ product, expanded, onToggle }) {
                     <span style={{ color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{v.sku}</span>
                   </div>
                   <div style={{ color: colors.text }}>{v.name}</div>
-                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{v.stock ?? '—'}</div>
+                  <div>
+                    <StockInput sku={v.sku} value={v.dashboardStock} onSaved={(next) => onStockSaved(v.sku, next)} />
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: v.hpp == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>
                     {formatRupiah(v.hpp)}
                   </div>
@@ -285,6 +347,15 @@ function ListBarang() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Updates the just-saved variant's dashboardStock in place rather than a
+  // full loadCatalog() round-trip — the PUT already confirmed it saved.
+  function handleStockSaved(sku, next) {
+    setCatalog((prev) => prev.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => (v.sku === sku ? { ...v, dashboardStock: next } : v)),
+    })));
   }
 
   async function handleSync() {
@@ -470,6 +541,7 @@ function ListBarang() {
                     product={p}
                     expanded={expandedSku === p.sku}
                     onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
+                    onStockSaved={handleStockSaved}
                   />
                 ))}
               </div>

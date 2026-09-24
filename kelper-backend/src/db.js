@@ -249,4 +249,14 @@ if (!shopeeModelCols.includes('image_url')) {
   db.exec('ALTER TABLE shopee_item_models ADD COLUMN image_url TEXT');
 }
 
+// Client-requested (2026-09-25): a manually-entered stock count per SKU,
+// deliberately separate from shopee_item_models.stock (Shopee's own live
+// stock, pulled by sync-shopee) — the two are allowed to disagree, same
+// "two sources of truth joined by SKU, never merged" rule as hpp/barcode
+// above. NULL (not 0) until the client actually enters a value.
+const productCols = db.prepare("PRAGMA table_info(products)").all().map((c) => c.name);
+if (!productCols.includes('stock')) {
+  db.exec('ALTER TABLE products ADD COLUMN stock INTEGER');
+}
+
 module.exports = db;

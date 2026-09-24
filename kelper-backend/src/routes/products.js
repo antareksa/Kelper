@@ -75,6 +75,29 @@ router.get('/', (req, res) => {
   res.json(rows);
 });
 
+// Upserts only `stock` — a bare INSERT ... ON CONFLICT touching every column
+// (like upsertProduct above) would blank out an existing row's name/hpp/
+// barcode for a SKU that's never been through the HPP import.
+const upsertStock = db.prepare(`
+  INSERT INTO products (sku, stock, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    stock = excluded.stock,
+    updated_at = excluded.updated_at
+`);
+
+// Client's own manual stock count per SKU — see db.js migration comment for
+// why this is a separate field from Shopee's live stock.
+router.put('/:sku/stock', (req, res) => {
+  const sku = req.params.sku;
+  const { stock } = req.body;
+  if (stock !== null && (typeof stock !== 'number' || !Number.isInteger(stock) || stock < 0)) {
+    return res.status(400).json({ error: 'invalid_stock', message: 'stock must be a non-negative integer or null.' });
+  }
+  upsertStock.run(sku, stock, Math.floor(Date.now() / 1000));
+  res.json({ ok: true, sku, stock });
+});
+
 const upsertItem = db.prepare(`
   INSERT INTO shopee_items (item_id, shop_id, item_sku, name, item_status, min_purchase_limit, has_model, image_url, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -216,7 +239,7 @@ router.post('/sync-shopee', async (req, res) => {
 router.get('/catalog', (req, res) => {
   const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all();
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
-  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
+  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock FROM products').all().map((p) => [p.sku, p]));
 
   const modelsByItem = new Map();
   for (const m of models) {
@@ -230,6 +253,7 @@ router.get('/catalog', (req, res) => {
       const matched = productBySku.get(sku);
       const hpp = matched?.hpp ?? null;
       const barcode = matched?.barcode ?? null;
+      const dashboardStock = matched?.stock ?? null;
       const profit = hpp != null && m.price != null ? m.price - hpp : null;
       const profitPct = profit != null && m.price ? Math.round((profit / m.price) * 1000) / 10 : null;
       return {
@@ -238,6 +262,7 @@ router.get('/catalog', (req, res) => {
         name: m.model_name,
         price: m.price,
         stock: m.stock,
+        dashboardStock,
         status: m.model_status,
         image: m.image_url || item.image_url || null,
         hpp,

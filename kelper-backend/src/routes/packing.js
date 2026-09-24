@@ -17,6 +17,18 @@ function touch(sessionId) {
   db.prepare('UPDATE packing_sessions SET last_activity_at = ? WHERE id = ?').run(now(), sessionId);
 }
 
+// Client-requested (2026-09-25): the manual dashboard stock (products.stock,
+// see db.js) is consumed as items get physically scanned for shipping, and
+// restored if a scan is undone. A SKU with no dashboard stock entered yet
+// (NULL) stays NULL either way — nothing to consume, per the "unknown is
+// never treated as zero" rule — and consumption never goes below zero.
+const consumeStock = db.prepare(`
+  UPDATE products SET stock = MAX(stock - 1, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
+`);
+const restoreStock = db.prepare(`
+  UPDATE products SET stock = stock + 1, updated_at = ? WHERE sku = ? AND stock IS NOT NULL
+`);
+
 // Debug mode — mock orders never touch the real Shopee API. Marked by an
 // order_sn prefix so the one remaining Shopee-calling step (the leftover
 // cancellation recheck) can tell a mock order apart from a real one.
@@ -278,6 +290,7 @@ router.post('/scan-item', (req, res) => {
     INSERT INTO scan_progress (session_id, sku, scanned_qty) VALUES (?, ?, 1)
     ON CONFLICT(session_id, sku) DO UPDATE SET scanned_qty = scanned_qty + 1
   `).run(session_id, sku);
+  consumeStock.run(now(), sku);
   touch(session_id);
 
   const updated = getSessionWithOrder(session_id);
@@ -294,6 +307,7 @@ router.post('/undo-last-scan', (req, res) => {
     return res.status(400).json({ error: 'nothing_to_undo' });
   }
   db.prepare('UPDATE scan_progress SET scanned_qty = scanned_qty - 1 WHERE session_id = ? AND sku = ?').run(session_id, sku);
+  restoreStock.run(now(), sku);
   touch(session_id);
   res.json(getSessionWithOrder(session_id));
 });

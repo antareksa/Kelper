@@ -187,6 +187,26 @@ router.get('/summary', (req, res) => {
     `)
     .all(shopId);
 
+  // Most/least dashboard-stock products — the client's own manually-entered
+  // stock (products.stock), deliberately not Shopee's live stock: the two
+  // are allowed to disagree (see db.js migration comment). Only SKUs that
+  // actually have a value are ranked; an unset stock is unknown, not zero,
+  // so it must never show up as "least stock" by default.
+  const stockRankBase = `
+    FROM shopee_item_models m
+    JOIN shopee_items i ON i.item_id = m.item_id
+    JOIN products p ON p.sku = COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id)
+    WHERE i.shop_id = ? AND i.item_status = 'NORMAL' AND p.stock IS NOT NULL
+  `;
+  const stockRankSelect = `
+    SELECT COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku,
+      COALESCE(m.model_name, i.name) AS name,
+      p.stock AS stock
+    ${stockRankBase}
+  `;
+  const mostStock = db.prepare(`${stockRankSelect} ORDER BY p.stock DESC LIMIT 5`).all(shopId);
+  const leastStock = db.prepare(`${stockRankSelect} ORDER BY p.stock ASC LIMIT 5`).all(shopId);
+
   // Affiliasi comes from a completely separate source (Brand Portal's
   // get_shop_affiliate_performance, fetched once daily — see
   // shopeeSync.js's fetchAffiliatePerformance) with its own 1-day reporting
@@ -250,6 +270,8 @@ router.get('/summary', (req, res) => {
     todayHourly: { omzet: hourlyOmzet, laba: hourlyLaba },
     topProducts,
     leaking,
+    mostStock,
+    leastStock,
     // Every metric this Dashboard shows now has a real data source
     // (escrow, Ads Performance, Brand Portal) — kept as an empty array
     // rather than removed, since the frontend still checks it per metric.
