@@ -467,26 +467,60 @@ router.post('/confirm-print', (req, res) => {
 // The barcode actually printed on a real Shopee label encodes the order id
 // ("No. Pesanan" / order_sn), not the tracking/shipping number — confirmed
 // against a real printed label.
-router.post('/confirm-pickup', (req, res) => {
-  const { order_sn: scannedOrderSn } = req.body;
-  const session = db.prepare("SELECT * FROM packing_sessions WHERE order_sn = ? AND status = 'READY_FOR_PICKUP'").get(scannedOrderSn);
-  if (!session) {
-    return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scannedOrderSn} is not in the Ready to Pickup pool` });
-  }
+// Shared by the route below and the "Force All Pickup" bulk action. Returns
+// the picked-up timestamp, or null if the order wasn't actually in
+// Ready to Pickup (caller decides how to report that).
+function confirmOrderPickedUp(orderSn) {
+  const session = db.prepare("SELECT * FROM packing_sessions WHERE order_sn = ? AND status = 'READY_FOR_PICKUP'").get(orderSn);
+  if (!session) return null;
 
   const pickedUpAt = now();
   db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(pickedUpAt, session.id);
-  db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(scannedOrderSn);
+  db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(orderSn);
 
   // Shopee "confirm pickup" API: not currently used anywhere in this
   // codebase, and unconfirmed whether one exists/is required for
   // pickup-method orders — call it here if/when that's settled.
+  return pickedUpAt;
+}
+
+router.post('/confirm-pickup', (req, res) => {
+  const { order_sn: scannedOrderSn } = req.body;
+  const pickedUpAt = confirmOrderPickedUp(scannedOrderSn);
+  if (pickedUpAt == null) {
+    return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scannedOrderSn} is not in the Ready to Pickup pool` });
+  }
 
   // created_at/picked_up_at let the Shipping Mode screen show the same
   // "ORDER ID / DITERIMA / DIPICKUP EKSPEDISI" confirmation as the wireframe,
   // instead of just an ok flag.
   const order = db.prepare('SELECT created_at FROM orders WHERE order_sn = ?').get(scannedOrderSn);
   res.json({ ok: true, order_sn: scannedOrderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
+});
+
+// "Force All Pickup" (client-requested 2026-09-25) — the bulk form of
+// confirm-pickup, for every order currently sitting in Ready to Pickup, the
+// same as scanning each one's label in Shipping Mode without needing the
+// physical labels in hand.
+router.post('/force-pickup-all', (req, res) => {
+  const shopId = Number(req.body.shop_id || req.query.shop_id);
+  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const orderSns = db
+    .prepare(`
+      SELECT o.order_sn FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+    `)
+    .all(shopId)
+    .map((r) => r.order_sn);
+
+  const run = db.transaction(() => {
+    for (const orderSn of orderSns) confirmOrderPickedUp(orderSn);
+  });
+  run();
+
+  res.json({ ok: true, count: orderSns.length });
 });
 
 // REPRINT RESI — returns the existing label, never creates a new shipment
@@ -780,27 +814,54 @@ router.get('/order-detail', (req, res) => {
 // distinguishable from a normal one rather than looking identical in the
 // Ready to Pickup list. Creates a session from scratch if the order never
 // had one yet (still in Waiting List/Processing/fresh Ready to Check).
+// Shared by the single-order route below and the "Move All to Ready to
+// Pickup" bulk action.
+function forceOrderToReadyForPickup(orderSn) {
+  const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(orderSn);
+  if (session) {
+    db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP', forced = 1, completed_at = ?, last_activity_at = ? WHERE id = ?")
+      .run(now(), now(), session.id);
+  } else {
+    db.prepare(`
+      INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, started_at, completed_at, last_activity_at, forced)
+      VALUES (?, 'ADMIN', 'Forced (Admin)', 'READY_FOR_PICKUP', ?, ?, ?, 1)
+    `).run(orderSn, now(), now(), now());
+  }
+  console.log(`[server] bucket: ${orderSn} -> Ready to Pickup (FORCED via admin override)`);
+}
+
 router.post('/force-ready-for-pickup', (req, res) => {
   const { order_sn } = req.body;
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
   if (!order) return res.status(404).json({ error: 'order_not_found' });
 
-  const force = db.transaction(() => {
-    const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order_sn);
-    if (session) {
-      db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP', forced = 1, completed_at = ?, last_activity_at = ? WHERE id = ?")
-        .run(now(), now(), session.id);
-    } else {
-      db.prepare(`
-        INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, started_at, completed_at, last_activity_at, forced)
-        VALUES (?, 'ADMIN', 'Forced (Admin)', 'READY_FOR_PICKUP', ?, ?, ?, 1)
-      `).run(order_sn, now(), now(), now());
-    }
-  });
-  force();
-
-  console.log(`[server] bucket: ${order_sn} -> Ready to Pickup (FORCED via admin override)`);
+  db.transaction(() => forceOrderToReadyForPickup(order_sn))();
   res.json({ ok: true, order_sn });
+});
+
+// "Move All to Ready to Pickup" (client-requested 2026-09-25) — the bulk
+// form of the single-order action above, for every order currently at
+// Ready to Check or On Progress Check (rank 2/3, via the same
+// resolveOrderBucket the Order Detail popup uses to gate its own button).
+// Waiting List/Processing/Ready to Process Tomorrow are excluded, same as
+// the single-order button never showing for them; already-Ready-to-Pickup
+// or terminal (Cancelled/Done) orders are naturally excluded too.
+router.post('/force-ready-for-pickup-all', (req, res) => {
+  const shopId = Number(req.body.shop_id || req.query.shop_id);
+  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const orderSns = db.prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK'").all(shopId).map((r) => r.order_sn);
+  const candidates = orderSns.filter((sn) => {
+    const resolved = resolveOrderBucket(sn);
+    return resolved && (resolved.bucket === 'Ready to Check' || resolved.bucket === 'On Progress Check');
+  });
+
+  const run = db.transaction(() => {
+    for (const orderSn of candidates) forceOrderToReadyForPickup(orderSn);
+  });
+  run();
+
+  res.json({ ok: true, count: candidates.length });
 });
 
 // Real seller-initiated cancellation (client-requested 2026-09-25) — calls

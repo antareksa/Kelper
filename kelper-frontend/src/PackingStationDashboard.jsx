@@ -220,6 +220,7 @@ function OrderLists() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(null); // null | 'moveAll' | 'forceAll'
 
   // Packing Station configuration (client-requested 2026-09-22): Delay
   // (minutes an order sits in Waiting List before it's eligible for
@@ -426,6 +427,33 @@ function OrderLists() {
     }
   }
 
+  // Bulk forms of the Order Detail popup's per-order actions (client-
+  // requested 2026-09-25) — one click across every eligible order instead of
+  // opening each one individually. Same backend rules apply per order (see
+  // /force-ready-for-pickup-all and /force-pickup-all), this button is just
+  // the trigger.
+  async function handleMoveAllToReadyForPickup() {
+    if (!window.confirm('Are you sure? This will force every order currently at Ready to Check or On Progress Check straight to Ready to Pickup, skipping the normal scan/label process.')) return;
+    setBulkBusy('moveAll');
+    try {
+      const res = await fetch(`${API_BASE}/packing/force-ready-for-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
+      if (res.ok) load();
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
+  async function handleForceAllPickup() {
+    if (!window.confirm('Are you sure? This will mark every order currently in Ready to Pickup as picked up, the same as scanning each one in Shipping Mode.')) return;
+    setBulkBusy('forceAll');
+    try {
+      const res = await fetch(`${API_BASE}/packing/force-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
+      if (res.ok) load();
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
   const columns = [
     { key: 'waitingList', title: 'Waiting List' },
     { key: 'processing', title: 'Processing' },
@@ -621,6 +649,20 @@ function OrderLists() {
           }}
         >
           {savingSettings ? 'Menyimpan...' : 'Simpan'}
+        </button>
+        <button
+          onClick={handleMoveAllToReadyForPickup}
+          disabled={bulkBusy !== null}
+          style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: bulkBusy !== null ? 0.6 : 1 }}
+        >
+          {bulkBusy === 'moveAll' ? 'Memproses...' : 'MOVE ALL TO READY TO PICKUP'}
+        </button>
+        <button
+          onClick={handleForceAllPickup}
+          disabled={bulkBusy !== null}
+          style={{ ...modalButtonStyle, borderColor: colors.blue, color: colors.blue, opacity: bulkBusy !== null ? 0.6 : 1 }}
+        >
+          {bulkBusy === 'forceAll' ? 'Memproses...' : 'FORCE ALL PICKUP'}
         </button>
       </div>
 
