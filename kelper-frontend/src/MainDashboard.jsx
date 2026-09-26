@@ -3,14 +3,9 @@ import { colors, card } from './theme';
 import { Sparkline } from './Sparkline';
 import { IconArrowUpRight } from './Icons';
 import { useShopName } from './useShopName';
+import { SHOP_ID } from './shopConfig';
+import { API_BASE, apiFetch } from './apiBase';
 
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const SHOP_ID = 227886187;
 const REFRESH_MS = 60000;
 
 function formatRupiah(value) {
@@ -294,7 +289,7 @@ function MainDashboard() {
 
   async function load() {
     try {
-      const res = await fetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}`);
+      const res = await apiFetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}`);
       if (res.ok) {
         setData(await res.json());
         setLastRefreshAt(Date.now());

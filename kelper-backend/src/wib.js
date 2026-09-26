@@ -27,6 +27,15 @@ function startOfTodayWIB() {
   return startOfDayWIB(0);
 }
 
+// Unix seconds for the 1st of the month at 00:00 WIB, `monthsAgo` months
+// back (0 = this month) — used for "Bulan Ini"/"Bulan Lalu" comparisons
+// (see routes/products.js's catalog Qty/Omset Ini/Lalu columns).
+function startOfMonthWIB(monthsAgo = 0) {
+  const wib = nowInWIB();
+  const midnightUtcMs = Date.UTC(wib.getUTCFullYear(), wib.getUTCMonth() - monthsAgo, 1);
+  return Math.floor((midnightUtcMs - WIB_OFFSET_MS) / 1000);
+}
+
 // YYYY-MM-DD for `daysAgo` days back, WIB wall-clock date — the format
 // Shopee's date-range APIs (e.g. get_shop_affiliate_performance) expect.
 function dateStringWIB(daysAgo = 0) {
@@ -43,4 +52,4 @@ function dateStringDDMMYYYYWIB(daysAgo = 0) {
   return `${day}-${month}-${year}`;
 }
 
-module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, dateStringWIB, dateStringDDMMYYYYWIB };
+module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, startOfMonthWIB, dateStringWIB, dateStringDDMMYYYYWIB };

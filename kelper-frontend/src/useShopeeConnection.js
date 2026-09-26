@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
-
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const SHOP_ID = 227886187;
+import { SHOP_ID } from './shopConfig';
+import { API_BASE, apiFetch } from './apiBase';
 
 // Shared Shopee-connection check — used by both the sidebar's compact status
 // (ShopeeAuth) and the Dashboard's first-login connect prompt, so there's
@@ -37,7 +31,7 @@ export function useShopeeConnection(enabled = true, variant = 'main') {
         if (cancelled) return;
         setConnected(!!data.connected);
         if (data.connected && variant === 'main') {
-          const infoRes = await fetch(`${API_BASE}/shop/info?shop_id=${SHOP_ID}`);
+          const infoRes = await apiFetch(`${API_BASE}/shop/info?shop_id=${SHOP_ID}`);
           const infoData = await infoRes.json();
           if (!cancelled && infoRes.ok) setShopName(infoData.shop_name);
         }

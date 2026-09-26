@@ -1,22 +1,18 @@
 // Wired to the local Shopee catalog cache (synced on demand via the Refresh
 // button, not fetched live on every page load — see /products/sync-shopee).
-// Trend and Omset Ini/Lalu need order-history aggregation, a separate,
-// bigger feature not built yet — shown as "—" rather than faked, same rule
-// the tech doc sets for HPP: an unknown number is never presented as zero.
+// Trend and Qty/Omset Ini/Lalu (client-requested 2026-09-26) compare this
+// calendar month (WIB) so far against the full previous one, computed
+// server-side in /products/catalog — Omset is qty x current catalog price
+// (no real historical per-order price available for this shop), same
+// estimate trade-off the rest of the app already makes, not a new one.
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { colors, card } from './theme';
 import { IconSearch, IconRefresh, IconUpload, IconStore, IconHistory, IconChevronDown } from './Icons';
 import { useShopName } from './useShopName';
-
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
-const SHOP_ID = 227886187;
+import { SHOP_ID } from './shopConfig';
+import { API_BASE, apiFetch } from './apiBase';
 
 function formatRupiah(value) {
   if (value == null) return '—';
@@ -138,7 +134,7 @@ function StockInput({ sku, value, onSaved }) {
     }
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/products/${encodeURIComponent(sku)}/stock`, {
+      const res = await apiFetch(`${API_BASE}/products/${encodeURIComponent(sku)}/stock`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stock: next }),
@@ -241,7 +237,7 @@ function ProductRow({ product, expanded, onToggle, onStockSaved }) {
 
         <div style={{ fontSize: 12.5, color: colors.blue, fontFamily: 'ui-monospace, monospace' }}>{product.sku}</div>
 
-        <TrendBadge value={null} />
+        <TrendBadge value={product.trendPct} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>
           {product.minPurchase ?? '—'}
@@ -251,8 +247,8 @@ function ProductRow({ product, expanded, onToggle, onStockSaved }) {
           {profitPct == null ? '—' : `${profitPct}%`}
         </div>
 
-        <div style={{ fontSize: 12.5, color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
-        <div style={{ fontSize: 12.5, color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+        <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(product.omsetIni)}</div>
+        <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(product.omsetLalu)}</div>
 
         <button style={{ background: 'none', border: 'none', color: colors.textDim, cursor: 'pointer', padding: 4 }}>
           <IconHistory size={14} />
@@ -306,10 +302,10 @@ function ProductRow({ product, expanded, onToggle, onStockSaved }) {
                   <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>
                     {v.profitPct == null ? '—' : `${v.profitPct}%`}
                   </div>
-                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
-                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
-                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
-                  <div style={{ color: colors.textFaint, fontFamily: 'var(--num)' }}>—</div>
+                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{v.qtyIni}</div>
+                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{v.qtyLalu}</div>
+                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.omsetIni)}</div>
+                  <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.omsetLalu)}</div>
                   <div />
                 </div>
               ))}
@@ -342,7 +338,7 @@ function ListBarang() {
   async function loadCatalog() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/products/catalog`);
+      const res = await apiFetch(`${API_BASE}/products/catalog`);
       setCatalog(await res.json());
     } finally {
       setLoading(false);
@@ -362,7 +358,7 @@ function ListBarang() {
     setSyncing(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/products/sync-shopee?shop_id=${SHOP_ID}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/products/sync-shopee?shop_id=${SHOP_ID}`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       await loadCatalog();
@@ -387,7 +383,7 @@ function ListBarang() {
     try {
       const body = new FormData();
       body.append('file', file);
-      const res = await fetch(`${API_BASE}/products/import-hpp`, { method: 'POST', body });
+      const res = await apiFetch(`${API_BASE}/products/import-hpp`, { method: 'POST', body });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
 

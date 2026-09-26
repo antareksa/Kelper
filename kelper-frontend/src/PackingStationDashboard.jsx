@@ -2,18 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { colors, card } from './theme';
 import { renderCode39Svg } from './Barcode';
 import { IconBolt, IconMoon, IconAlertTriangle } from './Icons';
-
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
+import { SHOP_ID } from './shopConfig';
+import { API_BASE, apiFetch } from './apiBase';
 // Only ever hits our own backend (active-stations, order-lists), never
 // Shopee directly, so there's no rate-limit or cost concern with polling
 // this often — matches PackingStation.jsx's own idle-retry cadence.
 const REFRESH_MS = 3000;
-const SHOP_ID = 227886187;
 
 function formatTime(ts) {
   if (!ts) return '—';
@@ -151,7 +145,7 @@ function ActiveStation() {
   }, []);
 
   async function load() {
-    const res = await fetch(`${API_BASE}/operators/active-stations`);
+    const res = await apiFetch(`${API_BASE}/operators/active-stations`);
     if (res.ok) setStations(await res.json());
   }
 
@@ -203,7 +197,7 @@ function ActiveStation() {
 // to confirm the courier took them ("Ready to Pickup"); and orders already
 // scanned but still waiting on a real label ("Ready to Process Tomorrow").
 function OrderLists() {
-  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [] });
+  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [], problemOrders: [] });
   const [loading, setLoading] = useState(true);
   // null = still checking on first load, not "paused" — the toggle button
   // stays disabled until we actually know, so a click can't race a stale
@@ -252,7 +246,7 @@ function OrderLists() {
 
   async function load() {
     try {
-      const res = await fetch(`${API_BASE}/packing/order-lists?shop_id=${SHOP_ID}`);
+      const res = await apiFetch(`${API_BASE}/packing/order-lists?shop_id=${SHOP_ID}`);
       if (res.ok) setLists(await res.json());
     } finally {
       setLoading(false);
@@ -261,7 +255,7 @@ function OrderLists() {
 
   async function loadSyncStatus() {
     try {
-      const res = await fetch(`${API_BASE}/orders/sync-status`);
+      const res = await apiFetch(`${API_BASE}/orders/sync-status`);
       if (res.ok) setSyncEnabled((await res.json()).enabled);
     } catch {
       // best-effort — keeps whatever was last known rather than flashing "checking"
@@ -270,7 +264,7 @@ function OrderLists() {
 
   async function loadSettings() {
     try {
-      const res = await fetch(`${API_BASE}/packing/settings`);
+      const res = await apiFetch(`${API_BASE}/packing/settings`);
       if (res.ok) {
         const data = await res.json();
         setSettings(data);
@@ -283,7 +277,7 @@ function OrderLists() {
 
   async function loadWorkHourStatus() {
     try {
-      const res = await fetch(`${API_BASE}/packing/settings`);
+      const res = await apiFetch(`${API_BASE}/packing/settings`);
       if (res.ok) setCurrentlyWithinWorkHour((await res.json()).currentlyWithinWorkHour);
     } catch {
       // best-effort — badge just keeps showing whatever was last known
@@ -293,7 +287,7 @@ function OrderLists() {
   async function saveSettings() {
     setSavingSettings(true);
     try {
-      const res = await fetch(`${API_BASE}/packing/settings`, {
+      const res = await apiFetch(`${API_BASE}/packing/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settingsDraft),
@@ -327,7 +321,7 @@ function OrderLists() {
   async function toggleSync() {
     setToggling(true);
     try {
-      const res = await fetch(`${API_BASE}/orders/sync-toggle`, {
+      const res = await apiFetch(`${API_BASE}/orders/sync-toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !syncEnabled }),
@@ -344,7 +338,7 @@ function OrderLists() {
     setDetailError(null);
     setDetailLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/packing/order-detail?order_sn=${encodeURIComponent(orderSn)}`);
+      const res = await apiFetch(`${API_BASE}/packing/order-detail?order_sn=${encodeURIComponent(orderSn)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setOrderDetail(data);
@@ -366,7 +360,7 @@ function OrderLists() {
     setActionBusy(true);
     setDetailError(null);
     try {
-      const res = await fetch(`${API_BASE}/packing/force-ready-for-pickup`, {
+      const res = await apiFetch(`${API_BASE}/packing/force-ready-for-pickup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_sn: selectedOrderSn }),
@@ -390,7 +384,7 @@ function OrderLists() {
     setActionBusy(true);
     setDetailError(null);
     try {
-      const res = await fetch(`${API_BASE}/packing/confirm-pickup`, {
+      const res = await apiFetch(`${API_BASE}/packing/confirm-pickup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_sn: selectedOrderSn }),
@@ -411,7 +405,7 @@ function OrderLists() {
     setActionBusy(true);
     setDetailError(null);
     try {
-      const res = await fetch(`${API_BASE}/packing/cancel-order`, {
+      const res = await apiFetch(`${API_BASE}/packing/cancel-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_sn: selectedOrderSn }),
@@ -436,7 +430,7 @@ function OrderLists() {
     if (!window.confirm('Are you sure? This will force every order currently at Ready to Check or On Progress Check straight to Ready to Pickup, skipping the normal scan/label process.')) return;
     setBulkBusy('moveAll');
     try {
-      const res = await fetch(`${API_BASE}/packing/force-ready-for-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/packing/force-ready-for-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
       if (res.ok) load();
     } finally {
       setBulkBusy(null);
@@ -447,7 +441,7 @@ function OrderLists() {
     if (!window.confirm('Are you sure? This will mark every order currently in Ready to Pickup as picked up, the same as scanning each one in Shipping Mode.')) return;
     setBulkBusy('forceAll');
     try {
-      const res = await fetch(`${API_BASE}/packing/force-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/packing/force-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
       if (res.ok) load();
     } finally {
       setBulkBusy(null);
@@ -461,6 +455,7 @@ function OrderLists() {
     { key: 'onProgressCheck', title: 'On Progress Check' },
     { key: 'readyForPickup', title: 'Ready to Pickup' },
     { key: 'readyTomorrow', title: 'Ready to Process Tomorrow' },
+    { key: 'problemOrders', title: 'Problem Order' },
   ];
 
   const settingsChanged = settings && settingsDraft && (
@@ -777,7 +772,7 @@ function Daftar() {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch(`${API_BASE}/operators/register`, {
+      const res = await apiFetch(`${API_BASE}/operators/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -795,7 +790,7 @@ function Daftar() {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch(`${API_BASE}/operators/by-name?name=${encodeURIComponent(name)}`);
+      const res = await apiFetch(`${API_BASE}/operators/by-name?name=${encodeURIComponent(name)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setResult(data);

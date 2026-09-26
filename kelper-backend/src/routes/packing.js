@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getOrderDetail, cancelOrder } = require('../shopee/client');
+const { requireAdminAuth } = require('../adminSession');
 const { getConfig } = require('../config');
 const { isProduction } = require('../env');
 const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
@@ -478,9 +479,13 @@ function confirmOrderPickedUp(orderSn) {
   db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(pickedUpAt, session.id);
   db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(orderSn);
 
-  // Shopee "confirm pickup" API: not currently used anywhere in this
-  // codebase, and unconfirmed whether one exists/is required for
-  // pickup-method orders — call it here if/when that's settled.
+  // No Shopee API call needed here (researched 2026-09-26, against
+  // Shopee's own Open API Developer Guide) — the seller's side of the API
+  // call flow ends at "Arrange Shipment & Get TrackingNo & Print AirwayBill"
+  // (bookOneOrder above). order_status then auto-advances to SHIPPED once
+  // the 3PL/courier actually collects the parcel — that transition, and any
+  // resulting webhook push, is entirely on Shopee/logistics' side. This
+  // local DONE status is purely our own dashboard bookkeeping.
   return pickedUpAt;
 }
 
@@ -502,7 +507,7 @@ router.post('/confirm-pickup', (req, res) => {
 // confirm-pickup, for every order currently sitting in Ready to Pickup, the
 // same as scanning each one's label in Shipping Mode without needing the
 // physical labels in hand.
-router.post('/force-pickup-all', (req, res) => {
+router.post('/force-pickup-all', requireAdminAuth, (req, res) => {
   const shopId = Number(req.body.shop_id || req.query.shop_id);
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
@@ -610,7 +615,7 @@ function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt }) {
   return tags;
 }
 
-router.get('/order-lists', (req, res) => {
+router.get('/order-lists', requireAdminAuth, (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
@@ -719,7 +724,24 @@ router.get('/order-lists', (req, res) => {
     .all(shop_id, withinWorkHour ? 1 : 0)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
-  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow });
+  // Client-requested (2026-09-26): a session an operator flagged via
+  // "Masalah" (see /masalah below) used to just vanish from every bucket —
+  // EXCEPTION was never selected by any of the queries above. Giving it its
+  // own bucket at least makes a stuck/problem order visible again; there's
+  // no resolve action yet (still reachable via the Order Detail popup's
+  // Cancel Order/Force actions once one is clicked, same as any other order).
+  const problemOrders = db
+    .prepare(`
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, o.is_instant
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
+      ORDER BY ps.started_at ASC
+    `)
+    .all(shop_id)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+
+  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow, problemOrders });
 });
 
 // Packing Station configuration (client-requested 2026-09-22) — Delay, Max
@@ -734,11 +756,11 @@ router.get('/order-lists', (req, res) => {
 // enforced at all) reads as if it means "we're in work hours right now",
 // which is a different question and was genuinely confusing when the two
 // disagreed (rule enabled, but the clock is at 2am).
-router.get('/settings', (req, res) => {
+router.get('/settings', requireAdminAuth, (req, res) => {
   res.json({ ...getPackingSettings(), currentlyWithinWorkHour: isWithinWorkHour() });
 });
 
-router.post('/settings', (req, res) => {
+router.post('/settings', requireAdminAuth, (req, res) => {
   res.json({ ...setPackingSettings(req.body || {}), currentlyWithinWorkHour: isWithinWorkHour() });
 });
 
@@ -750,7 +772,9 @@ router.post('/settings', (req, res) => {
 // (rank >= 2) is far enough along to offer Cancel/Force actions — an order
 // still in Waiting List or Processing hasn't been touched yet, and Ready to
 // Process Tomorrow is deliberately the same tier as Processing (nothing to
-// manage until work hour sweeps it forward).
+// manage until work hour sweeps it forward). Problem Order (EXCEPTION) is
+// also manageable — that's the whole point of surfacing it at all, since
+// there's no dedicated resolve flow yet.
 function resolveOrderBucket(orderSn) {
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(orderSn);
   if (!order) return null;
@@ -771,7 +795,7 @@ function resolveOrderBucket(orderSn) {
     if (session.status === 'READY_FOR_PICKUP') {
       return { order, session, bucket: 'Ready to Pickup', rank: 4 };
     }
-    return { order, session, bucket: 'Exception', rank: -1 };
+    return { order, session, bucket: 'Problem Order', rank: 2 };
   }
 
   if (order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
@@ -784,7 +808,7 @@ function resolveOrderBucket(orderSn) {
 // when it was received, its shipping carrier, current bucket, per-item scan
 // progress, and whether it's already far enough along (rank >= 2) for the
 // popup's Cancel/Force actions to be offered at all.
-router.get('/order-detail', (req, res) => {
+router.get('/order-detail', requireAdminAuth, (req, res) => {
   const { order_sn } = req.query;
   const resolved = resolveOrderBucket(order_sn);
   if (!resolved) return res.status(404).json({ error: 'order_not_found' });
@@ -830,7 +854,7 @@ function forceOrderToReadyForPickup(orderSn) {
   console.log(`[server] bucket: ${orderSn} -> Ready to Pickup (FORCED via admin override)`);
 }
 
-router.post('/force-ready-for-pickup', (req, res) => {
+router.post('/force-ready-for-pickup', requireAdminAuth, (req, res) => {
   const { order_sn } = req.body;
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
   if (!order) return res.status(404).json({ error: 'order_not_found' });
@@ -846,7 +870,7 @@ router.post('/force-ready-for-pickup', (req, res) => {
 // Waiting List/Processing/Ready to Process Tomorrow are excluded, same as
 // the single-order button never showing for them; already-Ready-to-Pickup
 // or terminal (Cancelled/Done) orders are naturally excluded too.
-router.post('/force-ready-for-pickup-all', (req, res) => {
+router.post('/force-ready-for-pickup-all', requireAdminAuth, (req, res) => {
   const shopId = Number(req.body.shop_id || req.query.shop_id);
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
@@ -871,7 +895,7 @@ router.post('/force-ready-for-pickup-all', (req, res) => {
 // entirely, same as everywhere else debug mode touches the API. Any
 // existing packing_sessions row is torn down the same way release-order
 // does, so a cancelled order also disappears from every other bucket.
-router.post('/cancel-order', async (req, res) => {
+router.post('/cancel-order', requireAdminAuth, async (req, res) => {
   const { order_sn } = req.body;
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
   if (!order) return res.status(404).json({ error: 'order_not_found' });

@@ -7,13 +7,7 @@ import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
-
-// A production build is served from the same origin as the API (Caddy
-// proxies both from one hostname), so relative paths just work and http://
-// would break under HTTPS as mixed content anyway. Dev still needs the
-// explicit cross-origin call since Vite's dev server (5173) and the backend
-// (3001) really are different origins there.
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
+import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
@@ -32,7 +26,12 @@ const PackingIcon = PACKING_GROUP.Icon;
 function Dashboard() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [authenticated, setAuthenticated] = useState(false);
+  // Optimistic — trusts a stored token until an actual API call proves
+  // otherwise (a 401 on an admin route). Previously this was plain in-memory
+  // state that reset to false on every reload; now that login issues a real
+  // session (see adminSession.js), there's a token worth trusting across
+  // reloads instead of forcing a fresh login every time.
+  const [authenticated, setAuthenticated] = useState(() => !!getAdminToken());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -69,10 +68,19 @@ function Dashboard() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
+      setAdminToken(data.token);
       setAuthenticated(true);
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  function handleLogout() {
+    apiFetch(`${API_BASE}/admin/logout`, { method: 'POST' }).catch(() => {
+      // best-effort — the token gets forgotten client-side regardless
+    });
+    clearAdminToken();
+    setAuthenticated(false);
   }
 
   if (!authenticated) {
@@ -226,7 +234,7 @@ function Dashboard() {
                 Settings
               </button>
               <button
-                onClick={() => setAuthenticated(false)}
+                onClick={handleLogout}
                 style={{ ...sideItemStyle, background: 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)' }}
               >
                 <IconPower size={16} />

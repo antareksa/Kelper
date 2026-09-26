@@ -19,6 +19,7 @@ const productsRoutes = require('./src/routes/products');
 const dashboardRoutes = require('./src/routes/dashboard');
 const webhookRoutes = require('./src/routes/webhook');
 const { startShopeeSync } = require('./src/shopeeSync');
+const { requireAdminAuth } = require('./src/adminSession');
 
 const app = express();
 // Production sits behind Caddy (one reverse-proxy hop) — without this,
@@ -34,20 +35,28 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // Authorization added 2026-09-26 alongside real admin sessions — without
+  // it, the browser's CORS preflight silently blocks every apiFetch() call
+  // that carries the Bearer token, from any cross-origin caller (a local
+  // Packing Station, or plain `npm run dev`).
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
 app.get('/api/ping', (req, res) => res.json({ ok: true }));
 app.use('/auth', authRoutes);
-app.use('/shop', shopRoutes);
+// packing/operators are protected per-route inside their own router files
+// instead of here — both mix real admin endpoints with the Packing Station
+// kiosk's own operational ones, and the kiosk never logs in as admin (no
+// login step exists on that flow at all), so it can never carry this token.
+app.use('/shop', requireAdminAuth, shopRoutes);
 app.use('/packing', packingRoutes);
-app.use('/orders', ordersRoutes);
+app.use('/orders', requireAdminAuth, ordersRoutes);
 app.use('/operators', operatorsRoutes);
 app.use('/admin', adminRoutes);
-app.use('/products', productsRoutes);
-app.use('/dashboard', dashboardRoutes);
+app.use('/products', requireAdminAuth, productsRoutes);
+app.use('/dashboard', requireAdminAuth, dashboardRoutes);
 
 // Production serves the frontend's built static bundle directly from this
 // same process/port — there's no separate `vite dev` running in production

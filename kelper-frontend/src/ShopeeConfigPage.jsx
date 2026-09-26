@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import ShopeeAuth from './ShopeeAuth';
 import ShopeeBrandAuth from './ShopeeBrandAuth';
 import { colors, card } from './theme';
-
-const API_BASE = import.meta.env.PROD ? '' : `http://${window.location.hostname}:3001`;
+import { API_BASE, apiFetch } from './apiBase';
 
 // Dashboard configuration (client-requested 2026-09-22) — currently just Ads
 // tax percentage, a multiplier added on top of raw Shopee ad spend before
@@ -17,7 +16,7 @@ function DashboardSettings() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/dashboard/settings`)
+    apiFetch(`${API_BASE}/dashboard/settings`)
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
@@ -30,7 +29,7 @@ function DashboardSettings() {
     setSaving(true);
     setSaved(false);
     try {
-      const res = await fetch(`${API_BASE}/dashboard/settings`, {
+      const res = await apiFetch(`${API_BASE}/dashboard/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ adsTaxPercentage: Number(draft) }),

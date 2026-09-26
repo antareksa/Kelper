@@ -4,6 +4,7 @@ const ExcelJS = require('exceljs');
 const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getItemList, getItemBaseInfo, getModelList } = require('../shopee/client');
+const { startOfMonthWIB } = require('../wib');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -231,6 +232,35 @@ router.post('/sync-shopee', async (req, res) => {
   }
 });
 
+// null (never 0) when there's no basis for a % change — same convention as
+// dashboard.js's own pctChange, duplicated here rather than shared since
+// it's a 3-line pure function and the two route files have no other reason
+// to depend on each other.
+function pctChange(current, previous) {
+  if (!previous) return null;
+  return Math.round(((current - previous) / previous) * 1000) / 10;
+}
+
+// Qty sold per SKU in [startTs, endTs) — used for the catalog's Qty/Omset
+// Ini/Lalu columns (client-requested 2026-09-26). Omset is estimated as
+// qty x CURRENT catalog price (same "no real per-order historical price
+// available" trade-off dashboard.js already makes for this shop, not a new
+// approximation invented here), so a since-changed price isn't reflected
+// for past months either — consistent with how the rest of the app already
+// treats this limitation, not hidden or presented as more precise than it is.
+function skuQtyInRange(startTs, endTs) {
+  const rows = db
+    .prepare(`
+      SELECT oi.sku, SUM(oi.qty) AS qty
+      FROM order_items oi
+      JOIN orders o ON o.order_sn = oi.order_sn
+      WHERE o.order_sn NOT LIKE 'MOCK-%' AND o.created_at >= ? AND o.created_at < ?
+      GROUP BY oi.sku
+    `)
+    .all(startTs, endTs);
+  return new Map(rows.map((r) => [r.sku, r.qty]));
+}
+
 // Joins the Shopee catalog cache with the client's own HPP import (by SKU) —
 // two separate sources of truth, joined at read time rather than merged into
 // one table, since either can exist without the other. hpp/profit are null
@@ -240,6 +270,12 @@ router.get('/catalog', (req, res) => {
   const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all();
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock FROM products').all().map((p) => [p.sku, p]));
+
+  const thisMonthStart = startOfMonthWIB(0);
+  const lastMonthStart = startOfMonthWIB(1);
+  const now = Math.floor(Date.now() / 1000);
+  const qtyThisMonth = skuQtyInRange(thisMonthStart, now);
+  const qtyLastMonth = skuQtyInRange(lastMonthStart, thisMonthStart);
 
   const modelsByItem = new Map();
   for (const m of models) {
@@ -256,6 +292,10 @@ router.get('/catalog', (req, res) => {
       const dashboardStock = matched?.stock ?? null;
       const profit = hpp != null && m.price != null ? m.price - hpp : null;
       const profitPct = profit != null && m.price ? Math.round((profit / m.price) * 1000) / 10 : null;
+      const qtyIni = qtyThisMonth.get(sku) || 0;
+      const qtyLalu = qtyLastMonth.get(sku) || 0;
+      const omsetIni = m.price != null ? qtyIni * m.price : null;
+      const omsetLalu = m.price != null ? qtyLalu * m.price : null;
       return {
         model_id: m.model_id,
         sku,
@@ -269,14 +309,27 @@ router.get('/catalog', (req, res) => {
         barcode,
         profit,
         profitPct,
+        qtyIni,
+        qtyLalu,
+        omsetIni,
+        omsetLalu,
       };
     });
+
+    // Product-row Trend: omzet this month vs last month, summed across all
+    // of the item's variants — a single trend per row, not one per variant.
+    const omsetIniTotal = itemModels.reduce((sum, v) => sum + (v.omsetIni ?? 0), 0);
+    const omsetLaluTotal = itemModels.reduce((sum, v) => sum + (v.omsetLalu ?? 0), 0);
+    const trendPct = pctChange(omsetIniTotal, omsetLaluTotal);
 
     return {
       item_id: item.item_id,
       sku: item.item_sku || `ITEM-${item.item_id}`,
       name: item.name,
       status: item.item_status,
+      trendPct,
+      omsetIni: omsetIniTotal,
+      omsetLalu: omsetLaluTotal,
       minPurchase: item.min_purchase_limit,
       image: item.image_url,
       soldOut: itemModels.length > 0 && itemModels.every((m) => (m.stock ?? 0) <= 0),

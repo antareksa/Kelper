@@ -199,6 +199,18 @@ db.exec(`
     fail_count INTEGER NOT NULL DEFAULT 0,
     locked_until INTEGER NOT NULL DEFAULT 0
   );
+
+  -- Real admin sessions (client-requested 2026-09-26, security fix) — until
+  -- now, /admin/login only gated the frontend's own React state, with every
+  -- other route (dashboard data, HPP/cost, packing actions including the
+  -- real Shopee cancel-order and bulk force actions) reachable by anyone who
+  -- found the URL, logged in or not. Persisted (not just an in-memory Map)
+  -- so admins aren't logged out by every deploy restart.
+  CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
 `);
 
 // Non-destructive migration for existing local databases created before

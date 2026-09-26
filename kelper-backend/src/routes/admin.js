@@ -1,12 +1,12 @@
 const express = require('express');
 const { checkLocked, recordFailure, recordSuccess } = require('../loginGuard');
+const { createSession, destroySession } = require('../adminSession');
 
 const router = express.Router();
 
-// Dev-stage only: plaintext comparison against .env, no sessions/hashing.
-// There's no real sensitive dashboard data behind this yet — this just gates
-// the placeholder screen. Needs real auth (hashed passwords, sessions) before
-// any actual dashboard data is wired up.
+// Plaintext comparison against .env — still true, but now backed by a real
+// session (see adminSession.js): every other admin route requires the token
+// this returns, not just this login screen's own success response.
 router.post('/login', (req, res) => {
   const ip = req.ip;
   const retryAfterSeconds = checkLocked(ip);
@@ -27,6 +27,14 @@ router.post('/login', (req, res) => {
   }
 
   recordSuccess(ip);
+  const token = createSession();
+  res.json({ ok: true, token });
+});
+
+router.post('/logout', (req, res) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+  destroySession(token);
   res.json({ ok: true });
 });
 

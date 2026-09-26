@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { startOfTodayWIB } = require('../wib');
+const { requireAdminAuth } = require('../adminSession');
 
 const router = express.Router();
 
@@ -40,7 +41,7 @@ router.post('/check-out', (req, res) => {
 
 // Admin "Active Station" view — every currently checked-in station, what
 // order (if any) it's handling right now, and how many it's finished today.
-router.get('/active-stations', (req, res) => {
+router.get('/active-stations', requireAdminAuth, (req, res) => {
   const sessions = db.prepare('SELECT * FROM station_sessions').all();
 
   const rows = sessions.map((s) => {
@@ -69,7 +70,7 @@ router.get('/active-stations', (req, res) => {
 });
 
 // Daftar — register a new operator, auto-generating their login barcode.
-router.post('/register', (req, res) => {
+router.post('/register', requireAdminAuth, (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
 
@@ -80,7 +81,7 @@ router.post('/register', (req, res) => {
 });
 
 // Daftar — reprint an existing operator's barcode by name.
-router.get('/by-name', (req, res) => {
+router.get('/by-name', requireAdminAuth, (req, res) => {
   const { name } = req.query;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
