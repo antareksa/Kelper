@@ -313,6 +313,49 @@ function BocorList({ leaking }) {
   );
 }
 
+// Client-requested (2026-09-28): flags a SKU whose current List Barang
+// price/HPP differs from what's frozen on its most recently scanned sale
+// (see db.js's order_items migration comment) — i.e. "you've changed this
+// since it last sold". Returns null (renders nothing) when there's
+// nothing to flag, unlike the other list widgets on this page, which
+// always render with their own "nothing here" empty state — per client
+// request, this section should only take up space when there's actually
+// something to see.
+function PriceDiffList({ diffs }) {
+  if (!diffs || diffs.length === 0) return null;
+  return (
+    <div style={card({ flex: 1 })}>
+      <CardHeader label="Perubahan Harga & HPP (sejak penjualan terakhir)" />
+      {diffs.map((d) => (
+        <div key={d.sku} style={{ padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ color: colors.text }}>{d.name}</div>
+            <div style={{ color: colors.textDim, fontSize: 11 }}>{d.sku}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 16, fontSize: 12, fontFamily: 'var(--num)' }}>
+            {d.priceDiff != null && (
+              <span style={{ color: colors.textDim }}>
+                Harga {formatRupiah(d.snapshotPrice)} → {formatRupiah(d.currentPrice)}{' '}
+                <span style={{ color: d.priceDiff > 0 ? colors.green : colors.red, fontWeight: 600 }}>
+                  ({d.priceDiff > 0 ? '+' : ''}{formatRupiah(d.priceDiff)})
+                </span>
+              </span>
+            )}
+            {d.hppDiff != null && (
+              <span style={{ color: colors.textDim }}>
+                HPP {formatRupiah(d.snapshotHpp)} → {formatRupiah(d.currentHpp)}{' '}
+                <span style={{ color: d.hppDiff > 0 ? colors.red : colors.green, fontWeight: 600 }}>
+                  ({d.hppDiff > 0 ? '+' : ''}{formatRupiah(d.hppDiff)})
+                </span>
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MainDashboard() {
   const shopName = useShopName();
   const today = todayDateStringWIB();
@@ -433,7 +476,11 @@ function MainDashboard() {
         <StockList label="5 Stok Dashboard Tersedikit" items={data.leastStock} />
       </div>
 
-      <BocorList leaking={data.leaking} />
+      <div style={{ marginBottom: 12 }}>
+        <BocorList leaking={data.leaking} />
+      </div>
+
+      <PriceDiffList diffs={data.priceDiffs} />
     </div>
   );
 }

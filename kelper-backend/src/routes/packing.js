@@ -479,6 +479,22 @@ function confirmOrderPickedUp(orderSn) {
   db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(pickedUpAt, session.id);
   db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(orderSn);
 
+  // Client-requested (2026-09-28): freeze this order's per-item price/hpp
+  // at whatever's currently set in List Barang (products.price/hpp) right
+  // now — this is the exact moment the order starts counting toward a
+  // day's Omzet/Laba (see dashboard.js's DASHBOARD_DATA_SOURCE), so it's
+  // also the moment its price/hpp gets locked in. A later edit to a SKU's
+  // price in List Barang then only affects orders scanned AFTER that edit,
+  // never rewrites this one's already-reported numbers. price_snapshot
+  // IS NULL guards against clobbering an existing snapshot if this ever
+  // somehow ran twice for the same order.
+  db.prepare(`
+    UPDATE order_items
+    SET price_snapshot = (SELECT price FROM products WHERE products.sku = order_items.sku),
+        hpp_snapshot = (SELECT hpp FROM products WHERE products.sku = order_items.sku)
+    WHERE order_sn = ? AND price_snapshot IS NULL
+  `).run(orderSn);
+
   // No Shopee API call needed here (researched 2026-09-26, against
   // Shopee's own Open API Developer Guide) — the seller's side of the API
   // call flow ends at "Arrange Shipment & Get TrackingNo & Print AirwayBill"

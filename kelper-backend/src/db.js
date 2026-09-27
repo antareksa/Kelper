@@ -309,4 +309,53 @@ if (!productCols.includes('stock')) {
   db.exec('ALTER TABLE products ADD COLUMN stock INTEGER');
 }
 
+// Client-requested (2026-09-28): a manually-entered selling price per SKU —
+// same "two sources of truth, allowed to disagree" pattern as hpp/stock
+// above, except this one now fully REPLACES shopee_item_models.price as the
+// number the Dashboard's Omzet/Laba (routes/dashboard.js's
+// buildSkuPriceMap) and List Barang's profit columns (routes/products.js's
+// /catalog) are computed from — a Shopee catalog re-sync can update
+// shopee_item_models.price all it wants, it will never again change what
+// the app's financial numbers are based on.
+if (!productCols.includes('price')) {
+  db.exec('ALTER TABLE products ADD COLUMN price INTEGER');
+  // One-time seed so existing Omzet/Laba don't drop to zero the instant
+  // this deploys — copies each SKU's currently-synced Shopee price in as a
+  // starting point to edit from. This UPDATE only ever runs once (the
+  // whole block is gated on the column not existing yet); every price from
+  // here on is either this one historical snapshot or a deliberate manual
+  // edit, never re-synced.
+  db.exec(`
+    UPDATE products
+    SET price = (
+      SELECT m.price
+      FROM shopee_item_models m
+      JOIN shopee_items i ON i.item_id = m.item_id
+      WHERE COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) = products.sku
+      LIMIT 1
+    )
+    WHERE price IS NULL
+  `);
+}
+
+// Client-requested (2026-09-28): price/hpp SNAPSHOTTED per order item at
+// the moment an order is scanned DONE in Shipping Mode (see packing.js's
+// confirmOrderPickedUp) — without this, editing a SKU's current price/hpp
+// in List Barang would retroactively rewrite every past day's Omzet/Laba
+// for that SKU the next time it's viewed, since buildSkuPriceMap
+// (routes/dashboard.js) always read whatever products.price/hpp is set
+// RIGHT NOW. dashboard.js falls back to that live lookup only when a
+// row's snapshot is still NULL (never backfilled here on purpose — there's
+// no way to know what price was actually in effect for an order that was
+// already scanned DONE before this column existed, so pretending today's
+// current price applied to it back then would be no more accurate than
+// the live-lookup fallback it already gets).
+const orderItemCols = db.prepare("PRAGMA table_info(order_items)").all().map((c) => c.name);
+if (!orderItemCols.includes('price_snapshot')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN price_snapshot INTEGER');
+}
+if (!orderItemCols.includes('hpp_snapshot')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN hpp_snapshot INTEGER');
+}
+
 module.exports = db;

@@ -42,20 +42,80 @@ const OMZET_PRICE_SOURCE = 'catalog'; // 'catalog' | 'shopee_blend'
 // transaction price (so a since-changed price, voucher, or bundle discount
 // isn't reflected for those). Ads/affiliate/visitor metrics still have no
 // data source at all (see the `blocked` list further down).
-function buildSkuPriceMap(shopId) {
-  const rows = db
+//
+// Client-requested (2026-09-28): price comes ONLY from products.price now
+// — the client's own manually-entered/editable price (see List Barang and
+// routes/products.js's /:sku/price), never shopee_item_models.price. No
+// Shopee table involved here at all any more; not shop-scoped either,
+// since products isn't (same as hpp/stock).
+function buildSkuPriceMap() {
+  const rows = db.prepare('SELECT sku, price, hpp FROM products').all();
+  return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
+}
+
+// Client-requested (2026-09-28): an order_item snapshots its price/hpp at
+// the moment it was scanned DONE in Shipping Mode (see packing.js's
+// confirmOrderPickedUp) — that snapshot wins whenever it exists, so a
+// later edit to a SKU's price in List Barang can never rewrite an
+// already-counted order's numbers. Only falls back to the live
+// products.price/hpp lookup (skuPrices) for an item that was never
+// snapshotted — pre-feature history, or DASHBOARD_DATA_SOURCE === 'shopee'
+// orders that were never scanned in Shipping Mode at all.
+function priceInfoForItem(item, skuPrices) {
+  if (item.price_snapshot != null) return { price: item.price_snapshot, hpp: item.hpp_snapshot };
+  return skuPrices.get(item.sku);
+}
+
+// Client-requested (2026-09-28): flags SKUs whose CURRENT products.price/
+// hpp differs from what's frozen (price_snapshot/hpp_snapshot) on that
+// SKU's most recently scanned order — i.e. "you've changed this since it
+// last sold". Only included when there's an actual difference; a SKU
+// that's never been touched since its last sale doesn't appear at all.
+// SQLite's single-max-aggregate rule (a documented feature, not a fluke)
+// makes oi.price_snapshot/oi.hpp_snapshot come from the same row as
+// MAX(ps.completed_at) within each sku group, so this needs no subquery
+// to find "the latest order's snapshot" per SKU.
+function findPriceDiffs(shopId) {
+  const lastSold = db
     .prepare(`
-      SELECT
-        COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku,
-        m.price AS price,
-        p.hpp AS hpp
-      FROM shopee_item_models m
-      JOIN shopee_items i ON i.item_id = m.item_id
-      LEFT JOIN products p ON p.sku = COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id)
-      WHERE i.shop_id = ?
+      SELECT oi.sku, oi.product_name, oi.price_snapshot, oi.hpp_snapshot, MAX(ps.completed_at) AS last_sold_at
+      FROM order_items oi
+      JOIN orders o ON o.order_sn = oi.order_sn
+      JOIN (
+        SELECT order_sn, MAX(completed_at) AS completed_at
+        FROM packing_sessions
+        WHERE status = 'DONE'
+        GROUP BY order_sn
+      ) ps ON ps.order_sn = o.order_sn
+      WHERE ${REAL_ORDER_FILTER} AND oi.price_snapshot IS NOT NULL
+      GROUP BY oi.sku
     `)
     .all(shopId);
-  return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
+
+  const productBySku = new Map(db.prepare('SELECT sku, price, hpp FROM products').all().map((p) => [p.sku, p]));
+
+  return lastSold
+    .map((row) => {
+      const current = productBySku.get(row.sku);
+      const currentPrice = current?.price ?? null;
+      const currentHpp = current?.hpp ?? null;
+      const priceChanged = currentPrice !== row.price_snapshot;
+      const hppChanged = currentHpp !== row.hpp_snapshot;
+      if (!priceChanged && !hppChanged) return null;
+      return {
+        sku: row.sku,
+        name: row.product_name,
+        lastSoldAt: row.last_sold_at,
+        currentPrice,
+        snapshotPrice: row.price_snapshot,
+        priceDiff: priceChanged && currentPrice != null ? currentPrice - row.price_snapshot : null,
+        currentHpp,
+        snapshotHpp: row.hpp_snapshot,
+        hppDiff: hppChanged && currentHpp != null ? currentHpp - row.hpp_snapshot : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.lastSoldAt - a.lastSoldAt);
 }
 
 // Sums revenue/profit/fees for every real order attributed to [startTs,
@@ -100,7 +160,7 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
 
   const placeholders = orders.map(() => '?').join(',');
   const items = db
-    .prepare(`SELECT order_sn, sku, qty FROM order_items WHERE order_sn IN (${placeholders})`)
+    .prepare(`SELECT order_sn, sku, qty, price_snapshot, hpp_snapshot FROM order_items WHERE order_sn IN (${placeholders})`)
     .all(...orders.map((o) => o.order_sn));
   const itemsByOrder = new Map();
   for (const item of items) {
@@ -119,14 +179,14 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
     if (useEscrowForOmzet) {
       let cogs = 0;
       for (const item of orderItems) {
-        const info = skuPrices.get(item.sku);
+        const info = priceInfoForItem(item, skuPrices);
         if (info?.hpp != null) cogs += info.hpp * item.qty;
       }
       omzet += order.order_selling_price ?? 0;
       laba += order.escrow_amount - cogs;
     } else {
       for (const item of orderItems) {
-        const info = skuPrices.get(item.sku);
+        const info = priceInfoForItem(item, skuPrices);
         if (!info || info.price == null) continue;
         omzet += info.price * item.qty;
         if (info.hpp != null) laba += (info.price - info.hpp) * item.qty;
@@ -159,7 +219,7 @@ router.get('/summary', (req, res) => {
   }
   const isToday = selectedDate === todayDateStr;
 
-  const skuPrices = buildSkuPriceMap(shopId);
+  const skuPrices = buildSkuPriceMap();
 
   // 7 days (WIB) ending on the selected date, oldest first, for the
   // sparklines + selected-day/day-before trend. Defaults to today when no
@@ -195,7 +255,7 @@ router.get('/summary', (req, res) => {
   const dayItems = DASHBOARD_DATA_SOURCE === 'internal'
     ? db
         .prepare(`
-          SELECT oi.sku, oi.qty, ps.completed_at AS ts
+          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, ps.completed_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           JOIN (
@@ -209,7 +269,7 @@ router.get('/summary', (req, res) => {
         .all(shopId, dayStart, dayEnd)
     : db
         .prepare(`
-          SELECT oi.sku, oi.qty, o.created_at AS ts
+          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, o.created_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
@@ -219,7 +279,7 @@ router.get('/summary', (req, res) => {
   const hourlyOmzet = new Array(lastHour + 1).fill(0);
   const hourlyLaba = new Array(lastHour + 1).fill(0);
   for (const item of dayItems) {
-    const info = skuPrices.get(item.sku);
+    const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
     const hour = Math.min(lastHour, Math.floor((item.ts - dayStart) / 3600));
     hourlyOmzet[hour] += info.price * item.qty;
@@ -234,7 +294,7 @@ router.get('/summary', (req, res) => {
   // day rarely has enough distinct SKUs sold for a meaningful ranking).
   const recentItems = db
     .prepare(`
-      SELECT oi.sku, oi.product_name, oi.qty
+      SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot
       FROM order_items oi
       JOIN orders o ON o.order_sn = oi.order_sn
       WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ?
@@ -242,7 +302,7 @@ router.get('/summary', (req, res) => {
     .all(shopId, startOfDayWIB(29));
   const bySku = new Map();
   for (const item of recentItems) {
-    const info = skuPrices.get(item.sku);
+    const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
     const entry = bySku.get(item.sku) || { sku: item.sku, name: item.product_name, qty: 0, profit: null, revenue: 0 };
     entry.qty += item.qty;
@@ -254,20 +314,25 @@ router.get('/summary', (req, res) => {
     .sort((a, b) => (b.profit ?? b.revenue) - (a.profit ?? a.revenue))
     .slice(0, 5);
 
-  // Leaking products — real, catalog-only, no order data needed: any synced,
-  // non-archived item whose current price doesn't cover its own HPP.
+  // Leaking products — any NORMAL (live, non-archived) listing whose
+  // client-entered price doesn't cover its own HPP. item_status still comes
+  // from Shopee (shopee_items) — that's genuinely Shopee's own concept of
+  // "is this actually a live listing", not a number "our data" could stand
+  // in for — but the price/HPP comparison itself is products.price vs
+  // products.hpp only, same as buildSkuPriceMap above, not
+  // shopee_item_models.price.
   const leaking = db
     .prepare(`
       SELECT
         COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku,
         COALESCE(m.model_name, i.name) AS name,
-        m.price AS price,
+        p.price AS price,
         p.hpp AS hpp
       FROM shopee_item_models m
       JOIN shopee_items i ON i.item_id = m.item_id
       LEFT JOIN products p ON p.sku = COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id)
-      WHERE i.shop_id = ? AND i.item_status = 'NORMAL' AND p.hpp IS NOT NULL AND m.price IS NOT NULL AND m.price <= p.hpp
-      ORDER BY (p.hpp - m.price) DESC
+      WHERE i.shop_id = ? AND i.item_status = 'NORMAL' AND p.hpp IS NOT NULL AND p.price IS NOT NULL AND p.price <= p.hpp
+      ORDER BY (p.hpp - p.price) DESC
       LIMIT 5
     `)
     .all(shopId);
@@ -362,6 +427,7 @@ router.get('/summary', (req, res) => {
     leaking,
     mostStock,
     leastStock,
+    priceDiffs: findPriceDiffs(shopId),
     // Every metric this Dashboard shows now has a real data source
     // (escrow, Ads Performance, Brand Portal) — kept as an empty array
     // rather than removed, since the frontend still checks it per metric.
