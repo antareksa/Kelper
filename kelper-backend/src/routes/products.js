@@ -99,6 +99,50 @@ router.put('/:sku/stock', (req, res) => {
   res.json({ ok: true, sku, stock });
 });
 
+const upsertHpp = db.prepare(`
+  INSERT INTO products (sku, hpp, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    hpp = excluded.hpp,
+    updated_at = excluded.updated_at
+`);
+
+// Client-requested (2026-09-28): inline single-SKU HPP edit in List Barang,
+// alongside the existing bulk Excel import (/import-hpp above) — both write
+// to the same products.hpp column, so either path stays valid and neither
+// overwrites fields the other doesn't touch (unlike upsertProduct, this
+// only touches hpp/updated_at).
+router.put('/:sku/hpp', (req, res) => {
+  const sku = req.params.sku;
+  const { hpp } = req.body;
+  if (hpp !== null && (typeof hpp !== 'number' || !Number.isInteger(hpp) || hpp < 0)) {
+    return res.status(400).json({ error: 'invalid_hpp', message: 'hpp must be a non-negative integer or null.' });
+  }
+  upsertHpp.run(sku, hpp, Math.floor(Date.now() / 1000));
+  res.json({ ok: true, sku, hpp });
+});
+
+const upsertPrice = db.prepare(`
+  INSERT INTO products (sku, price, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    price = excluded.price,
+    updated_at = excluded.updated_at
+`);
+
+// Client's own manual selling price per SKU — see db.js migration comment.
+// This is what the Dashboard's Omzet/Laba and this page's own profit
+// columns are computed from now, not Shopee's synced price.
+router.put('/:sku/price', (req, res) => {
+  const sku = req.params.sku;
+  const { price } = req.body;
+  if (price !== null && (typeof price !== 'number' || !Number.isInteger(price) || price < 0)) {
+    return res.status(400).json({ error: 'invalid_price', message: 'price must be a non-negative integer or null.' });
+  }
+  upsertPrice.run(sku, price, Math.floor(Date.now() / 1000));
+  res.json({ ok: true, sku, price });
+});
+
 const upsertItem = db.prepare(`
   INSERT INTO shopee_items (item_id, shop_id, item_sku, name, item_status, min_purchase_limit, has_model, image_url, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -261,15 +305,19 @@ function skuQtyInRange(startTs, endTs) {
   return new Map(rows.map((r) => [r.sku, r.qty]));
 }
 
-// Joins the Shopee catalog cache with the client's own HPP import (by SKU) —
-// two separate sources of truth, joined at read time rather than merged into
-// one table, since either can exist without the other. hpp/profit are null
-// (never 0) when there's no matching HPP entry, per the tech doc's rule that
-// unknown cost must never be silently treated as zero cost.
+// Joins the Shopee catalog cache (names/images/status/stock — things only
+// Shopee knows) with the client's own price/HPP/barcode/stock (by SKU) —
+// two separate sources of truth, joined at read time rather than merged
+// into one table, since either can exist without the other. price/hpp/
+// profit are null (never 0) when there's no matching entry, per the tech
+// doc's rule that an unknown number must never be silently treated as
+// zero. Client-requested (2026-09-28): price now comes ONLY from
+// products.price (editable — see PUT /:sku/price above), never
+// shopee_item_models.price, same as buildSkuPriceMap in routes/dashboard.js.
 router.get('/catalog', (req, res) => {
   const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all();
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
-  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock FROM products').all().map((p) => [p.sku, p]));
+  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
 
   const thisMonthStart = startOfMonthWIB(0);
   const lastMonthStart = startOfMonthWIB(1);
@@ -290,17 +338,18 @@ router.get('/catalog', (req, res) => {
       const hpp = matched?.hpp ?? null;
       const barcode = matched?.barcode ?? null;
       const dashboardStock = matched?.stock ?? null;
-      const profit = hpp != null && m.price != null ? m.price - hpp : null;
-      const profitPct = profit != null && m.price ? Math.round((profit / m.price) * 1000) / 10 : null;
+      const price = matched?.price ?? null;
+      const profit = hpp != null && price != null ? price - hpp : null;
+      const profitPct = profit != null && price ? Math.round((profit / price) * 1000) / 10 : null;
       const qtyIni = qtyThisMonth.get(sku) || 0;
       const qtyLalu = qtyLastMonth.get(sku) || 0;
-      const omsetIni = m.price != null ? qtyIni * m.price : null;
-      const omsetLalu = m.price != null ? qtyLalu * m.price : null;
+      const omsetIni = price != null ? qtyIni * price : null;
+      const omsetLalu = price != null ? qtyLalu * price : null;
       return {
         model_id: m.model_id,
         sku,
         name: m.model_name,
-        price: m.price,
+        price,
         stock: m.stock,
         dashboardStock,
         status: m.model_status,

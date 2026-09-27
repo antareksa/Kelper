@@ -172,7 +172,72 @@ function StockInput({ sku, value, onSaved }) {
   );
 }
 
-function ProductRow({ product, expanded, onToggle, onStockSaved }) {
+// Client-requested (2026-09-28): manually-entered HPP and Harga, same
+// "save on blur/Enter, empty clears to null" pattern as StockInput above —
+// shared here since both fields (/products/:sku/hpp,
+// /products/:sku/price) have identical validation (non-negative integer or
+// null) and behavior, just a different column. Harga used to just display
+// Shopee's synced price read-only; it's now the client's own number, which
+// is what the Dashboard's Omzet/Laba are computed from (see
+// routes/dashboard.js's buildSkuPriceMap) — Shopee's price is no longer
+// used for that at all, only this one.
+function CurrencyInput({ sku, field, value, onSaved }) {
+  const [draft, setDraft] = useState(value == null ? '' : String(value));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(value == null ? '' : String(value));
+  }, [value]);
+
+  async function save() {
+    const trimmed = draft.trim();
+    const next = trimmed === '' ? null : Number(trimmed);
+    if (next === value) return;
+    if (next != null && (!Number.isInteger(next) || next < 0)) {
+      setDraft(value == null ? '' : String(value));
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/products/${encodeURIComponent(sku)}/${field}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: next }),
+      });
+      if (res.ok) onSaved(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      min="0"
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      placeholder="—"
+      disabled={saving}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        background: colors.cardAlt,
+        border: `1px solid ${colors.border}`,
+        borderRadius: 6,
+        color: colors.text,
+        fontFamily: 'var(--num)',
+        fontSize: 12.5,
+        padding: '4px 6px',
+        opacity: saving ? 0.6 : 1,
+      }}
+    />
+  );
+}
+
+function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -287,16 +352,14 @@ function ProductRow({ product, expanded, onToggle, onStockSaved }) {
                   <div>
                     <StockInput sku={v.sku} value={v.dashboardStock} onSaved={(next) => onStockSaved(v.sku, next)} />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: v.hpp == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>
-                    {formatRupiah(v.hpp)}
+                  <div>
+                    <CurrencyInput sku={v.sku} field="hpp" value={v.hpp} onSaved={(next) => onHppSaved(v.sku, next)} />
                   </div>
                   <div style={{ color: v.barcode == null ? colors.textFaint : colors.text, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
                     {v.barcode ?? '—'}
                   </div>
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: colors.text, fontFamily: 'var(--num)' }}>
-                      {formatRupiah(v.price)}
-                    </div>
+                    <CurrencyInput sku={v.sku} field="price" value={v.price} onSaved={(next) => onPriceSaved(v.sku, next)} />
                   </div>
                   <div style={{ color: v.profit == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.profit)}</div>
                   <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>
@@ -351,6 +414,37 @@ function ListBarang() {
     setCatalog((prev) => prev.map((p) => ({
       ...p,
       variants: p.variants.map((v) => (v.sku === sku ? { ...v, dashboardStock: next } : v)),
+    })));
+  }
+
+  // Same in-place update as handleStockSaved, but hpp/price also feed
+  // profit/profitPct (computed server-side the same way — see
+  // routes/products.js's /catalog) — recomputed here too so Est Profit/Est
+  // % Profit reflect the edit immediately instead of only after the next
+  // full catalog reload. Omset Ini/Lalu (which also depend on price) are
+  // left stale until the next reload, same trade-off StockInput already
+  // makes for fields it doesn't touch.
+  function handleHppSaved(sku, next) {
+    setCatalog((prev) => prev.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => {
+        if (v.sku !== sku) return v;
+        const profit = next != null && v.price != null ? v.price - next : null;
+        const profitPct = profit != null && v.price ? Math.round((profit / v.price) * 1000) / 10 : null;
+        return { ...v, hpp: next, profit, profitPct };
+      }),
+    })));
+  }
+
+  function handlePriceSaved(sku, next) {
+    setCatalog((prev) => prev.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => {
+        if (v.sku !== sku) return v;
+        const profit = v.hpp != null && next != null ? next - v.hpp : null;
+        const profitPct = profit != null && next ? Math.round((profit / next) * 1000) / 10 : null;
+        return { ...v, price: next, profit, profitPct };
+      }),
     })));
   }
 
@@ -538,6 +632,8 @@ function ListBarang() {
                     expanded={expandedSku === p.sku}
                     onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
                     onStockSaved={handleStockSaved}
+                    onHppSaved={handleHppSaved}
+                    onPriceSaved={handlePriceSaved}
                   />
                 ))}
               </div>

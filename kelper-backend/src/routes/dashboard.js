@@ -42,19 +42,14 @@ const OMZET_PRICE_SOURCE = 'catalog'; // 'catalog' | 'shopee_blend'
 // transaction price (so a since-changed price, voucher, or bundle discount
 // isn't reflected for those). Ads/affiliate/visitor metrics still have no
 // data source at all (see the `blocked` list further down).
-function buildSkuPriceMap(shopId) {
-  const rows = db
-    .prepare(`
-      SELECT
-        COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku,
-        m.price AS price,
-        p.hpp AS hpp
-      FROM shopee_item_models m
-      JOIN shopee_items i ON i.item_id = m.item_id
-      LEFT JOIN products p ON p.sku = COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id)
-      WHERE i.shop_id = ?
-    `)
-    .all(shopId);
+//
+// Client-requested (2026-09-28): price comes ONLY from products.price now
+// — the client's own manually-entered/editable price (see List Barang and
+// routes/products.js's /:sku/price), never shopee_item_models.price. No
+// Shopee table involved here at all any more; not shop-scoped either,
+// since products isn't (same as hpp/stock).
+function buildSkuPriceMap() {
+  const rows = db.prepare('SELECT sku, price, hpp FROM products').all();
   return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
 }
 
@@ -159,7 +154,7 @@ router.get('/summary', (req, res) => {
   }
   const isToday = selectedDate === todayDateStr;
 
-  const skuPrices = buildSkuPriceMap(shopId);
+  const skuPrices = buildSkuPriceMap();
 
   // 7 days (WIB) ending on the selected date, oldest first, for the
   // sparklines + selected-day/day-before trend. Defaults to today when no
@@ -254,20 +249,25 @@ router.get('/summary', (req, res) => {
     .sort((a, b) => (b.profit ?? b.revenue) - (a.profit ?? a.revenue))
     .slice(0, 5);
 
-  // Leaking products — real, catalog-only, no order data needed: any synced,
-  // non-archived item whose current price doesn't cover its own HPP.
+  // Leaking products — any NORMAL (live, non-archived) listing whose
+  // client-entered price doesn't cover its own HPP. item_status still comes
+  // from Shopee (shopee_items) — that's genuinely Shopee's own concept of
+  // "is this actually a live listing", not a number "our data" could stand
+  // in for — but the price/HPP comparison itself is products.price vs
+  // products.hpp only, same as buildSkuPriceMap above, not
+  // shopee_item_models.price.
   const leaking = db
     .prepare(`
       SELECT
         COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku,
         COALESCE(m.model_name, i.name) AS name,
-        m.price AS price,
+        p.price AS price,
         p.hpp AS hpp
       FROM shopee_item_models m
       JOIN shopee_items i ON i.item_id = m.item_id
       LEFT JOIN products p ON p.sku = COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id)
-      WHERE i.shop_id = ? AND i.item_status = 'NORMAL' AND p.hpp IS NOT NULL AND m.price IS NOT NULL AND m.price <= p.hpp
-      ORDER BY (p.hpp - m.price) DESC
+      WHERE i.shop_id = ? AND i.item_status = 'NORMAL' AND p.hpp IS NOT NULL AND p.price IS NOT NULL AND p.price <= p.hpp
+      ORDER BY (p.hpp - p.price) DESC
       LIMIT 5
     `)
     .all(shopId);
