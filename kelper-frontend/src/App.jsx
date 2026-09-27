@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import ShopeeAuth from './ShopeeAuth';
 import PackingStation from './PackingStation';
 import Dashboard from './Dashboard';
 import ShopeeCallback from './ShopeeCallback';
 import { colors } from './theme';
+import { initActiveShopId } from './shopConfig';
 
 function isShopeeCallback() {
   const params = new URLSearchParams(window.location.search);
@@ -40,6 +41,15 @@ function initialView() {
 function App() {
   // landing | dashboard | packing | shopee-callback | shopee-callback-brand
   const [view, setView] = useState(initialView);
+  // Every view below (including 'landing', via ShopeeAuth's connection
+  // check) reads shopConfig's SHOP_ID — gating first render on this
+  // resolving means nothing ever runs against the stale build-time
+  // fallback while the real active shop is still loading.
+  const [shopIdReady, setShopIdReady] = useState(false);
+
+  useEffect(() => {
+    initActiveShopId().finally(() => setShopIdReady(true));
+  }, []);
 
   // Named for what it did before dedicated hostnames existed — now returns
   // to whichever view actually belongs on this hostname (e.g. straight back
@@ -49,6 +59,14 @@ function App() {
   function backToLanding() {
     window.history.replaceState(null, '', window.location.pathname);
     setView(initialView());
+  }
+
+  if (!shopIdReady) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.bg, color: colors.textDim, fontFamily: 'var(--sans)' }}>
+        Memuat...
+      </div>
+    );
   }
 
   if (view === 'shopee-callback') {

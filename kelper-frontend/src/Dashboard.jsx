@@ -6,6 +6,7 @@ import ListBarang from './ListBarang';
 import OrderSearch from './OrderSearch';
 import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
+import { SHOP_ID } from './shopConfig';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
@@ -102,6 +103,30 @@ function Dashboard() {
           <button type="submit" style={submitStyle}>Login</button>
           {error && <p style={{ color: colors.red, marginTop: 12, fontSize: 13 }}>{error}</p>}
         </form>
+      </div>
+    );
+  }
+
+  // Client-requested (2026-09-27): no shop has ever connected (SHOP_ID is
+  // only null in that case — see shopConfig.js). Unlike showShopeeModal
+  // below (a dismissible reminder for a shop that WAS connected but its
+  // token lapsed), there's no historical data to fall back to here, so
+  // every route under this would just fire shop_id-less requests and show
+  // empty/broken content. Blocks the whole dashboard, not dismissible.
+  if (!SHOP_ID) {
+    return (
+      <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
+        <div style={{ ...cardStyle, width: 360, textAlign: 'center' }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: colors.text, marginBottom: 10, fontFamily: 'var(--heading)' }}>
+            Hubungkan Shopee
+          </div>
+          <p style={{ fontSize: 13, color: colors.textDim, marginBottom: 22, lineHeight: 1.55 }}>
+            Belum ada toko Shopee yang terhubung. Hubungkan toko Anda terlebih dahulu untuk menggunakan Dashboard.
+          </p>
+          <button onClick={shopee.loginShopee} style={submitStyle}>
+            Connect
+          </button>
+        </div>
       </div>
     );
   }
