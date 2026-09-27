@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { startOfDayWIB, dateStringWIB } = require('../wib');
+const { startOfDayWIB, dateStringWIB, startOfDateWIB, shiftDateStringWIB } = require('../wib');
 const { getSetting, setSetting } = require('../settings');
 
 const router = express.Router();
@@ -98,16 +98,26 @@ function pctChange(today, yesterday) {
 }
 
 router.get('/summary', (req, res) => {
-  const { shop_id: shopId } = req.query;
+  const { shop_id: shopId, date } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const todayDateStr = dateStringWIB(0);
+  const selectedDate = date || todayDateStr;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+    return res.status(400).json({ error: 'invalid_date', message: 'date must be YYYY-MM-DD' });
+  }
+  const isToday = selectedDate === todayDateStr;
 
   const skuPrices = buildSkuPriceMap(shopId);
 
-  // Last 7 days (WIB), oldest first, for the sparklines + today/yesterday trend.
+  // 7 days (WIB) ending on the selected date, oldest first, for the
+  // sparklines + selected-day/day-before trend. Defaults to today when no
+  // date is picked, same range as before the date picker existed.
   const days = [];
   for (let daysAgo = 6; daysAgo >= 0; daysAgo -= 1) {
-    const start = startOfDayWIB(daysAgo);
-    const end = startOfDayWIB(daysAgo - 1);
+    const dateStr = shiftDateStringWIB(selectedDate, -daysAgo);
+    const start = startOfDateWIB(dateStr);
+    const end = startOfDateWIB(shiftDateStringWIB(dateStr, 1));
     days.push(sumOrdersInRange(shopId, skuPrices, start, end));
   }
   const today = days[days.length - 1];
@@ -115,28 +125,37 @@ router.get('/summary', (req, res) => {
   const marginPctToday = today.omzet ? Math.round((today.laba / today.omzet) * 1000) / 10 : null;
   const marginPctYesterday = yesterday.omzet ? Math.round((yesterday.laba / yesterday.omzet) * 1000) / 10 : null;
 
-  // Intraday cumulative Omzet/Laba for today, bucketed by WIB hour elapsed so
-  // far. Deliberately kept as the catalog-price estimate even for shipped
-  // orders (unlike sumOrdersInRange above) — it's a per-hour shape/trend
-  // visual, not a KPI number, and the UI already labels it "Estimasi".
-  // Blending real vs. estimated math per hour bucket wasn't worth the extra
-  // complexity for a chart nobody reads a single value off of.
-  const todayStart = startOfDayWIB(0);
-  const todayItems = db
+  // The selected day has no real orders at all — nothing to show for it
+  // (a date before the shop had any activity, or one still in the future).
+  // A genuinely quiet real day would also hit this, but there's no separate
+  // "we checked and there were zero" marker to tell the two apart.
+  const hasData = today.orderCount > 0;
+
+  // Intraday cumulative Omzet/Laba for the selected day, bucketed by WIB
+  // hour. For today, only up to the current hour (live, keeps updating as
+  // the day goes); for a past day, the full 24 hours. Deliberately kept as
+  // the catalog-price estimate even for shipped orders (unlike
+  // sumOrdersInRange above) — it's a per-hour shape/trend visual, not a KPI
+  // number, and the UI already labels it "Estimasi". Blending real vs.
+  // estimated math per hour bucket wasn't worth the extra complexity for a
+  // chart nobody reads a single value off of.
+  const dayStart = startOfDateWIB(selectedDate);
+  const dayEnd = startOfDateWIB(shiftDateStringWIB(selectedDate, 1));
+  const dayItems = db
     .prepare(`
       SELECT oi.sku, oi.qty, o.created_at
       FROM order_items oi
       JOIN orders o ON o.order_sn = oi.order_sn
-      WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ?
+      WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
     `)
-    .all(shopId, todayStart);
-  const currentHour = Math.floor((Math.floor(Date.now() / 1000) - todayStart) / 3600);
-  const hourlyOmzet = new Array(currentHour + 1).fill(0);
-  const hourlyLaba = new Array(currentHour + 1).fill(0);
-  for (const item of todayItems) {
+    .all(shopId, dayStart, dayEnd);
+  const lastHour = isToday ? Math.min(23, Math.floor((Math.floor(Date.now() / 1000) - dayStart) / 3600)) : 23;
+  const hourlyOmzet = new Array(lastHour + 1).fill(0);
+  const hourlyLaba = new Array(lastHour + 1).fill(0);
+  for (const item of dayItems) {
     const info = skuPrices.get(item.sku);
     if (!info || info.price == null) continue;
-    const hour = Math.min(currentHour, Math.floor((item.created_at - todayStart) / 3600));
+    const hour = Math.min(lastHour, Math.floor((item.created_at - dayStart) / 3600));
     hourlyOmzet[hour] += info.price * item.qty;
     if (info.hpp != null) hourlyLaba[hour] += (info.price - info.hpp) * item.qty;
   }
@@ -210,32 +229,37 @@ router.get('/summary', (req, res) => {
   // Affiliasi comes from a completely separate source (Brand Portal's
   // get_shop_affiliate_performance, fetched once daily — see
   // shopeeSync.js's fetchAffiliatePerformance) with its own 1-day reporting
-  // lag, so it's never "today" data — always whatever the latest fetched
-  // row is (normally yesterday). null when nothing's been fetched yet
-  // (Brand Portal not connected, or the first fetch hasn't run) rather than
-  // a fabricated 0.
+  // lag, so it's never available for "today" itself. Looked up by the exact
+  // selected date (not "latest fetched") now that the date picker can move
+  // away from today — null when nothing was fetched for that date (Brand
+  // Portal not connected, the fetch hadn't run yet, or a date old enough to
+  // predate this feature) rather than a fabricated 0.
   const affiliateRow = db
-    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? ORDER BY date DESC LIMIT 1')
-    .get(shopId);
+    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, selectedDate);
 
-  // Same "latest fetched row, null if never fetched" pattern as Affiliasi —
-  // see shopeeSync.js's fetchShopPerformance.
+  // Same "exact date, null if never fetched" pattern as Affiliasi — see
+  // shopeeSync.js's fetchShopPerformance.
   const shopPerformanceRow = db
-    .prepare('SELECT date, unique_visitors FROM shop_performance_daily WHERE shop_id = ? ORDER BY date DESC LIMIT 1')
-    .get(shopId);
+    .prepare('SELECT date, unique_visitors FROM shop_performance_daily WHERE shop_id = ? AND date = ?')
+    .get(shopId, selectedDate);
 
-  // Iklan, unlike Affiliasi/Pengunjung, genuinely is "today" — see
-  // shopeeSync.js's fetchAdsPerformance (refetched every few minutes, not
-  // once daily).
+  // Iklan, unlike Affiliasi/Pengunjung, genuinely is "today" when today is
+  // selected — see shopeeSync.js's fetchAdsPerformance (refetched every few
+  // minutes, not once daily). For a past date it's whatever was last
+  // recorded under that date before the day rolled over.
   const adsRow = db
     .prepare('SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, dateStringWIB(0));
+    .get(shopId, selectedDate);
 
   // Client-requested (2026-09-22): a configurable percentage added on top of
   // raw Shopee ad spend for display — see /dashboard/settings below.
   const adsTaxPercentage = Number(getSetting('adsTaxPercentage', '0'));
 
   res.json({
+    date: selectedDate,
+    isToday,
+    hasData,
     today: {
       orderCount: today.orderCount,
       omzet: today.omzet,
