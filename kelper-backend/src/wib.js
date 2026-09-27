@@ -52,4 +52,30 @@ function dateStringDDMMYYYYWIB(daysAgo = 0) {
   return `${day}-${month}-${year}`;
 }
 
-module.exports = { getWIBHour, startOfTodayWIB, startOfDayWIB, startOfMonthWIB, dateStringWIB, dateStringDDMMYYYYWIB };
+// Unix seconds for 00:00 WIB of an arbitrary YYYY-MM-DD wall-clock date —
+// unlike startOfDayWIB (relative to "now"), this takes the date itself, for
+// looking up a specific past date (e.g. the Dashboard's date picker) rather
+// than counting back from today.
+function startOfDateWIB(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const midnightUtcMs = Date.UTC(year, month - 1, day);
+  return Math.floor((midnightUtcMs - WIB_OFFSET_MS) / 1000);
+}
+
+// Adds (or subtracts, for a negative `days`) whole days to a YYYY-MM-DD WIB
+// date string, returning the same format.
+function shiftDateStringWIB(dateStr, days) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+module.exports = {
+  getWIBHour,
+  startOfTodayWIB,
+  startOfDayWIB,
+  startOfMonthWIB,
+  dateStringWIB,
+  dateStringDDMMYYYYWIB,
+  startOfDateWIB,
+  shiftDateStringWIB,
+};

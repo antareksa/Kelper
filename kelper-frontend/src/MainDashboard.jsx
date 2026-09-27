@@ -20,6 +20,21 @@ function formatTime(ts) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// today's WIB calendar date as YYYY-MM-DD — matches what <input type="date">
+// works with and what the backend's ?date= param expects. Approximated from
+// the browser's clock + a fixed UTC+7 offset (Indonesia has no DST), same as
+// the backend's own wib.js, rather than trusting the visitor's local timezone.
+function todayDateStringWIB() {
+  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  return wib.toISOString().slice(0, 10);
+}
+
+// YYYY-MM-DD -> dd/mm/yyyy for the "Performa" heading.
+function formatDateDDMMYYYY(dateStr) {
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}/${y}`;
+}
+
 // pct is a plain percentage-change number (e.g. 12.3 or -4.5); suffix lets
 // the margin card (a percentage-POINT delta, not a percentage change) read
 // correctly instead of implying a second layer of percent-of-percent math.
@@ -123,12 +138,12 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
 
 // Real intraday cumulative Omzet/Laba for today, bucketed by WIB hour —
 // replaces the old hardcoded placeholder curve.
-function LineChart({ omzetSeries, labaSeries }) {
+function LineChart({ omzetSeries, labaSeries, dateLabel }) {
   if (!omzetSeries || omzetSeries.length === 0) {
     return (
       <div style={card({ flex: 1 })}>
-        <CardHeader label="Omzet vs Laba Hari Ini (Estimasi, per jam)" />
-        <div style={{ padding: '30px 0', textAlign: 'center', color: colors.textDim, fontSize: 13 }}>Belum ada order hari ini.</div>
+        <CardHeader label={`Omzet vs Laba ${dateLabel} (Estimasi, per jam)`} />
+        <div style={{ padding: '30px 0', textAlign: 'center', color: colors.textDim, fontSize: 13 }}>Belum ada order.</div>
       </div>
     );
   }
@@ -146,7 +161,7 @@ function LineChart({ omzetSeries, labaSeries }) {
 
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Omzet vs Laba Hari Ini (Estimasi, per jam)" />
+      <CardHeader label={`Omzet vs Laba ${dateLabel} (Estimasi, per jam)`} />
       <div style={{ position: 'relative' }}>
         <svg viewBox="0 0 300 100" preserveAspectRatio="none" style={{ width: '100%', height: 140, display: 'block' }}>
           <line x1="0" y1="92" x2="300" y2="92" stroke={colors.border} strokeWidth="1" strokeDasharray="2 4" />
@@ -194,7 +209,7 @@ function ProductList({ products }) {
 // Ranks today's cost figures against each other — all three now have a real
 // data source (see ProfitFunnel), so this went from a permanent "not
 // connected" placeholder to an actual breakdown.
-function CostBreakdown({ iklan, layanan, biayaPesanan }) {
+function CostBreakdown({ iklan, layanan, biayaPesanan, dateLabel }) {
   const costs = [
     { label: 'Iklan', value: iklan },
     { label: 'Layanan', value: layanan },
@@ -206,9 +221,9 @@ function CostBreakdown({ iklan, layanan, biayaPesanan }) {
 
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Biaya Terbesar Hari Ini" />
+      <CardHeader label={`Biaya Terbesar ${dateLabel}`} />
       {costs.length === 0 || total === 0 ? (
-        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>Belum ada biaya tercatat hari ini.</div>
+        <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>Belum ada biaya tercatat.</div>
       ) : (
         costs.map((c) => (
           <div key={c.label} style={{ padding: '8px 0', borderBottom: `1px solid ${colors.border}` }}>
@@ -283,13 +298,16 @@ function BocorList({ leaking }) {
 
 function MainDashboard() {
   const shopName = useShopName();
+  const today = todayDateStringWIB();
+  const [selectedDate, setSelectedDate] = useState(today);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
 
-  async function load() {
+  async function load(dateToLoad) {
+    setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}`);
+      const res = await apiFetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}&date=${dateToLoad}`);
       if (res.ok) {
         setData(await res.json());
         setLastRefreshAt(Date.now());
@@ -300,10 +318,14 @@ function MainDashboard() {
   }
 
   useEffect(() => {
-    load();
-    const interval = setInterval(load, REFRESH_MS);
+    load(selectedDate);
+    // Only auto-refresh while looking at today — a past date's numbers never
+    // change on their own, so polling it every minute would just be wasted
+    // requests.
+    if (selectedDate !== today) return undefined;
+    const interval = setInterval(() => load(selectedDate), REFRESH_MS);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedDate]);
 
   if (loading && !data) {
     return <div style={{ color: colors.textDim, padding: 40, textAlign: 'center' }}>Memuat data dashboard...</div>;
@@ -318,54 +340,79 @@ function MainDashboard() {
         Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim.
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa Hari Ini</div>
+          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa {formatDateDDMMYYYY(data.date)}</div>
           <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — last update {formatTime(lastRefreshAt)}</div>
         </div>
-        <button
-          onClick={load}
-          style={{
-            background: colors.cardAlt,
-            border: `1px solid ${colors.border}`,
-            color: colors.text,
-            padding: '6px 12px',
-            borderRadius: 8,
-            fontFamily: 'var(--sans)',
-            cursor: 'pointer',
-          }}
-        >
-          ↻ Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="date"
+            value={selectedDate}
+            max={today}
+            onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
+            style={{
+              background: colors.cardAlt,
+              border: `1px solid ${colors.border}`,
+              color: colors.text,
+              padding: '6px 12px',
+              borderRadius: 8,
+              fontFamily: 'var(--sans)',
+              cursor: 'pointer',
+            }}
+          />
+          <button
+            onClick={() => load(selectedDate)}
+            style={{
+              background: colors.cardAlt,
+              border: `1px solid ${colors.border}`,
+              color: colors.text,
+              padding: '6px 12px',
+              borderRadius: 8,
+              fontFamily: 'var(--sans)',
+              cursor: 'pointer',
+            }}
+          >
+            ↻ Refresh
+          </button>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        <KpiCard label="Total Order Hari Ini" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
-        <KpiCard label="Omzet Hari Ini (Estimasi)" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
-        <KpiCard label="Laba Kotor Hari Ini (Estimasi)" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
-        <KpiCard
-          label="Persentase Profit (Estimasi)"
-          value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
-          trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari kemarin' }}
-        />
-        {data.pengunjung ? (
-          <KpiCard label={`Pengunjung (${data.pengunjung.date})`} value={String(data.pengunjung.uniqueVisitors)} />
-        ) : (
-          <BlockedCard label="Pengunjung" note="Belum ada data — menunggu fetch harian pertama dari Brand Portal." />
-        )}
-      </div>
+      {!data.hasData ? (
+        <div style={{ ...card(), textAlign: 'center', padding: '32px 0', color: colors.textDim, fontSize: 14, marginBottom: 12 }}>
+          Data tidak tersedia untuk tanggal {formatDateDDMMYYYY(data.date)}.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+            <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
+            <KpiCard label="Omzet (Estimasi)" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
+            <KpiCard label="Laba Kotor (Estimasi)" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
+            <KpiCard
+              label="Persentase Profit (Estimasi)"
+              value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
+              trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari kemarin' }}
+            />
+            {data.pengunjung ? (
+              <KpiCard label={`Pengunjung (${data.pengunjung.date})`} value={String(data.pengunjung.uniqueVisitors)} />
+            ) : (
+              <BlockedCard label="Pengunjung" note="Belum ada data — menunggu fetch harian pertama dari Brand Portal." />
+            )}
+          </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} iklan={data.today.iklan} affiliasi={data.affiliasi} />
-      </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} iklan={data.today.iklan} affiliasi={data.affiliasi} />
+          </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <LineChart omzetSeries={data.todayHourly.omzet} labaSeries={data.todayHourly.laba} />
-      </div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            <LineChart omzetSeries={data.todayHourly.omzet} labaSeries={data.todayHourly.laba} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
+          </div>
+        </>
+      )}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <ProductList products={data.topProducts} />
-        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} />
+        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
