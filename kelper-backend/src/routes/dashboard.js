@@ -66,6 +66,58 @@ function priceInfoForItem(item, skuPrices) {
   return skuPrices.get(item.sku);
 }
 
+// Client-requested (2026-09-28): flags SKUs whose CURRENT products.price/
+// hpp differs from what's frozen (price_snapshot/hpp_snapshot) on that
+// SKU's most recently scanned order — i.e. "you've changed this since it
+// last sold". Only included when there's an actual difference; a SKU
+// that's never been touched since its last sale doesn't appear at all.
+// SQLite's single-max-aggregate rule (a documented feature, not a fluke)
+// makes oi.price_snapshot/oi.hpp_snapshot come from the same row as
+// MAX(ps.completed_at) within each sku group, so this needs no subquery
+// to find "the latest order's snapshot" per SKU.
+function findPriceDiffs(shopId) {
+  const lastSold = db
+    .prepare(`
+      SELECT oi.sku, oi.product_name, oi.price_snapshot, oi.hpp_snapshot, MAX(ps.completed_at) AS last_sold_at
+      FROM order_items oi
+      JOIN orders o ON o.order_sn = oi.order_sn
+      JOIN (
+        SELECT order_sn, MAX(completed_at) AS completed_at
+        FROM packing_sessions
+        WHERE status = 'DONE'
+        GROUP BY order_sn
+      ) ps ON ps.order_sn = o.order_sn
+      WHERE ${REAL_ORDER_FILTER} AND oi.price_snapshot IS NOT NULL
+      GROUP BY oi.sku
+    `)
+    .all(shopId);
+
+  const productBySku = new Map(db.prepare('SELECT sku, price, hpp FROM products').all().map((p) => [p.sku, p]));
+
+  return lastSold
+    .map((row) => {
+      const current = productBySku.get(row.sku);
+      const currentPrice = current?.price ?? null;
+      const currentHpp = current?.hpp ?? null;
+      const priceChanged = currentPrice !== row.price_snapshot;
+      const hppChanged = currentHpp !== row.hpp_snapshot;
+      if (!priceChanged && !hppChanged) return null;
+      return {
+        sku: row.sku,
+        name: row.product_name,
+        lastSoldAt: row.last_sold_at,
+        currentPrice,
+        snapshotPrice: row.price_snapshot,
+        priceDiff: priceChanged && currentPrice != null ? currentPrice - row.price_snapshot : null,
+        currentHpp,
+        snapshotHpp: row.hpp_snapshot,
+        hppDiff: hppChanged && currentHpp != null ? currentHpp - row.hpp_snapshot : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.lastSoldAt - a.lastSoldAt);
+}
+
 // Sums revenue/profit/fees for every real order attributed to [startTs,
 // endTs). Omzet/Laba Kotor follow OMZET_PRICE_SOURCE — 'catalog' (current
 // default) always uses catalog price x qty; 'shopee_blend' (the original
@@ -375,6 +427,7 @@ router.get('/summary', (req, res) => {
     leaking,
     mostStock,
     leastStock,
+    priceDiffs: findPriceDiffs(shopId),
     // Every metric this Dashboard shows now has a real data source
     // (escrow, Ads Performance, Brand Portal) — kept as an empty array
     // rather than removed, since the frontend still checks it per metric.
