@@ -7,7 +7,7 @@ import OrderSearch from './OrderSearch';
 import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower, IconAlertTriangle, IconSearch } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
@@ -229,10 +229,6 @@ function Dashboard() {
 
           <div>
             <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <div style={sideItemStyle}>
-                <IconBell size={16} />
-                Notifications
-              </div>
               {/* Shopee connection status/controls used to live here directly
                   (and before that, the old landing page's top-right corner) —
                   moved to its own /config/shopee page instead of taking up
