@@ -3,14 +3,16 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
+import OrderSearch from './OrderSearch';
 import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower, IconAlertTriangle } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower, IconAlertTriangle, IconSearch } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
+const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
@@ -22,6 +24,7 @@ const PACKING_SUB_ITEMS = [
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
 const ItemsIcon = ITEMS_TAB.Icon;
+const OrderIcon = ORDER_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
 function Dashboard() {
@@ -178,6 +181,14 @@ function Dashboard() {
               </button>
 
               <button
+                onClick={() => navigate(ORDER_TAB.path)}
+                style={navItemStyle(location.pathname === ORDER_TAB.path)}
+              >
+                <OrderIcon size={16} />
+                {ORDER_TAB.label}
+              </button>
+
+              <button
                 onClick={() => navigate(PACKING_SUB_ITEMS[0].path)}
                 style={navItemStyle(location.pathname.startsWith(PACKING_GROUP.path))}
               >
@@ -270,6 +281,7 @@ function Dashboard() {
             <Route path="/" element={<Navigate to="/home" replace />} />
             <Route path="/home" element={<MainDashboard />} />
             <Route path="/list-barang" element={<ListBarang />} />
+            <Route path="/order" element={<OrderSearch />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/active-station" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
