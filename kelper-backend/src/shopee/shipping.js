@@ -72,8 +72,14 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
   // guessing. Remove once we've gathered enough real samples.
   console.log(`[server] tracking number assigned for ${orderSn} after ${Date.now() - pollStartedAt}ms (${attemptsUsed} attempt(s))`);
 
-  const documentType = await resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber);
-  const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
+  // Temporarily reverted (2026-09-27): testing whether forcing
+  // shipping_document_type is itself what's preventing JIT/auto-arranged
+  // orders' documents from ever becoming READY (see
+  // logistics.can_not_print_jit_order in Shopee's create_shipping_document
+  // docs) — omitting it lets Shopee fall back to each courier's own
+  // suggested type again, same as before this whole investigation started.
+  // const documentType = await resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber);
+  const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber);
   if (docResult.error) {
     throw new Error(`create_shipping_document failed: ${docResult.message || docResult.error}`);
   }
