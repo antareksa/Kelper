@@ -172,7 +172,7 @@ function ItemScanCard({ order, receivedAt, items, flash, allComplete, waitingMes
 function ActionMessageCard({ order, receivedAt, message, type }) {
   const accent = type === 'error' ? colors.red : type === 'success' ? colors.green : colors.textDim;
   return (
-    <div style={card()}>
+    <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 })}>
       {order && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${colors.border}`, flexWrap: 'wrap', gap: 8 }}>
           <div style={{ fontSize: 13, color: colors.textDim }}>
@@ -187,7 +187,11 @@ function ActionMessageCard({ order, receivedAt, message, type }) {
         </div>
       )}
 
-      <div style={{ padding: '28px 12px', textAlign: 'center', fontSize: 16, fontWeight: 600, color: accent, lineHeight: 1.5 }}>
+      {/* flex:1 + centered both axes — this is the "main" section of the
+          kiosk's header/main/footer layout (client-requested 2026-09-27),
+          filling all remaining space instead of sitting as a small card at
+          the top with the rest of the screen empty. */}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '28px 12px', fontSize: 16, fontWeight: 600, color: accent, lineHeight: 1.5 }}>
         {message}
       </div>
     </div>

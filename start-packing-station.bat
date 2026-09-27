@@ -21,4 +21,10 @@ REM testing instead of the real server, use that machine's IP and Vite's dev
 REM port instead, e.g.: http://192.168.1.50:5173
 set SERVER_URL=https://packing.kelper.co.id
 
-start chrome --app=%SERVER_URL% --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
+REM --start-fullscreen: launches straight into fullscreen (no title bar, no
+REM taskbar) instead of a normal-sized app window. Kept as --app mode rather
+REM than switching to Chrome's stricter --kiosk flag, so Esc still exits
+REM fullscreen and the window can still be closed normally if needed at the
+REM physical machine — ask if the harder-to-exit --kiosk lockdown is wanted
+REM instead.
+start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
