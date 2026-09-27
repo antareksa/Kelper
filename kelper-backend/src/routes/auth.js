@@ -51,8 +51,15 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// Ordered most-recently-connected first (client-requested 2026-09-27) —
+// the frontend's shopConfig.js uses row 0 as "the active shop" now that
+// SHOP_ID is resolved at runtime instead of frozen at build time
+// (VITE_SHOP_ID). Reconnecting under a different shop doesn't delete the
+// old token row, so without this order the "active" pick would be
+// arbitrary (SQLite gives no ordering guarantee) whenever more than one
+// shop has ever been connected.
 router.get('/status', (req, res) => {
-  const rows = db.prepare('SELECT shop_id, expires_at, updated_at FROM shopee_tokens').all();
+  const rows = db.prepare('SELECT shop_id, expires_at, updated_at FROM shopee_tokens ORDER BY updated_at DESC').all();
   res.json(rows);
 });
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API_BASE } from './apiBase';
+import { refreshActiveShopId } from './shopConfig';
 
 // exchangeUrl lets the same component handle both the main app's callback
 // and the Brand Portal app's (a separate Shopee app — see ShopeeBrandAuth) —
@@ -20,6 +21,13 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
         const res = await fetch(`${API_BASE}${exchangeUrl}?code=${code}&shop_id=${shopId}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
+        // Only the main app's connection changes which shop is "active" —
+        // Brand Portal (exchangeUrl === '/auth/brand/exchange') just adds
+        // analytics access for whichever shop is already active, it never
+        // switches it.
+        if (exchangeUrl === '/auth/exchange') {
+          await refreshActiveShopId();
+        }
         setMessage('Connected! Returning to Shopee config...');
         setTimeout(backToConfig, 1200);
       } catch (err) {
