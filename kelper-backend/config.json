@@ -3,7 +3,8 @@
   "shipping": {
     "useMassShip": false,
     "trackingPoll": { "maxAttempts": 20, "delayMs": 3000 },
-    "documentPoll": { "maxAttempts": 5, "delayMs": 1000 }
+    "documentPoll": { "maxAttempts": 15, "delayMs": 2000 },
+    "maxBookingFailures": 5
   },
   "session": {
     "staleSessionSeconds": 3600,
