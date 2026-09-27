@@ -257,6 +257,13 @@ const newOrderCols = {
   // created_at, since an order can wait a long time for its label before
   // ever reaching Ready to Check at all.
   label_ready_at: 'INTEGER',
+  // Client-requested (2026-09-27): Shopee moves an order to RETRY_SHIP when
+  // the courier's pickup attempt failed and needs a re-arrange — previously
+  // invisible to us entirely (only CANCELLED was ever checked for). Synced
+  // both ways (set to 1 when Shopee reports RETRY_SHIP, back to 0 once it
+  // isn't) by shopeeSync.js's detectRetryShipOrders, run alongside the
+  // existing cancellation recheck.
+  needs_retry_ship: 'INTEGER NOT NULL DEFAULT 0',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { colors, card } from './theme';
 import { renderCode39Svg } from './Barcode';
-import { IconBolt, IconMoon, IconAlertTriangle } from './Icons';
+import { IconBolt, IconMoon, IconAlertTriangle, IconRotateCcw } from './Icons';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE, apiFetch } from './apiBase';
 // Only ever hits our own backend (active-stations, order-lists), never
@@ -33,6 +33,7 @@ const TAG_META = {
   instant: { Icon: IconBolt, color: colors.blue, title: 'Instant Shipping' },
   from_yesterday: { Icon: IconMoon, color: colors.orange, title: 'Order dari kemarin' },
   stuck: { Icon: IconAlertTriangle, color: colors.red, title: 'Belum dicek — sudah lama di Ready to Check' },
+  retry_ship: { Icon: IconRotateCcw, color: colors.red, title: 'Kurir gagal ambil paket — perlu diatur ulang di Shopee' },
 };
 
 function OrderTags({ tags }) {

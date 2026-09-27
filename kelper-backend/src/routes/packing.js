@@ -607,11 +607,12 @@ router.get('/session/:id', (req, res) => {
 // least one. `readyToCheckEnteredAt` is only passed for Ready to Check rows,
 // per the client's own definition of "stuck" (time in that bucket
 // specifically, not the order's total age).
-function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt }) {
+function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needsRetryShip }) {
   const tags = [];
   if (isInstant) tags.push('instant');
   if (sessionStartedAt != null && sessionStartedAt < startOfDayWIB(0)) tags.push('from_yesterday');
   if (readyToCheckEnteredAt != null && now() - readyToCheckEnteredAt > getReadyToCheckStuckSeconds()) tags.push('stuck');
+  if (needsRetryShip) tags.push('retry_ship');
   return tags;
 }
 
@@ -700,14 +701,14 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const readyForPickup = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.needs_retry_ship
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
       ORDER BY ps.last_activity_at ASC
     `)
     .all(shop_id)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at, needsRetryShip: row.needs_retry_ship }) }));
 
   // Only genuinely still waiting — work hour hasn't opened yet, so
   // bookDeferredOrders hasn't even started trying to book it. Once work

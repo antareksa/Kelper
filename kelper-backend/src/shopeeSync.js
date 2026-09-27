@@ -340,6 +340,45 @@ async function detectCancelledOrders(accessToken, shopId) {
   }
 }
 
+// Client-requested (2026-09-27): Shopee moves an order to RETRY_SHIP when the
+// courier's pickup attempt failed and needs re-arranging — until now this was
+// completely invisible to us, since nothing ever checked for it. Only orders
+// sitting in our own "Ready to Pickup" bucket are relevant (that's the only
+// point where a courier is actually attempting collection), so this only
+// checks that pool, same batching pattern as detectCancelledOrders above.
+// Synced both ways every tick — a retry that then succeeds clears the flag
+// again — rather than only ever being set once and going stale.
+async function detectRetryShipOrders(accessToken, shopId) {
+  const awaitingPickup = db
+    .prepare(`
+      SELECT o.order_sn FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%'
+    `)
+    .all(shopId)
+    .map((o) => o.order_sn);
+  if (awaitingPickup.length === 0) return;
+
+  for (let i = 0; i < awaitingPickup.length; i += CANCELLATION_CHECK_BATCH_SIZE) {
+    const batch = awaitingPickup.slice(i, i + CANCELLATION_CHECK_BATCH_SIZE);
+    const detail = await getOrderDetail(accessToken, shopId, batch, 'order_status');
+    if (detail.error) {
+      console.error(`[server] get_order_detail (retry-ship check) failed for shop ${shopId}: ${detail.message || detail.error}`);
+      continue;
+    }
+    for (const order of detail.response?.order_list || []) {
+      const needsRetryShip = order.order_status === 'RETRY_SHIP' ? 1 : 0;
+      const changed = db.prepare('UPDATE orders SET needs_retry_ship = ? WHERE order_sn = ? AND needs_retry_ship != ?')
+        .run(needsRetryShip, order.order_sn, needsRetryShip).changes > 0;
+      if (changed && needsRetryShip) {
+        console.log(`[server] order ${order.order_sn} needs RETRY_SHIP — courier pickup failed, needs re-arrange (shop ${shopId})`);
+      } else if (changed) {
+        console.log(`[server] order ${order.order_sn} RETRY_SHIP cleared — courier pickup succeeded on retry (shop ${shopId})`);
+      }
+    }
+  }
+}
+
 const insertIncome = db.prepare(`
   INSERT OR REPLACE INTO order_income
     (order_sn, order_selling_price, escrow_amount, service_fee, commission_fee, seller_transaction_fee, fetched_at)
@@ -631,6 +670,7 @@ async function bookAndEnrichOnly(shopId) {
     await bookDeferredOrders(accessToken, shopId);
   }
   await detectCancelledOrders(accessToken, shopId);
+  await detectRetryShipOrders(accessToken, shopId);
   await fillMissingIncomeData(accessToken, shopId);
 }
 

@@ -157,6 +157,17 @@ export function IconAlertTriangle({ size = 14 }) {
   );
 }
 
+// Courier pickup failed, needs re-arrange (RETRY_SHIP) — a circular retry
+// arrow, distinct from the generic alert triangle above.
+export function IconRotateCcw({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M13 8A5 5 0 1 1 8 3c1.6 0 3 .7 4 1.8" />
+      <path d="M12.5 1.5v3.5H9" />
+    </svg>
+  );
+}
+
 export function IconChevronDown({ size = 12 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
