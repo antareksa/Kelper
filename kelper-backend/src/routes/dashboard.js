@@ -23,15 +23,25 @@ const REAL_ORDER_FILTER = "o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%'";
 // packing-scan equivalent and still come straight from Shopee.
 const DASHBOARD_DATA_SOURCE = 'internal'; // 'internal' | 'shopee'
 
+// Client-requested (2026-09-27): Omzet/Laba Kotor now always use the
+// catalog price (shopee_item_models.price, the shop's own listed selling
+// price) x qty for every order — trusted as "our own" number — instead of
+// blending in Shopee's real escrow settlement (order_income) once an order
+// ships. The escrow-blended calculation is kept below (see sumOrdersInRange)
+// rather than deleted, so this is revertible by flipping this one constant
+// back to 'shopee_blend' and redeploying. Layanan/Biaya Pesanan are
+// untouched by this — they have no catalog equivalent and stay real-escrow-
+// only, same as before.
+const OMZET_PRICE_SOURCE = 'catalog'; // 'catalog' | 'shopee_blend'
+
 // order/get_order_detail (the endpoint that would normally carry real
-// per-order sale price) has been confirmed broken for this shop, so orders
+// per-order sale price) has been confirmed broken for this shop, so the old
+// 'shopee_blend' OMZET_PRICE_SOURCE falls back to an ESTIMATE for orders
 // that haven't shipped yet (no order_income row — see shopeeSync.js's
-// fillMissingIncomeData) fall back to an ESTIMATE: current catalog price x
-// qty sold, not the actual transaction price (so a since-changed price,
-// voucher, or bundle discount isn't reflected for those). Once an order has
-// shipped, its real escrow-based numbers (order_income) are used instead —
-// see sumOrdersInRange below for the blend. Ads/affiliate/visitor metrics
-// still have no data source at all (see the `blocked` list further down).
+// fillMissingIncomeData): current catalog price x qty sold, not the actual
+// transaction price (so a since-changed price, voucher, or bundle discount
+// isn't reflected for those). Ads/affiliate/visitor metrics still have no
+// data source at all (see the `blocked` list further down).
 function buildSkuPriceMap(shopId) {
   const rows = db
     .prepare(`
@@ -49,12 +59,13 @@ function buildSkuPriceMap(shopId) {
 }
 
 // Sums revenue/profit/fees for every real order attributed to [startTs,
-// endTs) — blended per order: an order with a fetched order_income row (i.e.
-// it has shipped, see fillMissingIncomeData) uses Shopee's real escrow
-// numbers; one without it yet falls back to the catalog price x qty
-// estimate. Fee fields (layanan/biayaPesanan) have no estimate equivalent —
-// they're only ever real, so they undercount orders still in progress by
-// design rather than guessing at a number Shopee hasn't charged yet.
+// endTs). Omzet/Laba Kotor follow OMZET_PRICE_SOURCE — 'catalog' (current
+// default) always uses catalog price x qty; 'shopee_blend' (the original
+// behavior) uses Shopee's real escrow numbers once an order has shipped,
+// falling back to the catalog estimate until then. Layanan/Biaya Pesanan
+// are unaffected by that toggle — they have no catalog equivalent, so they
+// stay real-escrow-only either way, undercounting orders still in progress
+// by design rather than guessing at a number Shopee hasn't charged yet.
 //
 // Which orders fall in range, and by which date, depends on
 // DASHBOARD_DATA_SOURCE: 'internal' counts an order on the day it was
@@ -103,7 +114,9 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
   let biayaPesanan = 0;
   for (const order of orders) {
     const orderItems = itemsByOrder.get(order.order_sn) || [];
-    if (order.escrow_amount != null) {
+    const useEscrowForOmzet = OMZET_PRICE_SOURCE === 'shopee_blend' && order.escrow_amount != null;
+
+    if (useEscrowForOmzet) {
       let cogs = 0;
       for (const item of orderItems) {
         const info = skuPrices.get(item.sku);
@@ -111,8 +124,6 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
       }
       omzet += order.order_selling_price ?? 0;
       laba += order.escrow_amount - cogs;
-      layanan += (order.service_fee ?? 0) + (order.commission_fee ?? 0);
-      biayaPesanan += order.seller_transaction_fee ?? 0;
     } else {
       for (const item of orderItems) {
         const info = skuPrices.get(item.sku);
@@ -120,6 +131,13 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
         omzet += info.price * item.qty;
         if (info.hpp != null) laba += (info.price - info.hpp) * item.qty;
       }
+    }
+
+    // Layanan/Biaya Pesanan: always real-escrow-only, independent of
+    // OMZET_PRICE_SOURCE — there's no catalog-price equivalent for a fee.
+    if (order.escrow_amount != null) {
+      layanan += (order.service_fee ?? 0) + (order.commission_fee ?? 0);
+      biayaPesanan += order.seller_transaction_fee ?? 0;
     }
   }
   return { orderCount: orders.length, omzet, laba, layanan, biayaPesanan };

@@ -98,7 +98,7 @@ function BlockedCard({ label, note }) {
 // server startup for Iklan).
 function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   const steps = [
-    { label: 'Margin (Estimasi)', value: formatRupiah(laba), color: colors.green, blocked: false },
+    { label: 'Margin', value: formatRupiah(laba), color: colors.green, blocked: false },
     { label: 'Iklan', value: iklan != null ? formatRupiah(iklan) : null, color: colors.blue, blocked: iklan == null },
     { label: 'Layanan', value: formatRupiah(layanan), color: colors.blue, blocked: false },
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
@@ -147,7 +147,7 @@ function LineChart({ omzetSeries, labaSeries, dateLabel }) {
   if (!omzetSeries || omzetSeries.length === 0) {
     return (
       <div style={card({ flex: 1 })}>
-        <CardHeader label={`Omzet vs Laba ${dateLabel} (Estimasi, per jam)`} />
+        <CardHeader label={`Omzet vs Laba ${dateLabel} (per jam)`} />
         <div style={{ padding: '30px 0', textAlign: 'center', color: colors.textDim, fontSize: 13 }}>Belum ada order.</div>
       </div>
     );
@@ -166,7 +166,7 @@ function LineChart({ omzetSeries, labaSeries, dateLabel }) {
 
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label={`Omzet vs Laba ${dateLabel} (Estimasi, per jam)`} />
+      <CardHeader label={`Omzet vs Laba ${dateLabel} (per jam)`} />
       <div style={{ position: 'relative' }}>
         <svg viewBox="0 0 300 100" preserveAspectRatio="none" style={{ width: '100%', height: 140, display: 'block' }}>
           <line x1="0" y1="92" x2="300" y2="92" stroke={colors.border} strokeWidth="1" strokeDasharray="2 4" />
@@ -341,10 +341,6 @@ function MainDashboard() {
 
   return (
     <div style={{ color: colors.text }}>
-      <div style={{ background: colors.orangeDim, border: `1px solid ${colors.orange}`, color: '#f0c674', borderRadius: 10, padding: '8px 12px', fontSize: 12, marginBottom: 16, lineHeight: 1.5 }}>
-        Omzet &amp; Laba di bawah ini adalah <strong>estimasi</strong> untuk order yang belum dikirim (harga katalog saat ini × qty terjual, karena Shopee belum menyediakan harga per-order untuk toko ini) dan <strong>data riil Shopee</strong> untuk order yang sudah dikirim.
-      </div>
-
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa {formatDateDDMMYYYY(data.date)}</div>
@@ -391,15 +387,15 @@ function MainDashboard() {
         <>
           <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
             <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
-            <KpiCard label="Omzet (Estimasi)" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
-            <KpiCard label="Laba Kotor (Estimasi)" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
+            <KpiCard label="Omzet" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
+            <KpiCard label="Laba Kotor" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
             <KpiCard
-              label="Persentase Profit (Estimasi)"
+              label="Persentase Profit"
               value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
               trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari hari sebelumnya' }}
             />
             {data.pengunjung ? (
-              <KpiCard label={`Pengunjung (${data.pengunjung.date})`} value={String(data.pengunjung.uniqueVisitors)} />
+              <KpiCard label="Pengunjung" value={String(data.pengunjung.uniqueVisitors)} />
             ) : (
               <BlockedCard label="Pengunjung" note="Belum ada data — menunggu fetch harian pertama dari Brand Portal." />
             )}
