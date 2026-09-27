@@ -6,9 +6,33 @@ const {
   massShipOrder,
   getTrackingNumber,
   createShippingDocument,
+  getShippingDocumentParameter,
   getShippingDocumentResult,
 } = require('./client');
 const { getConfig } = require('../config');
+
+// Client-reported (2026-09-27): different couriers' labels were coming out
+// in different layouts/sizes because create_shipping_document was never
+// told which template to use, so Shopee fell back to each courier's own
+// default. Forcing thermal everywhere (when the courier actually offers it —
+// see resolveShippingDocumentType below) matches the Packing Stations'
+// actual printers and makes every label consistent regardless of courier.
+const PREFERRED_SHIPPING_DOCUMENT_TYPE = 'THERMAL_AIR_WAYBILL';
+
+// Best-effort: if this call itself fails or the order isn't in the result
+// (fail_error), returns undefined so create_shipping_document falls back to
+// its old behavior (courier's own default) rather than blocking booking.
+async function resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber) {
+  const param = await getShippingDocumentParameter(accessToken, shopId, orderSn, trackingNumber);
+  const result = param.response?.result_list?.[0];
+  if (param.error || !result || result.fail_error) return undefined;
+
+  const chosen = result.selectable_shipping_document_type?.includes(PREFERRED_SHIPPING_DOCUMENT_TYPE)
+    ? PREFERRED_SHIPPING_DOCUMENT_TYPE
+    : result.suggest_shipping_document_type;
+  console.log(`[server] ${orderSn}: shipping_document_type -> ${chosen} (selectable: ${result.selectable_shipping_document_type?.join(', ') || 'none'})`);
+  return chosen;
+}
 
 // Auto-picks the shop's default pickup address and the recommended time slot,
 // matching the doc's intent that operators don't manually choose logistics options.
@@ -48,7 +72,8 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
   // guessing. Remove once we've gathered enough real samples.
   console.log(`[server] tracking number assigned for ${orderSn} after ${Date.now() - pollStartedAt}ms (${attemptsUsed} attempt(s))`);
 
-  const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber);
+  const documentType = await resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber);
+  const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
   if (docResult.error) {
     throw new Error(`create_shipping_document failed: ${docResult.message || docResult.error}`);
   }

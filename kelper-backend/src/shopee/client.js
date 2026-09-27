@@ -232,8 +232,25 @@ function cancelOrder(accessToken, shopId, orderSn, cancelReason = 'OUT_OF_STOCK'
   });
 }
 
-function createShippingDocument(accessToken, shopId, orderSn, trackingNumber) {
+// shippingDocumentType (optional) picks which template Shopee renders —
+// omitted, it falls back to whatever that courier's own default is (see
+// get_shipping_document_parameter below), which is why labels used to come
+// out in inconsistent layouts/sizes across couriers.
+function createShippingDocument(accessToken, shopId, orderSn, trackingNumber, shippingDocumentType) {
+  const order = { order_sn: orderSn, tracking_number: trackingNumber };
+  if (shippingDocumentType) order.shipping_document_type = shippingDocumentType;
   return shopPost('/api/v2/logistics/create_shipping_document', accessToken, shopId, {
+    order_list: [order],
+  });
+}
+
+// Tells us, per order, which shipping_document_type values that specific
+// courier actually supports (selectable_shipping_document_type) and which
+// one Shopee would use by default if none is specified
+// (suggest_shipping_document_type) — checked before create_shipping_document
+// so we can force a consistent type instead of drifting per-courier.
+function getShippingDocumentParameter(accessToken, shopId, orderSn, trackingNumber) {
+  return shopPost('/api/v2/logistics/get_shipping_document_parameter', accessToken, shopId, {
     order_list: [{ order_sn: orderSn, tracking_number: trackingNumber }],
   });
 }
@@ -282,6 +299,7 @@ module.exports = {
   shipOrder,
   cancelOrder,
   createShippingDocument,
+  getShippingDocumentParameter,
   getShippingDocumentResult,
   downloadShippingDocument,
 };
