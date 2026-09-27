@@ -11,6 +11,18 @@ const router = express.Router();
 // business owner is actually reading numbers off of.
 const REAL_ORDER_FILTER = "o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%'";
 
+// Client-requested (2026-09-27): Total Order/Omzet/Laba Kotor/Margin now
+// attribute an order to the day it was scanned DONE in Packing Station's
+// Shipping Mode (packing_sessions.completed_at — see packing.js's
+// confirmOrderPickedUp, used by both /confirm-pickup and the bulk "Force
+// All Pickup" action) — "our data" — instead of the day Shopee created the
+// order (orders.created_at) — "Shopee data". The old Shopee-based query is
+// kept below rather than deleted so this can be reverted by flipping this
+// one constant back to 'shopee' and redeploying, no other code changes
+// needed. Pengunjung/Affiliasi/Iklan are untouched by this — they have no
+// packing-scan equivalent and still come straight from Shopee.
+const DASHBOARD_DATA_SOURCE = 'internal'; // 'internal' | 'shopee'
+
 // order/get_order_detail (the endpoint that would normally carry real
 // per-order sale price) has been confirmed broken for this shop, so orders
 // that haven't shipped yet (no order_income row — see shopeeSync.js's
@@ -36,22 +48,43 @@ function buildSkuPriceMap(shopId) {
   return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
 }
 
-// Sums revenue/profit/fees for every real order created in [startTs, endTs)
-// — blended per order: an order with a fetched order_income row (i.e. it
-// has shipped, see fillMissingIncomeData) uses Shopee's real escrow numbers;
-// one without it yet falls back to the catalog price x qty estimate. Fee
-// fields (layanan/biayaPesanan) have no estimate equivalent — they're only
-// ever real, so they undercount orders still in progress by design rather
-// than guessing at a number Shopee hasn't charged yet.
+// Sums revenue/profit/fees for every real order attributed to [startTs,
+// endTs) — blended per order: an order with a fetched order_income row (i.e.
+// it has shipped, see fillMissingIncomeData) uses Shopee's real escrow
+// numbers; one without it yet falls back to the catalog price x qty
+// estimate. Fee fields (layanan/biayaPesanan) have no estimate equivalent —
+// they're only ever real, so they undercount orders still in progress by
+// design rather than guessing at a number Shopee hasn't charged yet.
+//
+// Which orders fall in range, and by which date, depends on
+// DASHBOARD_DATA_SOURCE: 'internal' counts an order on the day it was
+// scanned DONE in Shipping Mode (only orders that have actually completed
+// that scan show up at all); 'shopee' (the original behavior) counts it on
+// the day Shopee created the order, regardless of packing/shipping progress.
 function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
-  const orders = db
-    .prepare(`
-      SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
-      FROM orders o
-      LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
-      WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
-    `)
-    .all(shopId, startTs, endTs);
+  const orders = DASHBOARD_DATA_SOURCE === 'internal'
+    ? db
+        .prepare(`
+          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
+          FROM orders o
+          JOIN (
+            SELECT order_sn, MAX(completed_at) AS completed_at
+            FROM packing_sessions
+            WHERE status = 'DONE'
+            GROUP BY order_sn
+          ) ps ON ps.order_sn = o.order_sn
+          LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
+          WHERE ${REAL_ORDER_FILTER} AND ps.completed_at >= ? AND ps.completed_at < ?
+        `)
+        .all(shopId, startTs, endTs)
+    : db
+        .prepare(`
+          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
+          FROM orders o
+          LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
+          WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
+        `)
+        .all(shopId, startTs, endTs);
   if (orders.length === 0) return { orderCount: 0, omzet: 0, laba: 0, layanan: 0, biayaPesanan: 0 };
 
   const placeholders = orders.map(() => '?').join(',');
@@ -141,21 +174,36 @@ router.get('/summary', (req, res) => {
   // chart nobody reads a single value off of.
   const dayStart = startOfDateWIB(selectedDate);
   const dayEnd = startOfDateWIB(shiftDateStringWIB(selectedDate, 1));
-  const dayItems = db
-    .prepare(`
-      SELECT oi.sku, oi.qty, o.created_at
-      FROM order_items oi
-      JOIN orders o ON o.order_sn = oi.order_sn
-      WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
-    `)
-    .all(shopId, dayStart, dayEnd);
+  const dayItems = DASHBOARD_DATA_SOURCE === 'internal'
+    ? db
+        .prepare(`
+          SELECT oi.sku, oi.qty, ps.completed_at AS ts
+          FROM order_items oi
+          JOIN orders o ON o.order_sn = oi.order_sn
+          JOIN (
+            SELECT order_sn, MAX(completed_at) AS completed_at
+            FROM packing_sessions
+            WHERE status = 'DONE'
+            GROUP BY order_sn
+          ) ps ON ps.order_sn = o.order_sn
+          WHERE ${REAL_ORDER_FILTER} AND ps.completed_at >= ? AND ps.completed_at < ?
+        `)
+        .all(shopId, dayStart, dayEnd)
+    : db
+        .prepare(`
+          SELECT oi.sku, oi.qty, o.created_at AS ts
+          FROM order_items oi
+          JOIN orders o ON o.order_sn = oi.order_sn
+          WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
+        `)
+        .all(shopId, dayStart, dayEnd);
   const lastHour = isToday ? Math.min(23, Math.floor((Math.floor(Date.now() / 1000) - dayStart) / 3600)) : 23;
   const hourlyOmzet = new Array(lastHour + 1).fill(0);
   const hourlyLaba = new Array(lastHour + 1).fill(0);
   for (const item of dayItems) {
     const info = skuPrices.get(item.sku);
     if (!info || info.price == null) continue;
-    const hour = Math.min(lastHour, Math.floor((item.created_at - dayStart) / 3600));
+    const hour = Math.min(lastHour, Math.floor((item.ts - dayStart) / 3600));
     hourlyOmzet[hour] += info.price * item.qty;
     if (info.hpp != null) hourlyLaba[hour] += (info.price - info.hpp) * item.qty;
   }
