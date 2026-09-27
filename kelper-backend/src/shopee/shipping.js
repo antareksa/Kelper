@@ -112,6 +112,26 @@ const PACKAGE_NUMBER_PATTERN = /Package (\S+) not eligible for rescheduling/i;
 // would never become true.
 const ALREADY_SHIPPED_PATTERN = /already\s*(been\s*)?shipped/i;
 
+// Client-reported (2026-09-27), confirmed against a real SPX Instant Prioritas
+// order: some couriers get their logistics request auto-created by Shopee
+// itself (order_status already PROCESSED, package_list already populated)
+// before we ever call ship_order — no seller-scheduled pickup involved, unlike
+// normal couriers. ship_order rejects this with a THIRD wording that's neither
+// of the two patterns above, and critically get_shipping_parameter does NOT
+// flag it as already-booked either (it keeps returning fresh pickup slots),
+// so without this check the order retried ship_order forever and never
+// progressed to tracking/label.
+const NOT_READY_TO_SHIP_PATTERN = /not ready to ship/i;
+
+// Confirms via get_order_detail whether a package already exists for this
+// order (the ground truth ship_order itself won't hand us directly) — used
+// as a fallback once ship_order rejects, not called on every attempt, since
+// the vast majority of orders don't need this extra round trip.
+async function findExistingPackageNumber(accessToken, shopId, orderSn) {
+  const detail = await getOrderDetail(accessToken, shopId, [orderSn], 'package_list');
+  return detail.response?.order_list?.[0]?.package_list?.[0]?.package_number ?? null;
+}
+
 // Single-order path: get_shipping_parameter -> ship_order.
 //
 // Idempotent by design: if a previous attempt already called ship_order (e.g. a
@@ -132,16 +152,28 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   if (!alreadyBookedMatch) {
     const pickup = pickPickupOption(shippingParam.response?.pickup);
     const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
-    const alreadyShipped = shipResult.error && ALREADY_SHIPPED_PATTERN.test(shipResult.message || '');
-    if (shipResult.error && !alreadyShipped) {
-      throw new Error(`ship_order failed: ${shipResult.message || shipResult.error}`);
+
+    if (shipResult.error) {
+      const alreadyShipped = ALREADY_SHIPPED_PATTERN.test(shipResult.message || '');
+      const notReadyToShip = NOT_READY_TO_SHIP_PATTERN.test(shipResult.message || '');
+
+      if (notReadyToShip) {
+        const existing = await findExistingPackageNumber(accessToken, shopId, orderSn);
+        if (!existing) throw new Error(`ship_order failed: ${shipResult.message || shipResult.error}`);
+        packageNumber = existing;
+        console.log(`[server] ${orderSn}: package ${existing} already auto-arranged by courier — skipping ship_order`);
+      } else if (!alreadyShipped) {
+        throw new Error(`ship_order failed: ${shipResult.message || shipResult.error}`);
+      }
     }
 
-    // Deliberately re-trigger the "already booked" error we just handled above
-    // (or that ship_order just reported directly), purely to read the
-    // package_number out of its message.
-    const recheck = await getShippingParameter(accessToken, shopId, orderSn);
-    packageNumber = recheck.message?.match(PACKAGE_NUMBER_PATTERN)?.[1] ?? null;
+    if (!packageNumber) {
+      // Deliberately re-trigger the "already booked" error we just handled
+      // above (or that ship_order just reported directly), purely to read the
+      // package_number out of its message.
+      const recheck = await getShippingParameter(accessToken, shopId, orderSn);
+      packageNumber = recheck.message?.match(PACKAGE_NUMBER_PATTERN)?.[1] ?? null;
+    }
   }
 
   const trackingNumber = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
