@@ -17,6 +17,7 @@ const SESSION_STATUS_LABEL = {
   DEFERRED_READY: 'Ready to Process Tomorrow',
   READY_FOR_PICKUP: 'Ready to Pickup',
   EXCEPTION: 'Problem Order',
+  DONE: 'Selesai (Diambil Kurir)',
 };
 
 function StatusBadge({ label, accent = colors.text }) {
@@ -120,8 +121,8 @@ export default function OrderSearch() {
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-            <StatusBadge label={result.status} />
-            {result.session && (
+            <StatusBadge label={SESSION_STATUS_LABEL[result.status] || result.status} />
+            {result.session && result.session.status !== result.status && (
               <StatusBadge label={SESSION_STATUS_LABEL[result.session.status] || result.session.status} accent={colors.blue} />
             )}
             {result.needs_retry_ship && <StatusBadge label="Perlu Retry Ship" accent={colors.red} />}
