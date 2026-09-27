@@ -82,6 +82,12 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
               <div>CURRENT STATUS - {detail.bucket}{detail.forced ? ' (FORCED)' : ''}</div>
             </div>
 
+            {detail.exceptionReason && (
+              <div style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${colors.red}`, color: colors.red, fontSize: 12.5, marginBottom: 14 }}>
+                {detail.exceptionReason}
+              </div>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
               {detail.items.length === 0 ? (
                 <p style={{ color: colors.textDim, fontSize: 13 }}>Belum ada data item.</p>
@@ -777,6 +783,9 @@ function CancelMasalahList() {
                           {row.station_id}
                           {row.operator_name && ` (${row.operator_name})`}
                         </div>
+                      )}
+                      {row.exception_reason && (
+                        <div style={{ color: colors.red, marginTop: 4 }}>{row.exception_reason}</div>
                       )}
                     </div>
                   ))

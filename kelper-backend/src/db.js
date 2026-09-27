@@ -227,6 +227,15 @@ if (!packingSessionCols.includes('last_activity_at')) {
 if (!packingSessionCols.includes('forced')) {
   db.exec('ALTER TABLE packing_sessions ADD COLUMN forced INTEGER NOT NULL DEFAULT 0');
 }
+// Client-requested (2026-09-27): a Problem Order (EXCEPTION) previously had
+// no way to say WHY it was flagged — an operator's manual "Masalah" tap still
+// doesn't record one, but the automatic flagging in shopeeSync.js's
+// bookOneOrder (after repeated real booking failures) writes the actual
+// Shopee error here so it shows up in the Cancel & Masalah list instead of
+// requiring someone to go dig through server logs.
+if (!packingSessionCols.includes('exception_reason')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN exception_reason TEXT');
+}
 
 // Non-destructive migration for the server's background sync flow: orders
 // now carry their own pre-fetched shipment/label data instead of that being
@@ -264,6 +273,13 @@ const newOrderCols = {
   // isn't) by shopeeSync.js's detectRetryShipOrders, run alongside the
   // existing cancellation recheck.
   needs_retry_ship: 'INTEGER NOT NULL DEFAULT 0',
+  // Client-requested (2026-09-27): counts consecutive bookOneOrder failures
+  // (shopeeSync.js) so a booking that keeps failing (e.g. an unrecognized
+  // Shopee rejection) gets flagged to Masalah after a few tries instead of
+  // retrying — and hammering Shopee's API — forever with the order silently
+  // stuck in the Processing bucket. Reset to 0 on the next successful booking.
+  booking_fail_count: 'INTEGER NOT NULL DEFAULT 0',
+  booking_last_error: 'TEXT',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

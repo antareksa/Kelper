@@ -213,10 +213,37 @@ const countReadyToCheck = db.prepare(`
     )
 `);
 
+// Client-requested (2026-09-27): after bookOneOrder has failed too many times
+// in a row for the same order (an unrecognized Shopee rejection, a courier
+// quirk, whatever), stop retrying it automatically and surface it as a
+// Problem Order instead — visible in the Cancel & Masalah list with the
+// actual error, so an admin can resolve it manually rather than it silently
+// looping forever in the Processing bucket. Works whether the order already
+// has a session (the bookDeferredOrders path — a DEFERRED_READY session gets
+// flipped to EXCEPTION in place, keeping its original station/operator) or
+// not yet (the bookAndLabelPendingOrders path — a fresh SYSTEM-owned session
+// is created purely to carry the EXCEPTION status and reason).
+function flagOrderAsException(orderSn, reason) {
+  const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(orderSn);
+  if (session) {
+    db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', exception_reason = ?, last_activity_at = ? WHERE id = ?")
+      .run(reason, now(), session.id);
+  } else {
+    db.prepare(`
+      INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, exception_reason, started_at, last_activity_at)
+      VALUES (?, 'SYSTEM', 'Auto (Booking Gagal)', 'EXCEPTION', ?, ?, ?)
+    `).run(orderSn, reason, now(), now());
+  }
+  console.log(`[server] ${orderSn}: moved to Masalah after repeated booking failures — ${reason}`);
+}
+
 // Shared by both booking paths below: books the real shipment with Shopee
 // (respects config.shipping.useMassShip) and downloads the label once,
-// storing both locally. Idempotent and safe to retry — an order that fails
-// here simply stays label_ready = 0 and gets picked up again next tick.
+// storing both locally. Safe to retry — an order that fails here simply
+// stays label_ready = 0 and gets picked up again next tick, up to
+// config.shipping.maxBookingFailures consecutive failures, after which it's
+// flagged to Masalah (see flagOrderAsException above) instead of retried
+// forever.
 async function bookOneOrder(accessToken, shopId, orderSn) {
   try {
     const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
@@ -225,11 +252,18 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
       throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
     }
 
-    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number) WHERE order_sn = ?')
+    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number), booking_fail_count = 0, booking_last_error = NULL WHERE order_sn = ?')
       .run(trackingNumber, docResult.pdf, now(), packageNumber, orderSn);
     console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked, tracking ${trackingNumber})`);
   } catch (err) {
-    console.error(`[server] booking/labeling failed for order ${orderSn}: ${err.message}`);
+    const failCount = (db.prepare('SELECT booking_fail_count FROM orders WHERE order_sn = ?').get(orderSn)?.booking_fail_count ?? 0) + 1;
+    db.prepare('UPDATE orders SET booking_fail_count = ?, booking_last_error = ? WHERE order_sn = ?').run(failCount, err.message, orderSn);
+    console.error(`[server] booking/labeling failed for order ${orderSn} (attempt ${failCount}): ${err.message}`);
+
+    const { maxBookingFailures } = getConfig().shipping;
+    if (maxBookingFailures > 0 && failCount >= maxBookingFailures) {
+      flagOrderAsException(orderSn, err.message);
+    }
   }
 }
 
@@ -256,8 +290,17 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   if (!isWithinWorkHour()) return;
 
   const cutoff = now() - getOrderDelaySeconds();
+  // Excludes orders that already have a packing_sessions row (in particular
+  // one flagOrderAsException just created) — once flagged to Masalah, an
+  // order must wait for manual resolution, not get silently picked up and
+  // retried again on the very next tick.
   let pending = db
-    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND label_ready = 0 AND created_at <= ? ORDER BY created_at ASC")
+    .prepare(`
+      SELECT o.order_sn FROM orders o
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0 AND o.created_at <= ?
+        AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
+      ORDER BY o.created_at ASC
+    `)
     .all(shopId, cutoff);
 
   const maxReadyToCheck = getMaxReadyToCheck();

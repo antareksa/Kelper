@@ -768,7 +768,7 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
 
   const masalah = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.exception_reason
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
@@ -863,6 +863,7 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
     bucket,
     canManage: rank >= 2,
     forced: session?.forced === 1,
+    exceptionReason: session?.status === 'EXCEPTION' ? session.exception_reason : null,
     items: items.map((it) => ({ ...it, scanned_qty: progressBySku[it.sku] || 0 })),
   });
 });

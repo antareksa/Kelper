@@ -19,7 +19,11 @@ const DEFAULTS = {
   shipping: {
     useMassShip: false,
     trackingPoll: { maxAttempts: 20, delayMs: 3000 },
-    documentPoll: { maxAttempts: 5, delayMs: 1000 },
+    documentPoll: { maxAttempts: 15, delayMs: 2000 },
+    // After this many consecutive bookOneOrder failures for the same order,
+    // give up retrying it automatically and flag it to Masalah instead (see
+    // shopeeSync.js's bookOneOrder) — better than silently retrying forever.
+    maxBookingFailures: 5,
   },
   session: {
     staleSessionSeconds: 3600,
