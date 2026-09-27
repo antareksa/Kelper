@@ -29,17 +29,6 @@ function todayDateStringWIB() {
   return wib.toISOString().slice(0, 10);
 }
 
-// Client-requested (2026-09-27): the Dashboard opens on yesterday by default
-// rather than today — today's Order/Omzet/Laba are technically live, but the
-// client doesn't want to see a still-accumulating number on open and would
-// rather land on yesterday's settled total, picking "today" manually when
-// they want the live view.
-function yesterdayDateStringWIB() {
-  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000);
-  wib.setUTCDate(wib.getUTCDate() - 1);
-  return wib.toISOString().slice(0, 10);
-}
-
 // YYYY-MM-DD -> dd/mm/yyyy for the "Performa" heading.
 function formatDateDDMMYYYY(dateStr) {
   const [y, m, d] = dateStr.split('-');
@@ -49,8 +38,13 @@ function formatDateDDMMYYYY(dateStr) {
 // pct is a plain percentage-change number (e.g. 12.3 or -4.5); suffix lets
 // the margin card (a percentage-POINT delta, not a percentage change) read
 // correctly instead of implying a second layer of percent-of-percent math.
-function trendLabel(pct, suffix = '% dari kemarin') {
-  if (pct == null) return 'Belum ada data kemarin';
+function trendLabel(pct, suffix = '% dari hari sebelumnya') {
+  // Not "no data for this day" — the day's own number above this line is
+  // real. This only means the PREVIOUS day had 0, so there's nothing to
+  // divide by for a % comparison (see pctChange). Worded around "kemarin"
+  // on purpose — that read as if the selected day itself was missing data,
+  // which is what caused the confusion this label exists to fix.
+  if (pct == null) return 'Tidak ada pembanding (hari sebelumnya kosong)';
   return `${pct > 0 ? '+' : ''}${pct}${suffix}`;
 }
 
@@ -77,7 +71,7 @@ function KpiCard({ label, value, trend, spark }) {
       <div style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
       <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
         {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
-        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix) : 'Belum ada data kemarin'}</span>
+        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix) : 'Tidak ada pembanding'}</span>
       </div>
       {spark && spark.length >= 2 ? <Sparkline data={spark} color={sparkColor} height={30} /> : <div style={{ height: 30 }} />}
     </div>
@@ -310,7 +304,7 @@ function BocorList({ leaking }) {
 function MainDashboard() {
   const shopName = useShopName();
   const today = todayDateStringWIB();
-  const [selectedDate, setSelectedDate] = useState(yesterdayDateStringWIB());
+  const [selectedDate, setSelectedDate] = useState(today);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
@@ -402,7 +396,7 @@ function MainDashboard() {
             <KpiCard
               label="Persentase Profit (Estimasi)"
               value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
-              trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari kemarin' }}
+              trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari hari sebelumnya' }}
             />
             {data.pengunjung ? (
               <KpiCard label={`Pengunjung (${data.pengunjung.date})`} value={String(data.pengunjung.uniqueVisitors)} />
