@@ -29,17 +29,6 @@ function todayDateStringWIB() {
   return wib.toISOString().slice(0, 10);
 }
 
-// Client-requested (2026-09-27): the Dashboard opens on yesterday by default
-// rather than today — today's Order/Omzet/Laba are technically live, but the
-// client doesn't want to see a still-accumulating number on open and would
-// rather land on yesterday's settled total, picking "today" manually when
-// they want the live view.
-function yesterdayDateStringWIB() {
-  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000);
-  wib.setUTCDate(wib.getUTCDate() - 1);
-  return wib.toISOString().slice(0, 10);
-}
-
 // YYYY-MM-DD -> dd/mm/yyyy for the "Performa" heading.
 function formatDateDDMMYYYY(dateStr) {
   const [y, m, d] = dateStr.split('-');
@@ -310,7 +299,7 @@ function BocorList({ leaking }) {
 function MainDashboard() {
   const shopName = useShopName();
   const today = todayDateStringWIB();
-  const [selectedDate, setSelectedDate] = useState(yesterdayDateStringWIB());
+  const [selectedDate, setSelectedDate] = useState(today);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
