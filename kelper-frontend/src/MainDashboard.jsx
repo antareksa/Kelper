@@ -29,6 +29,18 @@ function todayDateStringWIB() {
   return wib.toISOString().slice(0, 10);
 }
 
+// Client-requested (2026-09-28): the Dashboard opens on yesterday by
+// default rather than today — right after midnight WIB, "today" has
+// barely started and would show an almost-empty day (0 orders, since
+// nothing's been scanned in Shipping Mode yet), while yesterday has a
+// full, settled day of real numbers. Picking "today" manually from the
+// date picker still shows the live, still-accumulating view.
+function yesterdayDateStringWIB() {
+  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  wib.setUTCDate(wib.getUTCDate() - 1);
+  return wib.toISOString().slice(0, 10);
+}
+
 // YYYY-MM-DD -> dd/mm/yyyy for the "Performa" heading.
 function formatDateDDMMYYYY(dateStr) {
   const [y, m, d] = dateStr.split('-');
@@ -304,7 +316,7 @@ function BocorList({ leaking }) {
 function MainDashboard() {
   const shopName = useShopName();
   const today = todayDateStringWIB();
-  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedDate, setSelectedDate] = useState(yesterdayDateStringWIB());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
