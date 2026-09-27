@@ -1,10 +1,5 @@
 import { API_BASE } from './apiBase';
 
-// Fallback for local dev and for the brief window before
-// initActiveShopId() resolves. Also the value SHOP_ID stays at if the
-// backend is unreachable or genuinely nothing is connected yet.
-const FALLBACK_SHOP_ID = Number(import.meta.env.VITE_SHOP_ID) || 227886187;
-
 // Client-requested (2026-09-27): used to be frozen at build time
 // (VITE_SHOP_ID) — connecting a genuinely different shop via Settings
 // stored its token correctly (see /auth/exchange), but nothing in the app
@@ -15,7 +10,13 @@ const FALLBACK_SHOP_ID = Number(import.meta.env.VITE_SHOP_ID) || 227886187;
 // module named exports are live bindings, so every file that does
 // `import { SHOP_ID } from './shopConfig'` sees the update automatically
 // the next time it reads SHOP_ID, no context or prop drilling needed.
-export let SHOP_ID = FALLBACK_SHOP_ID;
+//
+// null (never a hardcoded fallback shop id) until a real shop is found
+// connected — App.jsx gates first render on initActiveShopId() resolving,
+// and Dashboard.jsx shows a dedicated "connect your shop" screen instead
+// of rendering shop-scoped data while this is null, so nothing ever fires
+// a request against a stale or made-up shop id.
+export let SHOP_ID = null;
 
 let initPromise = null;
 
@@ -25,17 +26,16 @@ async function fetchAndApplyActiveShopId() {
     if (res.ok) {
       const rows = await res.json();
       // /auth/status is ordered most-recently-connected first. This app
-      // only ever supports one active shop at a time (see the note this
-      // constant used to carry), so row 0 is "the" shop. An empty list
-      // (nothing connected yet) leaves SHOP_ID at its current/fallback
-      // value rather than clearing it — there's nothing useful to switch
-      // to, and the UI's own connected-state check (useShopeeConnection)
-      // is what actually decides whether to show "connected".
+      // only ever supports one active shop at a time, so row 0 is "the"
+      // shop. An empty list (nothing connected yet) leaves SHOP_ID at
+      // null — Dashboard.jsx's connect-first screen is what actually
+      // handles that state, not this function.
       if (rows.length > 0) SHOP_ID = rows[0].shop_id;
     }
   } catch {
-    // Backend unreachable at startup — keep the fallback rather than
-    // blocking the app from rendering at all.
+    // Backend unreachable at startup — leave SHOP_ID at whatever it
+    // already was (null on first load) rather than blocking the app from
+    // rendering at all.
   }
   return SHOP_ID;
 }
