@@ -261,13 +261,19 @@ function getShippingDocumentResult(accessToken, shopId, orderSn, trackingNumber)
   });
 }
 
-async function downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber) {
+// shippingDocumentType (optional, top-level per Shopee's schema — not per
+// order_list entry) — must match whichever type create_shipping_document
+// actually generated for this tracking number, or Shopee doesn't know which
+// of possibly several generated documents to hand back.
+async function downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber, shippingDocumentType) {
   const path = '/api/v2/logistics/download_shipping_document';
   const params = shopSignedParams(path, accessToken, shopId);
+  const body = { order_list: [{ order_sn: orderSn, tracking_number: trackingNumber }] };
+  if (shippingDocumentType) body.shipping_document_type = shippingDocumentType;
   const res = await fetch(`${SHOPEE_API_BASE}${path}?${params.toString()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ order_list: [{ order_sn: orderSn, tracking_number: trackingNumber }] }),
+    body: JSON.stringify(body),
   });
   const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {

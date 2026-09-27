@@ -6,32 +6,47 @@ const {
   massShipOrder,
   getTrackingNumber,
   createShippingDocument,
-  getShippingDocumentParameter,
   getShippingDocumentResult,
 } = require('./client');
 const { getConfig } = require('../config');
 
 // Client-reported (2026-09-27): different couriers' labels were coming out
-// in different layouts/sizes because create_shipping_document was never
-// told which template to use, so Shopee fell back to each courier's own
-// default. Forcing thermal everywhere (when the courier actually offers it —
-// see resolveShippingDocumentType below) matches the Packing Stations'
-// actual printers and makes every label consistent regardless of courier.
+// in different layouts/sizes because create_shipping_document was never told
+// which template to use, so Shopee fell back to each courier's own default.
+// Forcing thermal everywhere makes every label consistent regardless of
+// courier — but requesting it directly fails outright for some couriers
+// (confirmed for SPX Instant/SPX Instant Prioritas) with
+// logistics.shipping_document_should_print_first ("please create shipping
+// document first"). get_shipping_document_parameter's own
+// selectable_shipping_document_type list can't be trusted to predict this —
+// it claimed THERMAL_AIR_WAYBILL was selectable for that exact channel and
+// was wrong. Confirmed empirically instead: creating NORMAL_AIR_WAYBILL
+// first (cheap, ~2s) unblocks THERMAL_AIR_WAYBILL right after, for every
+// courier tried — so bootstrap with NORMAL first, always, then request the
+// real preferred type on top of it.
+const BOOTSTRAP_SHIPPING_DOCUMENT_TYPE = 'NORMAL_AIR_WAYBILL';
 const PREFERRED_SHIPPING_DOCUMENT_TYPE = 'THERMAL_AIR_WAYBILL';
 
-// Best-effort: if this call itself fails or the order isn't in the result
-// (fail_error), returns undefined so create_shipping_document falls back to
-// its old behavior (courier's own default) rather than blocking booking.
-async function resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber) {
-  const param = await getShippingDocumentParameter(accessToken, shopId, orderSn, trackingNumber);
-  const result = param.response?.result_list?.[0];
-  if (param.error || !result || result.fail_error) return undefined;
+// Requests one shipping_document_type and waits for it to become READY.
+// Bails out immediately on a fail_error entry instead of burning the whole
+// poll window — a rejection like shipping_document_should_print_first is
+// permanent, not transient, confirmed by it appearing identically on every
+// one of 15 checks in testing.
+async function createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, type, cfg) {
+  const createResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber, type);
+  if (createResult.error) {
+    return { ok: false, error: `create_shipping_document(${type}) failed: ${createResult.message || createResult.error}` };
+  }
 
-  const chosen = result.selectable_shipping_document_type?.includes(PREFERRED_SHIPPING_DOCUMENT_TYPE)
-    ? PREFERRED_SHIPPING_DOCUMENT_TYPE
-    : result.suggest_shipping_document_type;
-  console.log(`[server] ${orderSn}: shipping_document_type -> ${chosen} (selectable: ${result.selectable_shipping_document_type?.join(', ') || 'none'})`);
-  return chosen;
+  const { maxAttempts, delayMs } = cfg.documentPoll;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await new Promise((r) => setTimeout(r, delayMs));
+    const status = await getShippingDocumentResult(accessToken, shopId, orderSn, trackingNumber);
+    const entry = status.response?.result_list?.[0];
+    if (entry?.status === 'READY') return { ok: true };
+    if (entry?.fail_error) return { ok: false, error: `${entry.fail_error}: ${entry.fail_message}` };
+  }
+  return { ok: false, error: `shipping_document_type=${type} did not become ready in time` };
 }
 
 // Auto-picks the shop's default pickup address and the recommended time slot,
@@ -72,32 +87,23 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
   // guessing. Remove once we've gathered enough real samples.
   console.log(`[server] tracking number assigned for ${orderSn} after ${Date.now() - pollStartedAt}ms (${attemptsUsed} attempt(s))`);
 
-  // Temporarily reverted (2026-09-27): testing whether forcing
-  // shipping_document_type is itself what's preventing JIT/auto-arranged
-  // orders' documents from ever becoming READY (see
-  // logistics.can_not_print_jit_order in Shopee's create_shipping_document
-  // docs) — omitting it lets Shopee fall back to each courier's own
-  // suggested type again, same as before this whole investigation started.
-  // const documentType = await resolveShippingDocumentType(accessToken, shopId, orderSn, trackingNumber);
-  const docResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber);
-  if (docResult.error) {
-    throw new Error(`create_shipping_document failed: ${docResult.message || docResult.error}`);
+  const bootstrap = await createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, BOOTSTRAP_SHIPPING_DOCUMENT_TYPE, cfg);
+  if (!bootstrap.ok) {
+    throw new Error(`Shipping document bootstrap (${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE}) failed: ${bootstrap.error}`);
   }
 
-  const { maxAttempts: docAttempts, delayMs: docDelay } = cfg.documentPoll;
-  let ready = false;
-  for (let attempt = 0; attempt < docAttempts && !ready; attempt += 1) {
-    const status = await getShippingDocumentResult(accessToken, shopId, orderSn, trackingNumber);
-    const entry = status.response?.result_list?.[0];
-    if (entry?.status === 'READY') {
-      ready = true;
-    } else if (attempt < docAttempts - 1) {
-      await new Promise((r) => setTimeout(r, docDelay));
-    }
+  const preferred = await createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, PREFERRED_SHIPPING_DOCUMENT_TYPE, cfg);
+  let documentType = BOOTSTRAP_SHIPPING_DOCUMENT_TYPE;
+  if (preferred.ok) {
+    documentType = PREFERRED_SHIPPING_DOCUMENT_TYPE;
+  } else {
+    // Bootstrap already succeeded, so there's a real, usable document
+    // (just not the preferred layout) — falling back to it beats throwing
+    // away a working booking over a cosmetic preference.
+    console.warn(`[server] ${orderSn}: ${PREFERRED_SHIPPING_DOCUMENT_TYPE} failed after successful ${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE} bootstrap (${preferred.error}) — falling back to ${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE}`);
   }
-  if (!ready) throw new Error('Shipping document did not become ready in time');
 
-  return trackingNumber;
+  return { trackingNumber, documentType };
 }
 
 // "Package <number> not eligible for rescheduling" is what get_shipping_parameter
@@ -182,8 +188,8 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
     }
   }
 
-  const trackingNumber = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber };
+  const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  return { trackingNumber, packageNumber, documentType };
 }
 
 // Mass-shipping path: get_mass_shipping_parameter -> mass_ship_order.
@@ -223,8 +229,8 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
     throw new Error(`mass_ship_order failed for package: ${failEntry.fail_reason}`);
   }
 
-  const trackingNumber = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber };
+  const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
+  return { trackingNumber, packageNumber, documentType };
 }
 
 // One-time backfill for orders that were already booked/labeled before
@@ -238,10 +244,13 @@ async function learnPackageNumber(accessToken, shopId, orderSn) {
 }
 
 // Books the real shipment on Shopee and generates the real label PDF.
-// Returns { trackingNumber, packageNumber } once the document is confirmed
-// READY — packageNumber is what shopeeSync.js uses to fetch item details
-// via get_package_detail, working around order/get_order_detail's failure on
-// new orders.
+// Returns { trackingNumber, packageNumber, documentType } once a document is
+// confirmed READY — packageNumber is what shopeeSync.js uses to fetch item
+// details via get_package_detail, working around order/get_order_detail's
+// failure on new orders. documentType is whichever type actually succeeded
+// (PREFERRED_SHIPPING_DOCUMENT_TYPE, or the BOOTSTRAP one as a fallback —
+// see pollTrackingAndDocument) and must be passed to
+// download_shipping_document so it fetches that same document.
 // Which underlying API pair is used (single ship_order vs mass_ship_order) is
 // controlled by config.json's shipping.useMassShip — editable with a plain
 // text editor, no restart needed.

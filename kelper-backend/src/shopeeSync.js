@@ -246,8 +246,8 @@ function flagOrderAsException(orderSn, reason) {
 // forever.
 async function bookOneOrder(accessToken, shopId, orderSn) {
   try {
-    const { trackingNumber, packageNumber } = await bookShipment(accessToken, shopId, orderSn);
-    const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber);
+    const { trackingNumber, packageNumber, documentType } = await bookShipment(accessToken, shopId, orderSn);
+    const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
     if (!docResult.pdf) {
       throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
     }
