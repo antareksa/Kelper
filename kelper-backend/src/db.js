@@ -338,4 +338,24 @@ if (!productCols.includes('price')) {
   `);
 }
 
+// Client-requested (2026-09-28): price/hpp SNAPSHOTTED per order item at
+// the moment an order is scanned DONE in Shipping Mode (see packing.js's
+// confirmOrderPickedUp) — without this, editing a SKU's current price/hpp
+// in List Barang would retroactively rewrite every past day's Omzet/Laba
+// for that SKU the next time it's viewed, since buildSkuPriceMap
+// (routes/dashboard.js) always read whatever products.price/hpp is set
+// RIGHT NOW. dashboard.js falls back to that live lookup only when a
+// row's snapshot is still NULL (never backfilled here on purpose — there's
+// no way to know what price was actually in effect for an order that was
+// already scanned DONE before this column existed, so pretending today's
+// current price applied to it back then would be no more accurate than
+// the live-lookup fallback it already gets).
+const orderItemCols = db.prepare("PRAGMA table_info(order_items)").all().map((c) => c.name);
+if (!orderItemCols.includes('price_snapshot')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN price_snapshot INTEGER');
+}
+if (!orderItemCols.includes('hpp_snapshot')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN hpp_snapshot INTEGER');
+}
+
 module.exports = db;

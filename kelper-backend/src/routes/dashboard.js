@@ -53,6 +53,19 @@ function buildSkuPriceMap() {
   return new Map(rows.map((r) => [r.sku, { price: r.price, hpp: r.hpp }]));
 }
 
+// Client-requested (2026-09-28): an order_item snapshots its price/hpp at
+// the moment it was scanned DONE in Shipping Mode (see packing.js's
+// confirmOrderPickedUp) — that snapshot wins whenever it exists, so a
+// later edit to a SKU's price in List Barang can never rewrite an
+// already-counted order's numbers. Only falls back to the live
+// products.price/hpp lookup (skuPrices) for an item that was never
+// snapshotted — pre-feature history, or DASHBOARD_DATA_SOURCE === 'shopee'
+// orders that were never scanned in Shipping Mode at all.
+function priceInfoForItem(item, skuPrices) {
+  if (item.price_snapshot != null) return { price: item.price_snapshot, hpp: item.hpp_snapshot };
+  return skuPrices.get(item.sku);
+}
+
 // Sums revenue/profit/fees for every real order attributed to [startTs,
 // endTs). Omzet/Laba Kotor follow OMZET_PRICE_SOURCE — 'catalog' (current
 // default) always uses catalog price x qty; 'shopee_blend' (the original
@@ -95,7 +108,7 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
 
   const placeholders = orders.map(() => '?').join(',');
   const items = db
-    .prepare(`SELECT order_sn, sku, qty FROM order_items WHERE order_sn IN (${placeholders})`)
+    .prepare(`SELECT order_sn, sku, qty, price_snapshot, hpp_snapshot FROM order_items WHERE order_sn IN (${placeholders})`)
     .all(...orders.map((o) => o.order_sn));
   const itemsByOrder = new Map();
   for (const item of items) {
@@ -114,14 +127,14 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
     if (useEscrowForOmzet) {
       let cogs = 0;
       for (const item of orderItems) {
-        const info = skuPrices.get(item.sku);
+        const info = priceInfoForItem(item, skuPrices);
         if (info?.hpp != null) cogs += info.hpp * item.qty;
       }
       omzet += order.order_selling_price ?? 0;
       laba += order.escrow_amount - cogs;
     } else {
       for (const item of orderItems) {
-        const info = skuPrices.get(item.sku);
+        const info = priceInfoForItem(item, skuPrices);
         if (!info || info.price == null) continue;
         omzet += info.price * item.qty;
         if (info.hpp != null) laba += (info.price - info.hpp) * item.qty;
@@ -190,7 +203,7 @@ router.get('/summary', (req, res) => {
   const dayItems = DASHBOARD_DATA_SOURCE === 'internal'
     ? db
         .prepare(`
-          SELECT oi.sku, oi.qty, ps.completed_at AS ts
+          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, ps.completed_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           JOIN (
@@ -204,7 +217,7 @@ router.get('/summary', (req, res) => {
         .all(shopId, dayStart, dayEnd)
     : db
         .prepare(`
-          SELECT oi.sku, oi.qty, o.created_at AS ts
+          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, o.created_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
@@ -214,7 +227,7 @@ router.get('/summary', (req, res) => {
   const hourlyOmzet = new Array(lastHour + 1).fill(0);
   const hourlyLaba = new Array(lastHour + 1).fill(0);
   for (const item of dayItems) {
-    const info = skuPrices.get(item.sku);
+    const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
     const hour = Math.min(lastHour, Math.floor((item.ts - dayStart) / 3600));
     hourlyOmzet[hour] += info.price * item.qty;
@@ -229,7 +242,7 @@ router.get('/summary', (req, res) => {
   // day rarely has enough distinct SKUs sold for a meaningful ranking).
   const recentItems = db
     .prepare(`
-      SELECT oi.sku, oi.product_name, oi.qty
+      SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot
       FROM order_items oi
       JOIN orders o ON o.order_sn = oi.order_sn
       WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ?
@@ -237,7 +250,7 @@ router.get('/summary', (req, res) => {
     .all(shopId, startOfDayWIB(29));
   const bySku = new Map();
   for (const item of recentItems) {
-    const info = skuPrices.get(item.sku);
+    const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
     const entry = bySku.get(item.sku) || { sku: item.sku, name: item.product_name, qty: 0, profit: null, revenue: 0 };
     entry.qty += item.qty;
