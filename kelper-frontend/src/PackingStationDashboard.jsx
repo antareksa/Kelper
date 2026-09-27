@@ -197,6 +197,77 @@ function ActiveStation() {
 // Check"); orders packed today with a real label waiting for Shipping Mode
 // to confirm the courier took them ("Ready to Pickup"); and orders already
 // scanned but still waiting on a real label ("Ready to Process Tomorrow").
+// Order Detail popup state/actions (client-requested 2026-09-25, extracted
+// as a shared hook 2026-09-27 once a second page — Cancel & Masalah — needed
+// the exact same modal). `onChanged` is that caller's own refresh function,
+// called after any action succeeds so it re-fetches whatever list it shows.
+function useOrderDetailModal(onChanged) {
+  const [selectedOrderSn, setSelectedOrderSn] = useState(null);
+  const [orderDetail, setOrderDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  async function openOrderDetail(orderSn) {
+    setSelectedOrderSn(orderSn);
+    setOrderDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/packing/order-detail?order_sn=${encodeURIComponent(orderSn)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      setOrderDetail(data);
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeOrderDetail() {
+    setSelectedOrderSn(null);
+    setOrderDetail(null);
+    setDetailError(null);
+  }
+
+  async function runAction(path, confirmMessage) {
+    if (!window.confirm(confirmMessage)) return;
+    setActionBusy(true);
+    setDetailError(null);
+    try {
+      const res = await apiFetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_sn: selectedOrderSn }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error);
+      closeOrderDetail();
+      onChanged?.();
+    } catch (err) {
+      setDetailError(err.message);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  const handleForceReady = () =>
+    runAction('/packing/force-ready-for-pickup', `Are you sure? This will force order ${selectedOrderSn} straight to Ready to Pickup, skipping the normal scan/label process.`);
+  // Same effect as Shipping Mode's real barcode scan (/confirm-pickup) —
+  // this just lets an admin trigger it here for an order already sitting in
+  // Ready to Pickup, without needing the physical label in hand.
+  const handleForcePickup = () =>
+    runAction('/packing/confirm-pickup', `Are you sure? This will mark order ${selectedOrderSn} as picked up, the same as scanning its label in Shipping Mode.`);
+  const handleCancelOrder = () =>
+    runAction('/packing/cancel-order', `Are you sure? This will cancel order ${selectedOrderSn} on Shopee for real, and cannot be undone.`);
+
+  return {
+    selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+  };
+}
+
 function OrderLists() {
   const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [], problemOrders: [] });
   const [loading, setLoading] = useState(true);
@@ -206,16 +277,15 @@ function OrderLists() {
   const [syncEnabled, setSyncEnabled] = useState(null);
   const [toggling, setToggling] = useState(false);
 
-  // Order Detail popup (client-requested 2026-09-25) — opened by clicking any
-  // row in any bucket. Fetched fresh per open rather than reused from the
-  // row data already in `lists`, since the popup shows per-item scan
-  // progress the list rows don't carry.
-  const [selectedOrderSn, setSelectedOrderSn] = useState(null);
-  const [orderDetail, setOrderDetail] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState(null);
-  const [actionBusy, setActionBusy] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(null); // null | 'moveAll' | 'forceAll'
+  // Order Detail popup (client-requested 2026-09-25) — opened by clicking any
+  // row in any bucket. `load` is hoisted (function declaration further down
+  // this same component), so referencing it here before its textual
+  // definition is fine.
+  const {
+    selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+  } = useOrderDetailModal(load);
 
   // Packing Station configuration (client-requested 2026-09-22): Delay
   // (minutes an order sits in Waiting List before it's eligible for
@@ -330,95 +400,6 @@ function OrderLists() {
       if (res.ok) setSyncEnabled((await res.json()).enabled);
     } finally {
       setToggling(false);
-    }
-  }
-
-  async function openOrderDetail(orderSn) {
-    setSelectedOrderSn(orderSn);
-    setOrderDetail(null);
-    setDetailError(null);
-    setDetailLoading(true);
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/order-detail?order_sn=${encodeURIComponent(orderSn)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
-      setOrderDetail(data);
-    } catch (err) {
-      setDetailError(err.message);
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
-  function closeOrderDetail() {
-    setSelectedOrderSn(null);
-    setOrderDetail(null);
-    setDetailError(null);
-  }
-
-  async function handleForceReady() {
-    if (!window.confirm(`Are you sure? This will force order ${selectedOrderSn} straight to Ready to Pickup, skipping the normal scan/label process.`)) return;
-    setActionBusy(true);
-    setDetailError(null);
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/force-ready-for-pickup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_sn: selectedOrderSn }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
-      closeOrderDetail();
-      load();
-    } catch (err) {
-      setDetailError(err.message);
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  // Same effect as Shipping Mode's real barcode scan (/confirm-pickup) —
-  // this just lets an admin trigger it here for an order already sitting in
-  // Ready to Pickup, without needing the physical label in hand.
-  async function handleForcePickup() {
-    if (!window.confirm(`Are you sure? This will mark order ${selectedOrderSn} as picked up, the same as scanning its label in Shipping Mode.`)) return;
-    setActionBusy(true);
-    setDetailError(null);
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/confirm-pickup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_sn: selectedOrderSn }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
-      closeOrderDetail();
-      load();
-    } catch (err) {
-      setDetailError(err.message);
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  async function handleCancelOrder() {
-    if (!window.confirm(`Are you sure? This will cancel order ${selectedOrderSn} on Shopee for real, and cannot be undone.`)) return;
-    setActionBusy(true);
-    setDetailError(null);
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/cancel-order`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_sn: selectedOrderSn }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
-      closeOrderDetail();
-      load();
-    } catch (err) {
-      setDetailError(err.message);
-    } finally {
-      setActionBusy(false);
     }
   }
 
@@ -732,6 +713,97 @@ function OrderLists() {
   );
 }
 
+// Cancel & Masalah (client-requested 2026-09-27) — cancelled orders vanish
+// from every Order Lists bucket once CANCELLED, with nowhere else to see
+// them; Masalah (Problem Order/EXCEPTION) already has a live bucket in Order
+// Lists, this is the broader, longer-history view of both together. Reuses
+// the same Order Detail popup as Order Lists (resolveOrderBucket on the
+// backend already returns the right bucket/canManage for a CANCELLED order —
+// no actions, terminal state — or a Problem Order — Cancel/Force available).
+function CancelMasalahList() {
+  const [data, setData] = useState({ cancelled: [], masalah: [] });
+  const [loading, setLoading] = useState(true);
+  const {
+    selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+  } = useOrderDetailModal(load);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function load() {
+    try {
+      const res = await apiFetch(`${API_BASE}/packing/cancel-masalah-list?shop_id=${SHOP_ID}`);
+      if (res.ok) setData(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const columns = [
+    { key: 'cancelled', title: 'Cancelled' },
+    { key: 'masalah', title: 'Masalah' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
+      <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+        {columns.map(({ key, title }) => {
+          const rows = data[key];
+          return (
+            <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
+              <div style={{ fontWeight: 700, color: colors.text, marginBottom: 2 }}>{title}</div>
+              <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 12 }}>
+                {rows.length} order{rows.length === 1 ? '' : 's'}
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {loading ? (
+                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Loading...</p>
+                ) : rows.length === 0 ? (
+                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Empty.</p>
+                ) : (
+                  rows.map((row) => (
+                    <div
+                      key={row.order_sn}
+                      onClick={() => openOrderDetail(row.order_sn)}
+                      style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5, cursor: 'pointer' }}
+                    >
+                      <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
+                      {(row.station_id || row.operator_name) && (
+                        <div style={{ color: colors.textDim, marginTop: 2 }}>
+                          {row.station_id}
+                          {row.operator_name && ` (${row.operator_name})`}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {selectedOrderSn && (
+        <OrderDetailModal
+          orderSn={selectedOrderSn}
+          detail={orderDetail}
+          loading={detailLoading}
+          error={detailError}
+          actionBusy={actionBusy}
+          onForceReady={handleForceReady}
+          onForcePickup={handleForcePickup}
+          onCancelOrder={handleCancelOrder}
+          onClose={closeOrderDetail}
+        />
+      )}
+    </div>
+  );
+}
+
 function Daftar() {
   const [name, setName] = useState('');
   const [result, setResult] = useState(null);
@@ -824,7 +896,7 @@ function Daftar() {
 function PackingStationDashboard({ view = 'active' }) {
   return (
     <div style={{ minHeight: 'calc(100vh - 160px)' }}>
-      {view === 'active' ? <ActiveStation /> : view === 'lists' ? <OrderLists /> : <Daftar />}
+      {view === 'active' ? <ActiveStation /> : view === 'lists' ? <OrderLists /> : view === 'cancelMasalah' ? <CancelMasalahList /> : <Daftar />}
     </div>
   );
 }

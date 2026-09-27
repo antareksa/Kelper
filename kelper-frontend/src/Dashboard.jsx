@@ -6,7 +6,7 @@ import ListBarang from './ListBarang';
 import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconBell, IconSettings, IconPower, IconAlertTriangle } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
@@ -17,6 +17,7 @@ const PACKING_SUB_ITEMS = [
   { path: '/packing-station/active-station', label: 'Active Station', Icon: IconMonitor },
   { path: '/packing-station/order-lists', label: 'Order Lists', Icon: IconTag },
   { path: '/packing-station/daftar', label: 'Daftar', Icon: IconUser },
+  { path: '/packing-station/cancel-masalah', label: 'Cancel & Masalah', Icon: IconAlertTriangle },
 ];
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
@@ -273,6 +274,7 @@ function Dashboard() {
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
+            <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
             <Route path="/config/shopee" element={<ShopeeConfigPage />} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>

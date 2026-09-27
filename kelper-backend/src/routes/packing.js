@@ -745,6 +745,40 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow, problemOrders });
 });
 
+// Cancel & Masalah (client-requested 2026-09-27) — a dedicated admin view for
+// orders that dropped out of the normal flow entirely: buyer/seller-cancelled
+// orders (which just vanish from every /order-lists bucket once CANCELLED,
+// with nowhere else to see them) and Problem Order (EXCEPTION) sessions,
+// alongside the live "Problem Order" bucket already in Order Lists — this is
+// the broader, longer-history view of the same thing plus cancellations.
+// Capped at the most recent 200 cancellations so this never grows unbounded.
+router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
+  const { shop_id } = req.query;
+  if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const cancelled = db
+    .prepare(`
+      SELECT order_sn, buyer_name, created_at
+      FROM orders
+      WHERE shop_id = ? AND status = 'CANCELLED'
+      ORDER BY created_at DESC
+      LIMIT 200
+    `)
+    .all(shop_id);
+
+  const masalah = db
+    .prepare(`
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
+      ORDER BY ps.started_at DESC
+    `)
+    .all(shop_id);
+
+  res.json({ cancelled, masalah });
+});
+
 // Packing Station configuration (client-requested 2026-09-22) — Delay, Max
 // Process Order (concurrent bookings), Max Ready to Check. Stored in the
 // `settings` table (see packingSettings.js), not config.json, so an admin's
