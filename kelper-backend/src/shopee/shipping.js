@@ -172,6 +172,11 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   if (!alreadyBookedMatch) {
     const { pickupLabel, ...pickup } = pickPickupOption(shippingParam.response?.pickup);
     pickupTimeLabel = pickupLabel;
+    // Temporary observability (2026-09-29): a real order came back with
+    // pickup_time_label = null despite going through this exact branch --
+    // remove once we've confirmed whether Shopee sometimes sends a null
+    // time_text, or something else is going on.
+    console.log(`[server] ${orderSn}: pickup_time_label -> ${JSON.stringify(pickupLabel)} (raw slot: ${JSON.stringify(shippingParam.response?.pickup?.address_list?.[0]?.time_slot_list?.find((s) => s.flags?.includes('recommended')) || shippingParam.response?.pickup?.address_list?.[0]?.time_slot_list?.[0])})`);
     const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
 
     if (shipResult.error) {
@@ -227,6 +232,9 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
   if (massParam.response?.pickup?.address_list?.length) {
     const { pickupLabel, ...pickup } = pickPickupOption(massParam.response.pickup);
     pickupTimeLabel = pickupLabel;
+    // Temporary observability (2026-09-29) -- see the matching log in
+    // bookShipmentSingle above for why.
+    console.log(`[server] ${orderSn}: pickup_time_label -> ${JSON.stringify(pickupLabel)} (mass-ship path)`);
     body.pickup = pickup;
   }
 
