@@ -277,6 +277,14 @@ async function post(path, body) {
 // silently points this profile's downloads at .packing-videos with no
 // dialog — meaning a plain `<a download>` click here just works, forever,
 // with zero in-app setup step at all.
+//
+// No resolution constraint here originally meant Chrome negotiated whatever
+// low-res default the camera offered first (confirmed against the real JETE
+// W9: came out 640x480 despite the camera supporting real 1080p) — `ideal`
+// (not `min`/exact) asks for the camera's actual native resolution without
+// throwing if it genuinely can't do it.
+const VIDEO_CONSTRAINTS = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+
 function downloadPackingVideo(orderSn, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -447,7 +455,7 @@ function PackingStation() {
     recordingSessionIdRef.current = sessionId;
     recordingOrderSnRef.current = orderSn;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: false });
       videoStreamRef.current = stream;
       videoChunksRef.current = [];
       const recorder = new MediaRecorder(stream, { videoBitsPerSecond: 1_000_000 });
@@ -498,7 +506,7 @@ function PackingStation() {
   // opens its own stream later, per order.
   async function setupCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: false });
       stream.getTracks().forEach((t) => t.stop());
       setCameraReady(true);
       notify('Kamera siap.', 'success');
