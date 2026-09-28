@@ -442,18 +442,26 @@ function PackingStation() {
   }, []);
 
   // Starts/stops packing-video recording in step with the session actually
-  // being actively packed (IN_PROGRESS) — matches the client's request
-  // ("while user packing, scanning each item"). Session id (not just status)
-  // is checked so this doesn't restart on every scan while IN_PROGRESS stays
-  // true for the same order; only a genuine session change re-triggers it.
+  // being worked on. Client-requested (2026-09-28): recording now spans
+  // through the label-scan confirmation too, not just item-scanning — ends
+  // once the real label is scanned back (READY_FOR_PICKUP), not the moment
+  // the last item is scanned (AWAITING_LABEL_SCAN), so the recording also
+  // proves the right label got attached to the right box. DEFERRED_READY
+  // (no real label yet — waits for next work hour, possibly next day) still
+  // ends recording immediately; that wait shouldn't be captured. Session id
+  // (not just status) is checked so this doesn't restart on every scan while
+  // status stays the same for the same order; only a genuine session change
+  // re-triggers it.
+  const RECORDING_ACTIVE_STATUSES = ['IN_PROGRESS', 'AWAITING_LABEL_SCAN'];
   useEffect(() => {
     const sessionId = state?.session?.id ?? null;
     const status = state?.session?.status;
     const orderSn = state?.order?.order_sn;
+    const shouldRecord = RECORDING_ACTIVE_STATUSES.includes(status);
 
-    if (status === 'IN_PROGRESS' && sessionId !== recordingSessionIdRef.current) {
+    if (shouldRecord && sessionId !== recordingSessionIdRef.current) {
       startPackingVideo(sessionId, orderSn);
-    } else if (status !== 'IN_PROGRESS' && recordingSessionIdRef.current !== null) {
+    } else if (!shouldRecord && recordingSessionIdRef.current !== null) {
       stopPackingVideo();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
