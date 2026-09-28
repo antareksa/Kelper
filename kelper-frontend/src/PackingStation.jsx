@@ -238,7 +238,10 @@ function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message
   );
 }
 
-const COMMANDS = [
+// Exported (2026-09-29) so the Dashboard's Daftar page can print physical
+// barcode cards for these — previously only referenced here, never actually
+// rendered anywhere despite being fully defined.
+export const COMMANDS = [
   { cmd: 'NEXT_ORDER', desc: 'Start processing the next available fresh order — automatically picks the highest-priority one (Instant first). Does not resume Pack Besok leftovers; scan that specific order\'s BESOK- barcode instead.' },
   { cmd: 'PAUSE', desc: 'Pause the station (freezes scanning) while you step away.' },
   { cmd: 'RESUME', desc: 'Resume the station after a pause.' },

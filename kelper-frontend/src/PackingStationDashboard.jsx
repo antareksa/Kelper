@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { colors, card } from './theme';
 import { renderCode39Svg } from './Barcode';
+import { COMMANDS } from './PackingStation';
 import { IconBolt, IconMoon, IconAlertTriangle, IconRotateCcw } from './Icons';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE, apiFetch } from './apiBase';
@@ -860,6 +861,74 @@ function Daftar() {
     `;
   }
 
+  // Client-requested (2026-09-29): printable barcode cards for the station
+  // commands (NEXT_ORDER, PAUSE, etc. — see PackingStation.jsx's COMMANDS,
+  // exported from there so this stays a single source of truth) so an
+  // admin can post physical scannable cards at a station instead of the
+  // operator needing to type these. Same iframe/print pattern as the login
+  // barcode above.
+  function printCommandBarcode(cmd) {
+    const iframe = printFrameRef.current;
+    if (!iframe) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }, 300);
+    };
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            body { font-family: monospace; text-align: center; padding: 24px; }
+            svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>
+          <h2>${cmd}</h2>
+          ${renderCode39Svg(cmd)}
+          <p style="letter-spacing: 2px;">${cmd}</p>
+        </body>
+      </html>
+    `;
+  }
+
+  // All commands in one print job, one card per command (page-break-inside
+  // avoided so a card never splits across pages) — for printing the whole
+  // reference sheet at once instead of one command at a time.
+  function printAllCommandBarcodes() {
+    const iframe = printFrameRef.current;
+    if (!iframe) return;
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }, 300);
+    };
+    const cards = COMMANDS.map(
+      ({ cmd }) => `
+        <div class="card">
+          <h2>${cmd}</h2>
+          ${renderCode39Svg(cmd)}
+          <p style="letter-spacing: 2px;">${cmd}</p>
+        </div>
+      `
+    ).join('');
+    iframe.srcdoc = `
+      <html>
+        <head>
+          <style>
+            body { font-family: monospace; }
+            .card { text-align: center; padding: 24px; page-break-inside: avoid; border-bottom: 1px dashed #999; }
+            .card:last-child { border-bottom: none; }
+            svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>${cards}</body>
+      </html>
+    `;
+  }
+
   async function handleRegister() {
     setError(null);
     setResult(null);
@@ -893,20 +962,44 @@ function Daftar() {
   }
 
   return (
-    <div style={{ ...card(), height: '100%', boxSizing: 'border-box' }}>
-      <label style={{ color: colors.textDim, fontSize: 13 }}>Nama</label>
-      <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button onClick={handleRegister} style={buttonStyle}>Daftar Baru</button>
-        <button onClick={handleReprint} style={buttonStyle}>Print Ulang Barcode Login</button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', boxSizing: 'border-box' }}>
+      <div style={card()}>
+        <label style={{ color: colors.textDim, fontSize: 13 }}>Nama</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={handleRegister} style={buttonStyle}>Daftar Baru</button>
+          <button onClick={handleReprint} style={buttonStyle}>Print Ulang Barcode Login</button>
+        </div>
+        {result && (
+          <p style={{ marginTop: 16, color: colors.text }}>
+            Barcode for <strong>{result.name}</strong>:{' '}
+            <span style={{ fontFamily: 'monospace', fontSize: 18, color: colors.green }}>{result.login_barcode}</span>
+          </p>
+        )}
+        {error && <p style={{ color: colors.red, marginTop: 16 }}>{error}</p>}
       </div>
-      {result && (
-        <p style={{ marginTop: 16, color: colors.text }}>
-          Barcode for <strong>{result.name}</strong>:{' '}
-          <span style={{ fontFamily: 'monospace', fontSize: 18, color: colors.green }}>{result.login_barcode}</span>
-        </p>
-      )}
-      {error && <p style={{ color: colors.red, marginTop: 16 }}>{error}</p>}
+
+      <div style={{ ...card(), flex: 1, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: colors.text, fontSize: 14 }}>Barcode Command</div>
+          <button onClick={printAllCommandBarcodes} style={buttonStyle}>Print Semua Barcode</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {COMMANDS.map(({ cmd, desc }) => (
+            <div
+              key={cmd}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: 6 }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, color: colors.text }}>{cmd}</div>
+                <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 2 }}>{desc}</div>
+              </div>
+              <button onClick={() => printCommandBarcode(cmd)} style={{ ...buttonStyle, flexShrink: 0 }}>Print</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <iframe ref={printFrameRef} title="operator-barcode-print" style={{ display: 'none' }} />
     </div>
   );
