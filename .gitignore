@@ -6,4 +6,5 @@ node_modules/
 kelper-asset/
 .kiosk-chrome-profile/
 .kiosk-chrome-profile-local/
+.packing-videos/
 kelper-backend/real_label_test.pdf

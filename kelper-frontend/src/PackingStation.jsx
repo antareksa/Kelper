@@ -262,6 +262,63 @@ async function post(path, body) {
   return data;
 }
 
+// Client-requested (2026-09-28): record video of the operator packing, as
+// evidence for customer complaints. Local storage only for now (no cloud
+// upload yet — see the project_webcam_video_evidence_feature memory for the
+// full design). Persists the operator's one-time folder pick as a
+// FileSystemDirectoryHandle in IndexedDB (handles are structured-cloneable)
+// so it survives reloads/relaunches without asking again — the picker itself
+// can't be pointed at a specific path for security reasons, so the operator
+// is asked to navigate to/create ".packing-videos" next to
+// start-packing-station.bat during one-time setup.
+const VIDEO_DB_NAME = 'packing-video-store';
+const VIDEO_STORE_NAME = 'handles';
+const VIDEO_HANDLE_KEY = 'videoDir';
+
+function openVideoHandleDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(VIDEO_DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(VIDEO_STORE_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getStoredVideoDirHandle() {
+  const db = await openVideoHandleDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(VIDEO_STORE_NAME, 'readonly');
+    const req = tx.objectStore(VIDEO_STORE_NAME).get(VIDEO_HANDLE_KEY);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function storeVideoDirHandle(handle) {
+  const db = await openVideoHandleDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+    tx.objectStore(VIDEO_STORE_NAME).put(handle, VIDEO_HANDLE_KEY);
+    tx.oncomplete = () => resolve();
+  });
+}
+
+// Silent restore path — a handle already granted 'readwrite' before doesn't
+// need a fresh picker. Only returns non-null when permission is already
+// (or can silently be re-confirmed as) granted; a real re-prompt needs a
+// user gesture, which the setup screen's button provides as a fallback.
+async function tryRestoreVideoDirHandle() {
+  if (!window.showDirectoryPicker) return null;
+  const handle = await getStoredVideoDirHandle();
+  if (!handle) return null;
+  try {
+    if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') return handle;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function PackingStation() {
   // Two-stage login: the station itself is configured once (Station ID only —
   // the shop is fixed), then whichever operator is on shift identifies
@@ -295,6 +352,18 @@ function PackingStation() {
   const testScanInputRef = useRef(null);
   const submittingRef = useRef(false); // reentrancy guard — a real scanner can fire faster than a request round-trips
   const printFrameRef = useRef(null);
+
+  // Packing-video recording (see the module-level comment above) — refs
+  // rather than state, since none of this should ever trigger a re-render.
+  const [videoFolderReady, setVideoFolderReady] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const videoPreviewRef = useRef(null);
+  const videoDirHandleRef = useRef(null);
+  const videoStreamRef = useRef(null);
+  const videoRecorderRef = useRef(null);
+  const videoChunksRef = useRef([]);
+  const recordingSessionIdRef = useRef(null);
+  const recordingOrderSnRef = useRef(null);
 
   // Station ID / debug checkbox are the one place a mouse is expected (initial
   // setup); the scanner test below should work the moment the screen loads,
@@ -345,6 +414,132 @@ function PackingStation() {
     }, 400);
     return () => clearInterval(interval);
   }, [stationReady]);
+
+  // Silently restores a previously-granted video folder handle on load — no
+  // picker shown unless permission was never granted or has been revoked,
+  // in which case the operator uses the "Pilih Folder Video" button in
+  // station setup instead (a real re-prompt needs a user gesture).
+  useEffect(() => {
+    (async () => {
+      const handle = await tryRestoreVideoDirHandle();
+      if (handle) {
+        videoDirHandleRef.current = handle;
+        setVideoFolderReady(true);
+      }
+    })();
+  }, []);
+
+  // Starts/stops packing-video recording in step with the session actually
+  // being actively packed (IN_PROGRESS) — matches the client's request
+  // ("while user packing, scanning each item"). Session id (not just status)
+  // is checked so this doesn't restart on every scan while IN_PROGRESS stays
+  // true for the same order; only a genuine session change re-triggers it.
+  useEffect(() => {
+    const sessionId = state?.session?.id ?? null;
+    const status = state?.session?.status;
+    const orderSn = state?.order?.order_sn;
+
+    if (status === 'IN_PROGRESS' && sessionId !== recordingSessionIdRef.current) {
+      startPackingVideo(sessionId, orderSn);
+    } else if (status !== 'IN_PROGRESS' && recordingSessionIdRef.current !== null) {
+      stopPackingVideo();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.session?.id, state?.session?.status]);
+
+  // Covers the operator hitting "← Back"/logging out mid-scan — same
+  // reasoning as the check-out effect below, just for an in-progress
+  // recording that would otherwise never get saved.
+  useEffect(() => {
+    return () => {
+      if (recordingSessionIdRef.current !== null) stopPackingVideo();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Wires the live camera stream into the preview <video> once recording
+  // actually starts (can't do this at mount time — the stream doesn't exist
+  // until getUserMedia resolves, which happens well after this element first
+  // renders). Client-requested (2026-09-28): visible during packing only.
+  useEffect(() => {
+    if (isRecording && videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = videoStreamRef.current;
+    }
+  }, [isRecording]);
+
+  // Best-effort throughout — a webcam problem (denied/missing/busy device)
+  // never blocks packing itself, per the client's own call: no recording
+  // that one time beats stopping the operator from working.
+  async function startPackingVideo(sessionId, orderSn) {
+    recordingSessionIdRef.current = sessionId;
+    recordingOrderSnRef.current = orderSn;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      videoStreamRef.current = stream;
+      videoChunksRef.current = [];
+      const recorder = new MediaRecorder(stream, { videoBitsPerSecond: 1_000_000 });
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) videoChunksRef.current.push(e.data);
+      };
+      recorder.start();
+      videoRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (err) {
+      console.warn(`[packing-video] camera unavailable for ${orderSn}, continuing without recording:`, err.message);
+    }
+  }
+
+  async function stopPackingVideo() {
+    const recorder = videoRecorderRef.current;
+    const orderSn = recordingOrderSnRef.current;
+    recordingSessionIdRef.current = null;
+    recordingOrderSnRef.current = null;
+    videoRecorderRef.current = null;
+    setIsRecording(false);
+
+    videoStreamRef.current?.getTracks().forEach((t) => t.stop());
+    videoStreamRef.current = null;
+    if (!recorder || recorder.state === 'inactive') return;
+
+    const blob = await new Promise((resolve) => {
+      recorder.onstop = () => resolve(new Blob(videoChunksRef.current, { type: 'video/webm' }));
+      recorder.stop();
+    });
+    videoChunksRef.current = [];
+    await savePackingVideo(orderSn, blob);
+  }
+
+  async function savePackingVideo(orderSn, blob) {
+    const dirHandle = videoDirHandleRef.current;
+    if (!dirHandle || !orderSn) return;
+    try {
+      const fileHandle = await dirHandle.getFileHandle(`${orderSn}.webm`, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } catch (err) {
+      console.warn(`[packing-video] failed to save video for ${orderSn}:`, err.message);
+    }
+  }
+
+  // One-time setup step (needs a real user gesture, unlike the silent
+  // restore above) — the picker can't be pointed at a specific path for
+  // security reasons, so the operator is guided to navigate to/create
+  // ".packing-videos" next to start-packing-station.bat themselves.
+  async function setupVideoFolder() {
+    if (!window.showDirectoryPicker) {
+      return notify('Browser ini tidak mendukung penyimpanan video lokal.', 'error');
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await storeVideoDirHandle(handle);
+      videoDirHandleRef.current = handle;
+      setVideoFolderReady(true);
+      notify('Folder video berhasil diatur.', 'success');
+    } catch (err) {
+      if (err.name !== 'AbortError') console.warn('[packing-video] folder setup failed:', err.message);
+    }
+  }
 
   // Single source of truth for checking a station out of the admin Active
   // Station view. Runs as a cleanup whenever operatorName changes (covers
@@ -989,6 +1184,21 @@ function PackingStation() {
             </p>
           )}
 
+          <button
+            data-mouse-input="true"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={setupVideoFolder}
+            style={{ ...setupSubmitStyle, marginBottom: 8 }}
+          >
+            {videoFolderReady ? 'Ganti Folder Video' : 'Pilih Folder Video'}
+          </button>
+          <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: videoFolderReady ? colors.green : colors.textDim }}>
+            {videoFolderReady
+              ? '✅ Folder video sudah diatur — rekaman aktif selama packing.'
+              : 'Pilih/buat folder ".packing-videos" di sebelah start-packing-station.bat. Tanpa ini, packing tetap jalan seperti biasa, hanya saja tidak ada rekaman video.'}
+          </p>
+
           <label style={setupLabelStyle}>Scan here (or scan TEST_PRINT / CHECK_HW — no mouse needed)</label>
           <input
             ref={testScanInputRef}
@@ -1046,7 +1256,28 @@ function PackingStation() {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+        {isRecording && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 12,
+              right: 12,
+              zIndex: 10,
+              width: 160,
+              borderRadius: 10,
+              overflow: 'hidden',
+              border: `2px solid ${colors.red}`,
+              boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
+            }}
+          >
+            <video ref={videoPreviewRef} autoPlay muted playsInline style={{ display: 'block', width: '100%', height: 'auto' }} />
+            <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.55)', padding: '2px 8px', borderRadius: 6 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.red }} className="kelper-pulse" />
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>REC</span>
+            </div>
+          </div>
+        )}
         {mode === 'shipping' ? (
           lastPickup ? (
             <ActionMessageCard
