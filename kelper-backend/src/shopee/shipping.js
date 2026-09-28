@@ -170,13 +170,13 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   let pickupTimeLabel = null;
 
   if (!alreadyBookedMatch) {
+    // pickupLabel can genuinely be undefined -- confirmed against a real
+    // order that Shopee sometimes omits time_text entirely from a slot
+    // (just date/pickup_time_id/flags, no label). Stored as plain NULL
+    // (better-sqlite3 binds undefined as NULL), which the dashboard already
+    // shows as "—" — not a bug, just an occasional gap in Shopee's own data.
     const { pickupLabel, ...pickup } = pickPickupOption(shippingParam.response?.pickup);
     pickupTimeLabel = pickupLabel;
-    // Temporary observability (2026-09-29): a real order came back with
-    // pickup_time_label = null despite going through this exact branch --
-    // remove once we've confirmed whether Shopee sometimes sends a null
-    // time_text, or something else is going on.
-    console.log(`[server] ${orderSn}: pickup_time_label -> ${JSON.stringify(pickupLabel)} (raw slot: ${JSON.stringify(shippingParam.response?.pickup?.address_list?.[0]?.time_slot_list?.find((s) => s.flags?.includes('recommended')) || shippingParam.response?.pickup?.address_list?.[0]?.time_slot_list?.[0])})`);
     const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
 
     if (shipResult.error) {
@@ -232,9 +232,6 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
   if (massParam.response?.pickup?.address_list?.length) {
     const { pickupLabel, ...pickup } = pickPickupOption(massParam.response.pickup);
     pickupTimeLabel = pickupLabel;
-    // Temporary observability (2026-09-29) -- see the matching log in
-    // bookShipmentSingle above for why.
-    console.log(`[server] ${orderSn}: pickup_time_label -> ${JSON.stringify(pickupLabel)} (mass-ship path)`);
     body.pickup = pickup;
   }
 
