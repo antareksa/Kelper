@@ -692,14 +692,14 @@ function OrderLists() {
                         Scan: {row.internal_barcode}
                       </div>
                     )}
-                    {key === 'readyForPickup' && (
+                    {key === 'readyForPickup' && row.pickup_time_label && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
-                        Pickup: {row.pickup_time_label || '—'}
+                        Pickup: {row.pickup_time_label}
                       </div>
                     )}
                     {key === 'latePickup' && (
                       <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
-                        Jadwal pickup terlewat ({row.pickup_time_label || '—'}) — atur ulang di Shopee
+                        Jadwal pickup terlewat{row.pickup_time_label ? ` (${row.pickup_time_label})` : ''} — atur ulang di Shopee
                       </div>
                     )}
                     <OrderTags tags={row.tags} />
