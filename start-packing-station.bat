@@ -36,6 +36,19 @@ REM will suffer" warning banner permanently on screen, which is a real
 REM problem for a kiosk display. Since this profile is dedicated and
 REM persistent (see above), a permission granted once sticks for every
 REM future launch without asking again — same trick as the printer default.
+REM Packing videos save via a plain browser download (see PackingStation.jsx)
+REM rather than the File System Access API's folder-picker — that API's
+REM permission grant turned out to only last the current Chrome process, so
+REM it silently reset (asking the operator to pick the folder again) on
+REM every single relaunch of this .bat. Chrome's own download location is a
+REM real persistent profile setting instead, so this runs BEFORE Chrome
+REM starts (not backgrounded — the file must be written before Chrome reads
+REM it) to silently point downloads at .packing-videos with no Save As
+REM dialog, ever, on every launch. Safe to re-run — it's idempotent and
+REM preserves every other setting already in this profile (including the
+REM printer-default one above).
+powershell -NoProfile -File "%~dp0setup-video-download-dir.ps1" -VideoDir "%~dp0.packing-videos" -ProfileDir "%~dp0.kiosk-chrome-profile"
+
 start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
 
 REM Old recordings older than 7 days are deleted here, once per launch,

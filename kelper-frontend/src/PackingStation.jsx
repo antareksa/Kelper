@@ -265,58 +265,27 @@ async function post(path, body) {
 // Client-requested (2026-09-28): record video of the operator packing, as
 // evidence for customer complaints. Local storage only for now (no cloud
 // upload yet — see the project_webcam_video_evidence_feature memory for the
-// full design). Persists the operator's one-time folder pick as a
-// FileSystemDirectoryHandle in IndexedDB (handles are structured-cloneable)
-// so it survives reloads/relaunches without asking again — the picker itself
-// can't be pointed at a specific path for security reasons, so the operator
-// is asked to navigate to/create ".packing-videos" next to
-// start-packing-station.bat during one-time setup.
-const VIDEO_DB_NAME = 'packing-video-store';
-const VIDEO_STORE_NAME = 'handles';
-const VIDEO_HANDLE_KEY = 'videoDir';
-
-function openVideoHandleDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(VIDEO_DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(VIDEO_STORE_NAME);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function getStoredVideoDirHandle() {
-  const db = await openVideoHandleDB();
-  return new Promise((resolve) => {
-    const tx = db.transaction(VIDEO_STORE_NAME, 'readonly');
-    const req = tx.objectStore(VIDEO_STORE_NAME).get(VIDEO_HANDLE_KEY);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => resolve(null);
-  });
-}
-
-async function storeVideoDirHandle(handle) {
-  const db = await openVideoHandleDB();
-  return new Promise((resolve) => {
-    const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
-    tx.objectStore(VIDEO_STORE_NAME).put(handle, VIDEO_HANDLE_KEY);
-    tx.oncomplete = () => resolve();
-  });
-}
-
-// Silent restore path — a handle already granted 'readwrite' before doesn't
-// need a fresh picker. Only returns non-null when permission is already
-// (or can silently be re-confirmed as) granted; a real re-prompt needs a
-// user gesture, which the setup screen's button provides as a fallback.
-async function tryRestoreVideoDirHandle() {
-  if (!window.showDirectoryPicker) return null;
-  const handle = await getStoredVideoDirHandle();
-  if (!handle) return null;
-  try {
-    if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') return handle;
-  } catch {
-    return null;
-  }
-  return null;
+// full design).
+//
+// Saves via a plain browser download rather than the File System Access
+// API's folder-picker — that was tried first, but its permission grant only
+// lasts the current Chrome process, so it silently reset (re-prompting the
+// operator) on every relaunch of start-packing-station.bat, making it
+// useless for a kiosk that's meant to be set up once. Chrome's own download
+// location IS a genuinely persistent profile setting, so
+// setup-video-download-dir.ps1 (run by the .bat, before Chrome starts)
+// silently points this profile's downloads at .packing-videos with no
+// dialog — meaning a plain `<a download>` click here just works, forever,
+// with zero in-app setup step at all.
+function downloadPackingVideo(orderSn, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${orderSn}.webm`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function PackingStation() {
@@ -355,11 +324,9 @@ function PackingStation() {
 
   // Packing-video recording (see the module-level comment above) — refs
   // rather than state, since none of this should ever trigger a re-render.
-  const [videoFolderReady, setVideoFolderReady] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const videoPreviewRef = useRef(null);
-  const videoDirHandleRef = useRef(null);
   const videoStreamRef = useRef(null);
   const videoRecorderRef = useRef(null);
   const videoChunksRef = useRef([]);
@@ -415,20 +382,6 @@ function PackingStation() {
     }, 400);
     return () => clearInterval(interval);
   }, [stationReady]);
-
-  // Silently restores a previously-granted video folder handle on load — no
-  // picker shown unless permission was never granted or has been revoked,
-  // in which case the operator uses the "Pilih Folder Video" button in
-  // station setup instead (a real re-prompt needs a user gesture).
-  useEffect(() => {
-    (async () => {
-      const handle = await tryRestoreVideoDirHandle();
-      if (handle) {
-        videoDirHandleRef.current = handle;
-        setVideoFolderReady(true);
-      }
-    })();
-  }, []);
 
   // Silently checks whether camera permission was already granted in a
   // previous session on this same dedicated profile — avoids showing "Setup
@@ -529,35 +482,12 @@ function PackingStation() {
     await savePackingVideo(orderSn, blob);
   }
 
-  async function savePackingVideo(orderSn, blob) {
-    const dirHandle = videoDirHandleRef.current;
-    if (!dirHandle || !orderSn) return;
+  function savePackingVideo(orderSn, blob) {
+    if (!orderSn) return;
     try {
-      const fileHandle = await dirHandle.getFileHandle(`${orderSn}.webm`, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      downloadPackingVideo(orderSn, blob);
     } catch (err) {
       console.warn(`[packing-video] failed to save video for ${orderSn}:`, err.message);
-    }
-  }
-
-  // One-time setup step (needs a real user gesture, unlike the silent
-  // restore above) — the picker can't be pointed at a specific path for
-  // security reasons, so the operator is guided to navigate to/create
-  // ".packing-videos" next to start-packing-station.bat themselves.
-  async function setupVideoFolder() {
-    if (!window.showDirectoryPicker) {
-      return notify('Browser ini tidak mendukung penyimpanan video lokal.', 'error');
-    }
-    try {
-      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      await storeVideoDirHandle(handle);
-      videoDirHandleRef.current = handle;
-      setVideoFolderReady(true);
-      notify('Folder video berhasil diatur.', 'success');
-    } catch (err) {
-      if (err.name !== 'AbortError') console.warn('[packing-video] folder setup failed:', err.message);
     }
   }
 
@@ -1230,20 +1160,8 @@ function PackingStation() {
           >
             {cameraReady ? 'Kamera Siap ✅' : 'Setup Kamera'}
           </button>
-
-          <button
-            data-mouse-input="true"
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={setupVideoFolder}
-            style={{ ...setupSubmitStyle, marginBottom: 8 }}
-          >
-            {videoFolderReady ? 'Ganti Folder Video' : 'Pilih Folder Video'}
-          </button>
-          <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: videoFolderReady ? colors.green : colors.textDim }}>
-            {videoFolderReady
-              ? '✅ Folder video sudah diatur — rekaman aktif selama packing.'
-              : 'Pilih/buat folder ".packing-videos" di sebelah start-packing-station.bat. Tanpa ini, packing tetap jalan seperti biasa, hanya saja tidak ada rekaman video.'}
+          <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.textDim }}>
+            Video packing tersimpan otomatis ke folder ".packing-videos" (diatur oleh start-packing-station.bat) — tidak perlu pengaturan lain.
           </p>
 
           <label style={setupLabelStyle}>Scan here (or scan TEST_PRINT / CHECK_HW — no mouse needed)</label>
