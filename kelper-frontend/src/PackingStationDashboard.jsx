@@ -275,7 +275,7 @@ function useOrderDetailModal(onChanged) {
 }
 
 function OrderLists() {
-  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], readyTomorrow: [], problemOrders: [] });
+  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], latePickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
   // null = still checking on first load, not "paused" — the toggle button
   // stays disabled until we actually know, so a click can't race a stale
@@ -442,8 +442,8 @@ function OrderLists() {
     { key: 'readyToCheck', title: 'Ready to Check' },
     { key: 'onProgressCheck', title: 'On Progress Check' },
     { key: 'readyForPickup', title: 'Ready to Pickup' },
+    { key: 'latePickup', title: 'Late Pickup' },
     { key: 'readyTomorrow', title: 'Ready to Process Tomorrow' },
-    { key: 'problemOrders', title: 'Problem Order' },
   ];
 
   const settingsChanged = settings && settingsDraft && (
@@ -695,6 +695,11 @@ function OrderLists() {
                     {key === 'readyForPickup' && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
                         Pickup: {row.pickup_time_label || '—'}
+                      </div>
+                    )}
+                    {key === 'latePickup' && (
+                      <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
+                        Jadwal pickup terlewat ({row.pickup_time_label || '—'}) — atur ulang di Shopee
                       </div>
                     )}
                     <OrderTags tags={row.tags} />

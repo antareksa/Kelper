@@ -715,16 +715,37 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .all(shop_id)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
+  // needs_retry_ship = 0 here on purpose — those orders show in the
+  // dedicated "Late Pickup" bucket below instead, so an order needing
+  // attention isn't just an icon buried in a list of otherwise-fine ones.
   const readyForPickup = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.needs_retry_ship, o.pickup_time_label
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.pickup_time_label
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 0 AND o.shop_id = ?
       ORDER BY ps.last_activity_at ASC
     `)
     .all(shop_id)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at, needsRetryShip: row.needs_retry_ship }) }));
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+
+  // Client-requested (2026-09-29): Shopee moves an order to RETRY_SHIP when
+  // the courier misses its scheduled pickup window (confirmed against a real
+  // order: Seller Center showed a pickup time already in the past, and
+  // logistics_status was LOGISTICS_PICKUP_RETRY) -- surfaced here as its own
+  // bucket, split out of Ready to Pickup, instead of just a tag on an
+  // otherwise-normal-looking row. pickup_time_label still reflects the
+  // (now-missed) originally scheduled window, kept for context.
+  const latePickup = db
+    .prepare(`
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.pickup_time_label
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 1 AND o.shop_id = ?
+      ORDER BY ps.last_activity_at ASC
+    `)
+    .all(shop_id)
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at, needsRetryShip: true }) }));
 
   // Only genuinely still waiting — work hour hasn't opened yet, so
   // bookDeferredOrders hasn't even started trying to book it. Once work
@@ -741,24 +762,12 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .all(shop_id, withinWorkHour ? 1 : 0)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
-  // Client-requested (2026-09-26): a session an operator flagged via
-  // "Masalah" (see /masalah below) used to just vanish from every bucket —
-  // EXCEPTION was never selected by any of the queries above. Giving it its
-  // own bucket at least makes a stuck/problem order visible again; there's
-  // no resolve action yet (still reachable via the Order Detail popup's
-  // Cancel Order/Force actions once one is clicked, same as any other order).
-  const problemOrders = db
-    .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, o.is_instant
-      FROM packing_sessions ps
-      JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
-      ORDER BY ps.started_at ASC
-    `)
-    .all(shop_id)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+  // Client-requested (2026-09-29): dropped from here -- Problem Order
+  // (EXCEPTION) sessions are now only shown on the dedicated Cancel &
+  // Masalah screen, which already covers the same sessions plus
+  // cancellations, rather than duplicating the same list in two places.
 
-  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, readyTomorrow, problemOrders });
+  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, latePickup, readyTomorrow });
 });
 
 // Cancel & Masalah (client-requested 2026-09-27) — a dedicated admin view for
