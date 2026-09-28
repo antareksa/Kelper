@@ -356,6 +356,7 @@ function PackingStation() {
   // Packing-video recording (see the module-level comment above) — refs
   // rather than state, since none of this should ever trigger a re-render.
   const [videoFolderReady, setVideoFolderReady] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const videoPreviewRef = useRef(null);
   const videoDirHandleRef = useRef(null);
@@ -427,6 +428,17 @@ function PackingStation() {
         setVideoFolderReady(true);
       }
     })();
+  }, []);
+
+  // Silently checks whether camera permission was already granted in a
+  // previous session on this same dedicated profile — avoids showing "Setup
+  // Kamera" as still-needed every launch once it's actually been done once.
+  useEffect(() => {
+    if (!navigator.permissions?.query) return;
+    navigator.permissions
+      .query({ name: 'camera' })
+      .then((status) => setCameraReady(status.state === 'granted'))
+      .catch(() => {});
   }, []);
 
   // Starts/stops packing-video recording in step with the session actually
@@ -538,6 +550,23 @@ function PackingStation() {
       notify('Folder video berhasil diatur.', 'success');
     } catch (err) {
       if (err.name !== 'AbortError') console.warn('[packing-video] folder setup failed:', err.message);
+    }
+  }
+
+  // One-time real permission grant (replaces the --use-fake-ui-for-media-
+  // stream flag, which triggered a permanent Chrome warning banner — see
+  // start-packing-station.bat). Opens the camera just long enough to trigger
+  // the "Allow" prompt, then immediately releases it — recording itself
+  // opens its own stream later, per order.
+  async function setupCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      stream.getTracks().forEach((t) => t.stop());
+      setCameraReady(true);
+      notify('Kamera siap.', 'success');
+    } catch (err) {
+      setCameraReady(false);
+      notify(`Kamera tidak tersedia: ${err.message}`, 'error');
     }
   }
 
@@ -1183,6 +1212,16 @@ function PackingStation() {
               ❌ Scanned value didn't match the printed barcode. Scan CHECK_HW to retry.
             </p>
           )}
+
+          <button
+            data-mouse-input="true"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={setupCamera}
+            style={{ ...setupSubmitStyle, marginBottom: 8 }}
+          >
+            {cameraReady ? 'Kamera Siap ✅' : 'Setup Kamera'}
+          </button>
 
           <button
             data-mouse-input="true"

@@ -28,13 +28,15 @@ REM fullscreen and the window can still be closed normally if needed at the
 REM physical machine — ask if the harder-to-exit --kiosk lockdown is wanted
 REM instead.
 REM
-REM --use-fake-ui-for-media-stream: auto-grants the "Allow camera access?"
-REM permission prompt instead of showing it — there's no one at the physical
-REM station to click Allow every launch. This does NOT fake the video feed
-REM itself (that would need --use-fake-device-for-media-stream too, which is
-REM deliberately omitted) — it's still the real webcam, just no manual click
-REM needed to grant access to it.
-start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --use-fake-ui-for-media-stream --user-data-dir="%~dp0.kiosk-chrome-profile"
+REM Camera permission is granted once, for real, by clicking "Allow" during
+REM the one-time "Setup Kamera" step in Station Setup — NOT via a
+REM --use-fake-ui-for-media-stream flag. That flag was tried first but
+REM triggers Chrome's "unsupported command-line flag: stability and security
+REM will suffer" warning banner permanently on screen, which is a real
+REM problem for a kiosk display. Since this profile is dedicated and
+REM persistent (see above), a permission granted once sticks for every
+REM future launch without asking again — same trick as the printer default.
+start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
 
 REM Old recordings older than 7 days are deleted here, once per launch,
 REM rather than via a separate Windows Scheduled Task — the station already
