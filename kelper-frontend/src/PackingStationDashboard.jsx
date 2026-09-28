@@ -694,7 +694,7 @@ function OrderLists() {
                     )}
                     {key === 'readyForPickup' && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
-                        Pickup: {row.pickup_scheduled_at ? formatDateTime(row.pickup_scheduled_at) : '—'}
+                        Pickup: {row.pickup_time_label || '—'}
                       </div>
                     )}
                     <OrderTags tags={row.tags} />

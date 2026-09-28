@@ -280,14 +280,17 @@ const newOrderCols = {
   // stuck in the Processing bucket. Reset to 0 on the next successful booking.
   booking_fail_count: 'INTEGER NOT NULL DEFAULT 0',
   booking_last_error: 'TEXT',
-  // Client-requested (2026-09-29): show when the courier is actually
-  // scheduled to come pick up the package, on the Ready to Pickup panel.
-  // Captured from get_shipping_parameter's time_slot_list at the moment
-  // ship_order/mass_ship_order is called (see shipping.js's
-  // pickPickupOption) -- unix seconds, same as every other timestamp column
-  // here. NULL for orders booked before this column existed, or where the
-  // package already existed and no fresh pickup slot was selected this time.
-  pickup_scheduled_at: 'INTEGER',
+  // Client-requested (2026-09-29): show when the courier is scheduled to
+  // pick up the package, on the Ready to Pickup panel. Deliberately a TEXT
+  // label ("Now", "16:00 - 17:00"), not a timestamp -- an earlier version of
+  // this stored get_shipping_parameter time_slot_list's `date` field as a
+  // unix timestamp, but confirmed empirically that EVERY slot in a day
+  // (regardless of actual hour) shares the same `date` value; it's a
+  // per-day anchor, not the slot's real time, and produced a wrong pickup
+  // time on the dashboard. `time_text` is the only field that's actually
+  // accurate. NULL for orders booked before this existed, or where the
+  // package already existed and no fresh slot was selected this time.
+  pickup_time_label: 'TEXT',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

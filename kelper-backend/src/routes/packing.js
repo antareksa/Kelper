@@ -717,7 +717,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const readyForPickup = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.needs_retry_ship, o.pickup_scheduled_at
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.needs_retry_ship, o.pickup_time_label
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
