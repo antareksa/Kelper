@@ -246,14 +246,14 @@ function flagOrderAsException(orderSn, reason) {
 // forever.
 async function bookOneOrder(accessToken, shopId, orderSn) {
   try {
-    const { trackingNumber, packageNumber, documentType } = await bookShipment(accessToken, shopId, orderSn);
+    const { trackingNumber, packageNumber, documentType, pickupScheduledAt } = await bookShipment(accessToken, shopId, orderSn);
     const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
     if (!docResult.pdf) {
       throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
     }
 
-    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number), booking_fail_count = 0, booking_last_error = NULL WHERE order_sn = ?')
-      .run(trackingNumber, docResult.pdf, now(), packageNumber, orderSn);
+    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number), pickup_scheduled_at = COALESCE(?, pickup_scheduled_at), booking_fail_count = 0, booking_last_error = NULL WHERE order_sn = ?')
+      .run(trackingNumber, docResult.pdf, now(), packageNumber, pickupScheduledAt, orderSn);
     console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked, tracking ${trackingNumber})`);
   } catch (err) {
     const failCount = (db.prepare('SELECT booking_fail_count FROM orders WHERE order_sn = ?').get(orderSn)?.booking_fail_count ?? 0) + 1;

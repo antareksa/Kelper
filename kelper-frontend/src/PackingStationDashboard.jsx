@@ -692,6 +692,11 @@ function OrderLists() {
                         Scan: {row.internal_barcode}
                       </div>
                     )}
+                    {key === 'readyForPickup' && (
+                      <div style={{ color: colors.textDim, marginTop: 2 }}>
+                        Pickup: {row.pickup_scheduled_at ? formatDateTime(row.pickup_scheduled_at) : '—'}
+                      </div>
+                    )}
                     <OrderTags tags={row.tags} />
                   </div>
                 ))

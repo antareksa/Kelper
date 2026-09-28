@@ -280,6 +280,14 @@ const newOrderCols = {
   // stuck in the Processing bucket. Reset to 0 on the next successful booking.
   booking_fail_count: 'INTEGER NOT NULL DEFAULT 0',
   booking_last_error: 'TEXT',
+  // Client-requested (2026-09-29): show when the courier is actually
+  // scheduled to come pick up the package, on the Ready to Pickup panel.
+  // Captured from get_shipping_parameter's time_slot_list at the moment
+  // ship_order/mass_ship_order is called (see shipping.js's
+  // pickPickupOption) -- unix seconds, same as every other timestamp column
+  // here. NULL for orders booked before this column existed, or where the
+  // package already existed and no fresh pickup slot was selected this time.
+  pickup_scheduled_at: 'INTEGER',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

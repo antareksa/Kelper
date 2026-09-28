@@ -51,6 +51,10 @@ async function createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumb
 
 // Auto-picks the shop's default pickup address and the recommended time slot,
 // matching the doc's intent that operators don't manually choose logistics options.
+// scheduledAt (slot.date, unix seconds) is for our own bookkeeping only
+// (see orders.pickup_scheduled_at) -- callers must strip it before sending
+// this to ship_order/mass_ship_order, which only expect address_id and
+// pickup_time_id.
 function pickPickupOption(pickup) {
   if (!pickup || !pickup.address_list?.length) {
     throw new Error('No pickup address configured for this shop');
@@ -58,7 +62,7 @@ function pickPickupOption(pickup) {
   const address = pickup.address_list.find((a) => a.address_flag?.includes('default_address')) || pickup.address_list[0];
   const slot = address.time_slot_list.find((s) => s.flags?.includes('recommended')) || address.time_slot_list[0];
   if (!slot) throw new Error('No pickup time slot available for this order');
-  return { address_id: address.address_id, pickup_time_id: slot.pickup_time_id };
+  return { address_id: address.address_id, pickup_time_id: slot.pickup_time_id, scheduledAt: slot.date };
 }
 
 // Shared by both booking paths below: once ship_order/mass_ship_order has
@@ -160,9 +164,11 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   }
 
   let packageNumber = alreadyBookedMatch?.[1] ?? null;
+  let pickupScheduledAt = null;
 
   if (!alreadyBookedMatch) {
-    const pickup = pickPickupOption(shippingParam.response?.pickup);
+    const { scheduledAt, ...pickup } = pickPickupOption(shippingParam.response?.pickup);
+    pickupScheduledAt = scheduledAt;
     const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
 
     if (shipResult.error) {
@@ -189,7 +195,7 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   }
 
   const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber, documentType };
+  return { trackingNumber, packageNumber, documentType, pickupScheduledAt };
 }
 
 // Mass-shipping path: get_mass_shipping_parameter -> mass_ship_order.
@@ -214,8 +220,11 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
   }
 
   const body = { package_list: [{ package_number: packageNumber }] };
+  let pickupScheduledAt = null;
   if (massParam.response?.pickup?.address_list?.length) {
-    body.pickup = pickPickupOption(massParam.response.pickup);
+    const { scheduledAt, ...pickup } = pickPickupOption(massParam.response.pickup);
+    pickupScheduledAt = scheduledAt;
+    body.pickup = pickup;
   }
 
   const massResult = await massShipOrder(accessToken, shopId, body);
@@ -230,7 +239,7 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
   }
 
   const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber, documentType };
+  return { trackingNumber, packageNumber, documentType, pickupScheduledAt };
 }
 
 // One-time backfill for orders that were already booked/labeled before
@@ -244,13 +253,16 @@ async function learnPackageNumber(accessToken, shopId, orderSn) {
 }
 
 // Books the real shipment on Shopee and generates the real label PDF.
-// Returns { trackingNumber, packageNumber, documentType } once a document is
-// confirmed READY — packageNumber is what shopeeSync.js uses to fetch item
-// details via get_package_detail, working around order/get_order_detail's
-// failure on new orders. documentType is whichever type actually succeeded
-// (PREFERRED_SHIPPING_DOCUMENT_TYPE, or the BOOTSTRAP one as a fallback —
-// see pollTrackingAndDocument) and must be passed to
-// download_shipping_document so it fetches that same document.
+// Returns { trackingNumber, packageNumber, documentType, pickupScheduledAt }
+// once a document is confirmed READY — packageNumber is what shopeeSync.js
+// uses to fetch item details via get_package_detail, working around
+// order/get_order_detail's failure on new orders. documentType is whichever
+// type actually succeeded (PREFERRED_SHIPPING_DOCUMENT_TYPE, or the
+// BOOTSTRAP one as a fallback — see pollTrackingAndDocument) and must be
+// passed to download_shipping_document so it fetches that same document.
+// pickupScheduledAt (unix seconds, or null if no fresh pickup slot was
+// selected this call — e.g. the package already existed) is the courier's
+// scheduled pickup time, for orders.pickup_scheduled_at.
 // Which underlying API pair is used (single ship_order vs mass_ship_order) is
 // controlled by config.json's shipping.useMassShip — editable with a plain
 // text editor, no restart needed.
