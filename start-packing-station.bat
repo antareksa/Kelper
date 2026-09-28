@@ -47,7 +47,22 @@ REM it) to silently point downloads at .packing-videos with no Save As
 REM dialog, ever, on every launch. Safe to re-run — it's idempotent and
 REM preserves every other setting already in this profile (including the
 REM printer-default one above).
-powershell -NoProfile -File "%~dp0setup-video-download-dir.ps1" -VideoDir "%~dp0.packing-videos" -ProfileDir "%~dp0.kiosk-chrome-profile"
+REM -ExecutionPolicy Bypass: a plain dedicated station PC (not a dev machine)
+REM typically has PowerShell's default "Restricted" policy, which silently
+REM refuses to run ANY .ps1 file at all — this was missing and is the likely
+REM reason this step failed the first time it was deployed. Only affects
+REM this one invocation, not the machine's policy as a whole.
+REM
+REM If this step fails for any other reason, the window is kept open with
+REM the actual error message instead of flashing closed before it can be
+REM read (which is what made the first failure impossible to diagnose).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-video-download-dir.ps1" -VideoDir "%~dp0.packing-videos" -ProfileDir "%~dp0.kiosk-chrome-profile"
+if errorlevel 1 (
+  echo.
+  echo [start-packing-station] setup-video-download-dir.ps1 failed - see the error above.
+  echo Packing will continue without automatic video saving until this is fixed.
+  pause
+)
 
 start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
 
@@ -56,4 +71,4 @@ REM rather than via a separate Windows Scheduled Task — the station already
 REM gets relaunched routinely, so a dedicated always-on background task isn't
 REM needed just for this. Runs in the background (start /b) so it doesn't
 REM delay Chrome opening.
-start /b "" powershell -NoProfile -Command "if (Test-Path '%~dp0.packing-videos') { Get-ChildItem -Path '%~dp0.packing-videos' -File | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force }"
+start /b "" powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path '%~dp0.packing-videos') { Get-ChildItem -Path '%~dp0.packing-videos' -File | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force }"
