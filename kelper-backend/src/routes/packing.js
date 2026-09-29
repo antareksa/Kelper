@@ -137,8 +137,8 @@ async function finalizeLeftover(session, order, res) {
     const liveStatus = detail.response?.order_list?.[0]?.order_status;
 
     if (liveStatus === 'CANCELLED' || order.status === 'CANCELLED') {
-      db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION' WHERE id = ?").run(session.id);
-      db.prepare("UPDATE orders SET status = 'CANCELLED' WHERE order_sn = ?").run(order.order_sn);
+      db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session.id);
+      db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_needs_resolve = 1 WHERE order_sn = ?").run(order.order_sn);
       return res.status(400).json({
         error: 'order_cancelled',
         message: `Order was cancelled overnight (Shopee status: ${liveStatus}) — resi generation blocked`,
@@ -316,7 +316,7 @@ router.post('/undo-last-scan', (req, res) => {
 
 router.post('/masalah', (req, res) => {
   const { session_id } = req.body;
-  db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION' WHERE id = ?").run(session_id);
+  db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session_id);
   res.json(getSessionWithOrder(session_id));
 });
 
@@ -783,7 +783,7 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
 
   const cancelled = db
     .prepare(`
-      SELECT order_sn, buyer_name, created_at
+      SELECT order_sn, buyer_name, created_at, cancel_needs_resolve
       FROM orders
       WHERE shop_id = ? AND status = 'CANCELLED'
       ORDER BY created_at DESC
@@ -793,7 +793,7 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
 
   const masalah = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.exception_reason
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.exception_reason, ps.needs_resolve
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
@@ -802,6 +802,50 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
     .all(shop_id);
 
   res.json({ cancelled, masalah });
+});
+
+// Sidebar notification badge (client-requested 2026-09-29) -- a cheap count
+// so the "Batal & Masalah" nav item can show it's got unresolved entries
+// without the whole Dashboard shell having to fetch/hold the full list.
+router.get('/unresolved-count', requireAdminAuth, (req, res) => {
+  const { shop_id } = req.query;
+  if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const { count: cancelledCount } = db
+    .prepare("SELECT COUNT(*) AS count FROM orders WHERE shop_id = ? AND status = 'CANCELLED' AND cancel_needs_resolve = 1")
+    .get(shop_id);
+  const { count: masalahCount } = db
+    .prepare(`
+      SELECT COUNT(*) AS count FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'EXCEPTION' AND ps.needs_resolve = 1 AND o.shop_id = ?
+    `)
+    .get(shop_id);
+
+  res.json({ count: cancelledCount + masalahCount });
+});
+
+// "Selesaikan" on a Cancelled entry (client-requested 2026-09-29) -- pure
+// acknowledgment, nothing to fix. The order stays CANCELLED forever (Shopee
+// already terminated it); this just clears the notification so it stops
+// demanding attention once someone's actually looked at it.
+router.post('/resolve-cancelled', requireAdminAuth, (req, res) => {
+  const { order_sn } = req.body;
+  db.prepare("UPDATE orders SET cancel_needs_resolve = 0 WHERE order_sn = ? AND status = 'CANCELLED'").run(order_sn);
+  res.json({ ok: true });
+});
+
+// "Selesaikan" on a Masalah entry (client-requested 2026-09-29) -- also just
+// acknowledgment, deliberately not an automatic fix: what actually resolves a
+// Problem Order differs by cause (a stuck IN_PROGRESS scan needs the
+// station's own RELEASE_ORDER, a failed booking needs manual Shopee
+// follow-up, a mid-flow cancellation needs nothing at all) and guessing wrong
+// here risks silently losing an already-packed order's scan record. This
+// only clears the notification; the session stays EXCEPTION as a record.
+router.post('/resolve-masalah', requireAdminAuth, (req, res) => {
+  const { session_id } = req.body;
+  db.prepare("UPDATE packing_sessions SET needs_resolve = 0 WHERE id = ? AND status = 'EXCEPTION'").run(session_id);
+  res.json({ ok: true });
 });
 
 // Packing Station configuration (client-requested 2026-09-22) — Delay, Max

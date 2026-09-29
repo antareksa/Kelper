@@ -760,6 +760,31 @@ function CancelMasalahList() {
     }
   }
 
+  // "Selesaikan" (client-requested 2026-09-29) -- pure acknowledgment, clears
+  // the notification badge only. What resolving actually means differs by
+  // type (see the backend's resolve-cancelled/resolve-masalah comments), so
+  // this deliberately doesn't try to auto-fix anything; it just tells the
+  // system a human has looked at this entry.
+  async function resolveCancelled(orderSn, e) {
+    e.stopPropagation();
+    await apiFetch(`${API_BASE}/packing/resolve-cancelled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_sn: orderSn }),
+    });
+    load();
+  }
+
+  async function resolveMasalah(sessionId, e) {
+    e.stopPropagation();
+    await apiFetch(`${API_BASE}/packing/resolve-masalah`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    load();
+  }
+
   const columns = [
     { key: 'cancelled', title: 'Dibatalkan' },
     { key: 'masalah', title: 'Masalah' },
@@ -782,24 +807,47 @@ function CancelMasalahList() {
                 ) : rows.length === 0 ? (
                   <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Kosong.</p>
                 ) : (
-                  rows.map((row) => (
-                    <div
-                      key={row.order_sn}
-                      onClick={() => openOrderDetail(row.order_sn)}
-                      style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5, cursor: 'pointer' }}
-                    >
-                      <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
-                      {(row.station_id || row.operator_name) && (
-                        <div style={{ color: colors.textDim, marginTop: 2 }}>
-                          {row.station_id}
-                          {row.operator_name && ` (${row.operator_name})`}
+                  rows.map((row) => {
+                    const needsResolve = key === 'cancelled' ? row.cancel_needs_resolve : row.needs_resolve;
+                    return (
+                      <div
+                        key={key === 'cancelled' ? row.order_sn : row.session_id}
+                        onClick={() => openOrderDetail(row.order_sn)}
+                        style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5, cursor: 'pointer' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            {!!needsResolve && (
+                              <span
+                                title="Belum diselesaikan"
+                                style={{ width: 7, height: 7, borderRadius: '50%', background: colors.red, flexShrink: 0 }}
+                              />
+                            )}
+                            <span style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {row.order_sn}
+                            </span>
+                          </div>
+                          {!!needsResolve && (
+                            <button
+                              onClick={(e) => (key === 'cancelled' ? resolveCancelled(row.order_sn, e) : resolveMasalah(row.session_id, e))}
+                              style={{ flexShrink: 0, fontSize: 11, padding: '3px 8px', borderRadius: 4, border: `1px solid ${colors.border}`, background: 'transparent', color: colors.textDim, cursor: 'pointer' }}
+                            >
+                              Selesaikan
+                            </button>
+                          )}
                         </div>
-                      )}
-                      {row.exception_reason && (
-                        <div style={{ color: colors.red, marginTop: 4 }}>{row.exception_reason}</div>
-                      )}
-                    </div>
-                  ))
+                        {(row.station_id || row.operator_name) && (
+                          <div style={{ color: colors.textDim, marginTop: 2 }}>
+                            {row.station_id}
+                            {row.operator_name && ` (${row.operator_name})`}
+                          </div>
+                        )}
+                        {row.exception_reason && (
+                          <div style={{ color: colors.red, marginTop: 4 }}>{row.exception_reason}</div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>

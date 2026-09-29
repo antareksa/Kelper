@@ -236,6 +236,14 @@ if (!packingSessionCols.includes('forced')) {
 if (!packingSessionCols.includes('exception_reason')) {
   db.exec('ALTER TABLE packing_sessions ADD COLUMN exception_reason TEXT');
 }
+// Client-requested (2026-09-29): flags an EXCEPTION session as still needing
+// admin attention on the Batal & Masalah screen -- set whenever a session
+// becomes EXCEPTION (cancellation detected, manual Masalah scan, or repeated
+// booking failure), cleared only by that screen's own "Selesaikan" button so
+// the notification survives page reloads until someone actually acts on it.
+if (!packingSessionCols.includes('needs_resolve')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN needs_resolve INTEGER NOT NULL DEFAULT 0');
+}
 
 // Non-destructive migration for the server's background sync flow: orders
 // now carry their own pre-fetched shipment/label data instead of that being
@@ -291,6 +299,13 @@ const newOrderCols = {
   // accurate. NULL for orders booked before this existed, or where the
   // package already existed and no fresh slot was selected this time.
   pickup_time_label: 'TEXT',
+  // Client-requested (2026-09-29): set only when a cancellation is detected
+  // on an order that already had an active packing session -- i.e. it
+  // dropped out of a bucket other than Daftar Tunggu, so it needs a
+  // notification on the Batal & Masalah screen. An order cancelled before
+  // anyone claimed it needs no follow-up and stays 0. Cleared by that
+  // screen's own "Selesaikan" button.
+  cancel_needs_resolve: 'INTEGER NOT NULL DEFAULT 0',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

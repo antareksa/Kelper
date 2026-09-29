@@ -48,6 +48,28 @@ function Dashboard() {
   const shopee = useShopeeConnection(authenticated);
   const showShopeeModal = authenticated && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
 
+  // Client-requested (2026-09-29): a red badge on "Batal & Masalah" so an
+  // unresolved cancellation/problem order isn't only visible to someone who
+  // happens to open that screen -- polls a cheap count endpoint rather than
+  // the full list, since this is always mounted regardless of which page is
+  // open. Only runs once actually logged in with a shop connected.
+  const [unresolvedCount, setUnresolvedCount] = useState(0);
+  useEffect(() => {
+    if (!authenticated || !SHOP_ID) return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await apiFetch(`${API_BASE}/packing/unresolved-count?shop_id=${SHOP_ID}`);
+        if (res.ok && !cancelled) setUnresolvedCount((await res.json()).count);
+      } catch {
+        // best-effort -- a missed poll just means a stale badge until the next one
+      }
+    }
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [authenticated]);
+
   // Gives the login screen its own real URL rather than just showing it
   // inline at whatever path happened to be current. Doesn't preserve the
   // originally-requested path through login — same as the Shopee OAuth
@@ -230,7 +252,10 @@ function Dashboard() {
                       key={path}
                       onClick={() => navigate(path)}
                       style={{
-                        display: 'block',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
                         width: '100%',
                         textAlign: 'left',
                         padding: '8px 10px',
@@ -244,7 +269,28 @@ function Dashboard() {
                         fontFamily: 'var(--sans)',
                       }}
                     >
-                      {label}
+                      <span>{label}</span>
+                      {path === '/packing-station/cancel-masalah' && unresolvedCount > 0 && (
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            minWidth: 16,
+                            height: 16,
+                            padding: '0 4px',
+                            borderRadius: 8,
+                            background: colors.red,
+                            color: '#fff',
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontFamily: 'var(--sans)',
+                          }}
+                        >
+                          {unresolvedCount > 99 ? '99+' : unresolvedCount}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>

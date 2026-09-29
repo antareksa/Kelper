@@ -226,12 +226,12 @@ const countReadyToCheck = db.prepare(`
 function flagOrderAsException(orderSn, reason) {
   const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(orderSn);
   if (session) {
-    db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', exception_reason = ?, last_activity_at = ? WHERE id = ?")
+    db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', exception_reason = ?, needs_resolve = 1, last_activity_at = ? WHERE id = ?")
       .run(reason, now(), session.id);
   } else {
     db.prepare(`
-      INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, exception_reason, started_at, last_activity_at)
-      VALUES (?, 'SYSTEM', 'Auto (Booking Gagal)', 'EXCEPTION', ?, ?, ?)
+      INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, exception_reason, needs_resolve, started_at, last_activity_at)
+      VALUES (?, 'SYSTEM', 'Auto (Booking Gagal)', 'EXCEPTION', ?, 1, ?, ?)
     `).run(orderSn, reason, now(), now());
   }
   console.log(`[server] ${orderSn}: moved to Masalah after repeated booking failures — ${reason}`);
@@ -360,25 +360,42 @@ async function bookDeferredOrders(accessToken, shopId) {
 // (routes/packing.js) already trusts for cancellation detection on resumed
 // leftovers — just applied continuously instead of only at next-day resume.
 const CANCELLATION_CHECK_BATCH_SIZE = 50; // Shopee's own cap on order_sn_list length
+// Client-requested (2026-09-29): previously only unclaimed (READY_TO_PACK
+// with no packing_sessions row -- i.e. still sitting in Daftar Tunggu) orders
+// were ever rechecked for cancellation. Once a station claimed one (any
+// other bucket -- Processing, Ready to Check, On Progress Check, Ready to
+// Pickup, Late Pickup, Ready to Process Tomorrow), nothing ever noticed if
+// Shopee cancelled it mid-flow; it would just sit there forever looking
+// normal. Now checks every order still in a non-terminal status
+// (READY_TO_PACK/LOCKED/DEFERRED cover every bucket -- see order-lists'
+// queries). An order cancelled before anyone claimed it (no session at all)
+// is simply marked CANCELLED and silently drops out of every bucket, no
+// follow-up needed. One cancelled after being claimed gets its session
+// flipped to EXCEPTION + needs_resolve so it surfaces with a notification on
+// the Batal & Masalah screen instead of vanishing with no trace.
 async function detectCancelledOrders(accessToken, shopId) {
-  const unclaimed = db
-    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK' AND order_sn NOT LIKE 'MOCK-%'")
+  const candidates = db
+    .prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status IN ('READY_TO_PACK', 'LOCKED', 'DEFERRED') AND order_sn NOT LIKE 'MOCK-%'")
     .all(shopId)
     .map((o) => o.order_sn);
-  if (unclaimed.length === 0) return;
+  if (candidates.length === 0) return;
 
-  for (let i = 0; i < unclaimed.length; i += CANCELLATION_CHECK_BATCH_SIZE) {
-    const batch = unclaimed.slice(i, i + CANCELLATION_CHECK_BATCH_SIZE);
+  for (let i = 0; i < candidates.length; i += CANCELLATION_CHECK_BATCH_SIZE) {
+    const batch = candidates.slice(i, i + CANCELLATION_CHECK_BATCH_SIZE);
     const detail = await getOrderDetail(accessToken, shopId, batch, 'order_status');
     if (detail.error) {
       console.error(`[server] get_order_detail (cancellation check) failed for shop ${shopId}: ${detail.message || detail.error}`);
       continue;
     }
     for (const order of detail.response?.order_list || []) {
-      if (order.order_status === 'CANCELLED') {
-        db.prepare("UPDATE orders SET status = 'CANCELLED' WHERE order_sn = ?").run(order.order_sn);
-        console.log(`[server] order ${order.order_sn} was cancelled by the buyer — removed from queue (shop ${shopId})`);
+      if (order.order_status !== 'CANCELLED') continue;
+      const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order.order_sn);
+      db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_needs_resolve = ? WHERE order_sn = ?")
+        .run(session ? 1 : 0, order.order_sn);
+      if (session) {
+        db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session.id);
       }
+      console.log(`[server] order ${order.order_sn} was cancelled${session ? ' while already claimed' : ''} — removed from queue (shop ${shopId})`);
     }
   }
 }
