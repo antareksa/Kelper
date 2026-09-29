@@ -740,8 +740,10 @@ function PackingStation() {
       // physical page actually came out (no print-completion callback
       // exists), and asserting success when we don't know it is exactly
       // what left operators stuck staring at "scan to confirm" with nothing
-      // in hand. The scan itself is the only real confirmation there is.
-      return { text: `Mencetak label untuk ${state.order.order_sn} — scan barcode-nya setelah keluar untuk konfirmasi. Jika tidak ada yang keluar, scan REPRINT.`, type: 'info' };
+      // in hand. The scan itself is the only real confirmation there is —
+      // this message just tells the operator what to physically do while
+      // that label is (hopefully) printing in the background.
+      return { text: 'Semua Item sudah di scan, Segera bungkus semua item. Lalu tempel resi ekpedisi. Jika paket sudah siap scan kembali resi ekpedisi', type: 'info' };
     }
     if (session.status === 'READY_FOR_PICKUP') {
       return { text: `Terkonfirmasi — tempelkan pada paket. Mengambil order berikutnya...`, type: 'success' };

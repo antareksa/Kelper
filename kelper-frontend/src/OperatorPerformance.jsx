@@ -2,6 +2,7 @@ import { useEffect, useState, Fragment } from 'react';
 import { colors, card } from './theme';
 import { API_BASE, apiFetch } from './apiBase';
 import { SHOP_ID } from './shopConfig';
+import { IconChevronDown } from './Icons';
 
 function formatTime(ts) {
   if (!ts) return '—';
@@ -111,6 +112,7 @@ export default function OperatorPerformance() {
                   <th style={{ padding: '12px 16px', color: colors.textDim, fontWeight: 600 }}>Jam Keluar</th>
                   <th style={{ padding: '12px 16px', color: colors.textDim, fontWeight: 600 }}>Order Selesai</th>
                   <th style={{ padding: '12px 16px', color: colors.textDim, fontWeight: 600 }}>Rata-rata Durasi</th>
+                  <th style={{ padding: '12px 16px', color: colors.textDim, fontWeight: 600 }}>Daftar Order</th>
                 </tr>
               </thead>
               <tbody>
@@ -121,10 +123,7 @@ export default function OperatorPerformance() {
                   const isExpanded = expanded === op.operator_name;
                   return (
                     <Fragment key={op.operator_name}>
-                      <tr
-                        onClick={() => setExpanded(isExpanded ? null : op.operator_name)}
-                        style={{ borderBottom: `1px solid ${colors.border}`, cursor: 'pointer' }}
-                      >
+                      <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
                         <td style={{ padding: '12px 16px', color: colors.text, fontWeight: 600 }}>{op.operator_name}</td>
                         <td style={{ padding: '12px 16px', color: colors.textDim }}>{formatTime(checkedInAt)}</td>
                         <td style={{ padding: '12px 16px', color: colors.textDim }}>
@@ -132,10 +131,33 @@ export default function OperatorPerformance() {
                         </td>
                         <td style={{ padding: '12px 16px', color: colors.text }}>{op.orders_completed}</td>
                         <td style={{ padding: '12px 16px', color: colors.text }}>{formatDuration(op.avg_duration_seconds)}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <button
+                            onClick={() => setExpanded(isExpanded ? null : op.operator_name)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '5px 10px',
+                              borderRadius: 6,
+                              border: `1px solid ${colors.border}`,
+                              background: 'transparent',
+                              color: colors.textDim,
+                              fontSize: 12,
+                              fontFamily: 'var(--sans)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {isExpanded ? 'Tutup' : 'Lihat'}
+                            <span style={{ display: 'flex', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+                              <IconChevronDown size={11} />
+                            </span>
+                          </button>
+                        </td>
                       </tr>
                       {isExpanded && (
                         <tr>
-                          <td colSpan={5} style={{ padding: '0 16px 16px', background: colors.cardAlt }}>
+                          <td colSpan={6} style={{ padding: '0 16px 16px', background: colors.cardAlt }}>
                             {op.orders.length === 0 ? (
                               <p style={{ color: colors.textDim, fontSize: 12.5, margin: '12px 0' }}>Belum ada order selesai.</p>
                             ) : (
