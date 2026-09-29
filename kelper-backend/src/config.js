@@ -24,6 +24,16 @@ const DEFAULTS = {
     // give up retrying it automatically and flag it to Masalah instead (see
     // shopeeSync.js's bookOneOrder) — better than silently retrying forever.
     maxBookingFailures: 5,
+    // Client-requested (2026-09-30): a failure alone doesn't mean an order is
+    // actually stuck -- Shopee's own "package not ready to be shipped yet"
+    // error is a normal transient state right after an order comes in, and
+    // a real booking is already documented elsewhere in this codebase to
+    // take up to ~1 minute per order. Retrying every ~5s (sync.pollIntervalMs)
+    // hit maxBookingFailures in under 30 seconds -- nowhere near enough time
+    // to tell "Shopee's still catching up" apart from "genuinely broken".
+    // Only escalate to Masalah once failures have persisted continuously for
+    // at least this many minutes, in addition to the count above.
+    minBookingFailureMinutes: 10,
   },
   session: {
     staleSessionSeconds: 3600,

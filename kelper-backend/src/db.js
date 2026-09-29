@@ -288,6 +288,11 @@ const newOrderCols = {
   // stuck in the Processing bucket. Reset to 0 on the next successful booking.
   booking_fail_count: 'INTEGER NOT NULL DEFAULT 0',
   booking_last_error: 'TEXT',
+  // Client-requested (2026-09-30): when the CURRENT unbroken booking-failure
+  // streak started -- lets bookOneOrder require real elapsed time (not just
+  // a handful of retries a few seconds apart) before giving up and flagging
+  // Masalah. Reset to NULL on the next successful booking.
+  booking_first_failed_at: 'INTEGER',
   // Client-requested (2026-09-29): show when the courier is scheduled to
   // pick up the package, on the Ready to Pickup panel. Deliberately a TEXT
   // label ("Now", "16:00 - 17:00"), not a timestamp -- an earlier version of
