@@ -74,7 +74,7 @@ function App() {
   }
 
   if (view === 'shopee-callback-brand') {
-    return <ShopeeCallback onDone={backToLanding} exchangeUrl="/auth/brand/exchange" title="Brand Portal Connection" />;
+    return <ShopeeCallback onDone={backToLanding} exchangeUrl="/auth/brand/exchange" title="Koneksi Brand Portal" />;
   }
 
   if (view === 'landing') {
@@ -117,10 +117,10 @@ function App() {
           </h1>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 36 }}>
             <button onClick={() => setView('dashboard')} style={primaryPill}>
-              Open Dashboard
+              Buka Dashboard
             </button>
             <button onClick={() => setView('packing')} style={secondaryPill}>
-              Open Packing Station <span style={{ marginLeft: 6 }}>→</span>
+              Buka Packing Station <span style={{ marginLeft: 6 }}>→</span>
             </button>
           </div>
         </div>

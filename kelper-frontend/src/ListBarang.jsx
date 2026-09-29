@@ -295,7 +295,7 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
           )}
           {product.soldOut && (
             <span style={{ fontSize: 10.5, fontWeight: 600, color: colors.red, background: colors.redDim, padding: '3px 8px', borderRadius: 999 }}>
-              ● SOLD OUT
+              ● HABIS
             </span>
           )}
         </div>
@@ -329,7 +329,7 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
                 <div>Nama Varian</div>
                 <div>Stok</div>
                 <div>HPP</div>
-                <div>Code</div>
+                <div>Kode</div>
                 <div>Harga</div>
                 <div>Est Profit</div>
                 <div>Est % Profit</div>
@@ -581,10 +581,10 @@ function ListBarang() {
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor HPP & Code dari Excel (Nama, SKU, Modal, Barcode)"
+          title="Impor HPP & Kode dari Excel (Nama, SKU, Modal, Barcode)"
         >
           <IconUpload size={15} />
-          {uploading ? 'Mengimpor...' : 'Upload HPP'}
+          {uploading ? 'Mengimpor...' : 'Unggah HPP'}
         </button>
       </div>
 
@@ -617,7 +617,7 @@ function ListBarang() {
                   <div>Item SKU</div>
                   <div />
                   <div>SKU Induk</div>
-                  <div>Trend</div>
+                  <div>Tren</div>
                   <div>Min. Pembelian</div>
                   <div>Est % Profit</div>
                   <div>Omset Bulan Ini</div>

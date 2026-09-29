@@ -123,7 +123,7 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   ];
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Profit Funnel" />
+      <CardHeader label="Alur Keuntungan" />
       <div style={{ display: 'flex', gap: 8 }}>
         {steps.map((s) => (
           <div
@@ -399,7 +399,7 @@ function MainDashboard() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa {formatDateDDMMYYYY(data.date)}</div>
-          <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — last update {formatTime(lastRefreshAt)}</div>
+          <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — terakhir diperbarui {formatTime(lastRefreshAt)}</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
@@ -429,7 +429,7 @@ function MainDashboard() {
               cursor: 'pointer',
             }}
           >
-            ↻ Refresh
+            ↻ Muat Ulang
           </button>
         </div>
       </div>

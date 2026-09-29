@@ -31,7 +31,7 @@ function formatDateTime(ts) {
 // the backend already has and the frontend would otherwise have to
 // re-derive. An order can carry any combination of these at once.
 const TAG_META = {
-  instant: { Icon: IconBolt, color: colors.blue, title: 'Instant Shipping' },
+  instant: { Icon: IconBolt, color: colors.blue, title: 'Pengiriman Instant' },
   from_yesterday: { Icon: IconMoon, color: colors.orange, title: 'Order dari kemarin' },
   stuck: { Icon: IconAlertTriangle, color: colors.red, title: 'Belum dicek — sudah lama di Ready to Check' },
   retry_ship: { Icon: IconRotateCcw, color: colors.red, title: 'Kurir gagal ambil paket — perlu diatur ulang di Shopee' },
@@ -78,9 +78,9 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: colors.orange, marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
               <div>
                 <div>DITERIMA - {formatDateTime(detail.created_at)}</div>
-                <div>SHIPPING - {detail.shipping_carrier || '—'}</div>
+                <div>PENGIRIMAN - {detail.shipping_carrier || '—'}</div>
               </div>
-              <div>CURRENT STATUS - {detail.bucket}{detail.forced ? ' (FORCED)' : ''}</div>
+              <div>STATUS SAAT INI - {detail.bucket}{detail.forced ? ' (DIPAKSA)' : ''}</div>
             </div>
 
             {detail.exceptionReason && (
@@ -110,20 +110,20 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
                 {detail.canManage && (
                   <>
                     <button onClick={onForceReady} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: actionBusy ? 0.6 : 1 }}>
-                      Move to Ready to Pick Up
+                      Pindahkan ke Siap Diambil
                     </button>
                     {detail.bucket === 'Ready to Pickup' && (
                       <button onClick={onForcePickup} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.blue, color: colors.blue, opacity: actionBusy ? 0.6 : 1 }}>
-                        Force Pickup
+                        Paksa Pickup
                       </button>
                     )}
                     <button onClick={onCancelOrder} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.red, color: colors.red, opacity: actionBusy ? 0.6 : 1 }}>
-                      Cancel Order
+                      Batalkan Order
                     </button>
                   </>
                 )}
               </div>
-              <button onClick={onClose} disabled={actionBusy} style={modalButtonStyle}>Close</button>
+              <button onClick={onClose} disabled={actionBusy} style={modalButtonStyle}>Tutup</button>
             </div>
           </>
         ) : null}
@@ -160,7 +160,7 @@ function ActiveStation() {
   if (stations.length === 0) {
     return (
       <div style={{ ...card(), height: '100%', boxSizing: 'border-box' }}>
-        <p style={{ color: colors.textDim, margin: 0 }}>No stations currently checked in.</p>
+        <p style={{ color: colors.textDim, margin: 0 }}>Belum ada station yang check-in.</p>
       </div>
     );
   }
@@ -180,12 +180,12 @@ function ActiveStation() {
           <div>
             <div style={{ fontWeight: 700, color: colors.text }}>{s.station_id} - {s.operator_name}</div>
             <div style={{ color: colors.textDim, fontSize: 13, marginTop: 2 }}>
-              {s.current_order_sn ? `Handling Order Id ${s.current_order_sn}` : 'Menunggu order packing masuk'}
+              {s.current_order_sn ? `Sedang mengerjakan Order Id ${s.current_order_sn}` : 'Menunggu order packing masuk'}
             </div>
           </div>
           <div style={{ textAlign: 'right', fontSize: 13, color: colors.textDim }}>
-            <div>Start Check In: {formatTime(s.checked_in_at)}</div>
-            <div>Total Order hari ini: {s.total_orders_today}</div>
+            <div>Mulai Check In: {formatTime(s.checked_in_at)}</div>
+            <div>Total Order Hari Ini: {s.total_orders_today}</div>
           </div>
         </div>
       ))}
@@ -260,14 +260,14 @@ function useOrderDetailModal(onChanged) {
   }
 
   const handleForceReady = () =>
-    runAction('/packing/force-ready-for-pickup', `Are you sure? This will force order ${selectedOrderSn} straight to Ready to Pickup, skipping the normal scan/label process.`);
+    runAction('/packing/force-ready-for-pickup', `Apakah Anda yakin? Ini akan memaksa order ${selectedOrderSn} langsung ke Siap Diambil, melewati proses scan/label normal.`);
   // Same effect as Shipping Mode's real barcode scan (/confirm-pickup) —
   // this just lets an admin trigger it here for an order already sitting in
   // Ready to Pickup, without needing the physical label in hand.
   const handleForcePickup = () =>
-    runAction('/packing/confirm-pickup', `Are you sure? This will mark order ${selectedOrderSn} as picked up, the same as scanning its label in Shipping Mode.`);
+    runAction('/packing/confirm-pickup', `Apakah Anda yakin? Ini akan menandai order ${selectedOrderSn} sebagai sudah diambil, sama seperti scan labelnya di Mode Pengiriman.`);
   const handleCancelOrder = () =>
-    runAction('/packing/cancel-order', `Are you sure? This will cancel order ${selectedOrderSn} on Shopee for real, and cannot be undone.`);
+    runAction('/packing/cancel-order', `Apakah Anda yakin? Ini akan membatalkan order ${selectedOrderSn} di Shopee secara nyata, dan tidak bisa dikembalikan.`);
 
   return {
     selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
@@ -416,7 +416,7 @@ function OrderLists() {
   // /force-ready-for-pickup-all and /force-pickup-all), this button is just
   // the trigger.
   async function handleMoveAllToReadyForPickup() {
-    if (!window.confirm('Are you sure? This will force every order currently at Ready to Check or On Progress Check straight to Ready to Pickup, skipping the normal scan/label process.')) return;
+    if (!window.confirm('Apakah Anda yakin? Ini akan memaksa setiap order yang sedang di Siap Dicek atau Sedang Discan langsung ke Siap Diambil, melewati proses scan/label normal.')) return;
     setBulkBusy('moveAll');
     try {
       const res = await apiFetch(`${API_BASE}/packing/force-ready-for-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
@@ -427,7 +427,7 @@ function OrderLists() {
   }
 
   async function handleForceAllPickup() {
-    if (!window.confirm('Are you sure? This will mark every order currently in Ready to Pickup as picked up, the same as scanning each one in Shipping Mode.')) return;
+    if (!window.confirm('Apakah Anda yakin? Ini akan menandai setiap order yang ada di Siap Diambil sebagai sudah diambil, sama seperti scan setiap labelnya di Mode Pengiriman.')) return;
     setBulkBusy('forceAll');
     try {
       const res = await apiFetch(`${API_BASE}/packing/force-pickup-all?shop_id=${SHOP_ID}`, { method: 'POST' });
@@ -438,13 +438,13 @@ function OrderLists() {
   }
 
   const columns = [
-    { key: 'waitingList', title: 'Waiting List' },
-    { key: 'processing', title: 'Processing' },
-    { key: 'readyToCheck', title: 'Ready to Check' },
-    { key: 'onProgressCheck', title: 'On Progress Check' },
-    { key: 'readyForPickup', title: 'Ready to Pickup' },
-    { key: 'latePickup', title: 'Late Pickup' },
-    { key: 'readyTomorrow', title: 'Ready to Process Tomorrow' },
+    { key: 'waitingList', title: 'Daftar Tunggu' },
+    { key: 'processing', title: 'Diproses' },
+    { key: 'readyToCheck', title: 'Siap Dicek' },
+    { key: 'onProgressCheck', title: 'Sedang Discan' },
+    { key: 'readyForPickup', title: 'Siap Diambil' },
+    { key: 'latePickup', title: 'Pickup Terlambat' },
+    { key: 'readyTomorrow', title: 'Diproses Besok' },
   ];
 
   const settingsChanged = settings && settingsDraft && (
@@ -518,7 +518,7 @@ function OrderLists() {
           />
         </div>
         <div>
-          <label style={settingsLabelStyle}>Max Process Order</label>
+          <label style={settingsLabelStyle}>Maks Proses Order</label>
           <input
             type="number"
             min="0"
@@ -530,7 +530,7 @@ function OrderLists() {
           />
         </div>
         <div>
-          <label style={settingsLabelStyle}>Max Ready to Check</label>
+          <label style={settingsLabelStyle}>Maks Siap Dicek</label>
           <input
             type="number"
             min="0"
@@ -592,7 +592,7 @@ function OrderLists() {
           </button>
         </div>
         <div>
-          <label style={settingsLabelStyle}>Stuck Threshold (detik)</label>
+          <label style={settingsLabelStyle}>Batas Waktu Macet (detik)</label>
           <input
             type="number"
             min="1"
@@ -639,14 +639,14 @@ function OrderLists() {
           disabled={bulkBusy !== null}
           style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: bulkBusy !== null ? 0.6 : 1 }}
         >
-          {bulkBusy === 'moveAll' ? 'Memproses...' : 'MOVE ALL TO READY TO PICKUP'}
+          {bulkBusy === 'moveAll' ? 'Memproses...' : 'PINDAHKAN SEMUA KE SIAP DIAMBIL'}
         </button>
         <button
           onClick={handleForceAllPickup}
           disabled={bulkBusy !== null}
           style={{ ...modalButtonStyle, borderColor: colors.blue, color: colors.blue, opacity: bulkBusy !== null ? 0.6 : 1 }}
         >
-          {bulkBusy === 'forceAll' ? 'Memproses...' : 'FORCE ALL PICKUP'}
+          {bulkBusy === 'forceAll' ? 'Memproses...' : 'PAKSA SEMUA PICKUP'}
         </button>
       </div>
 
@@ -657,13 +657,13 @@ function OrderLists() {
           <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
             <div style={{ fontWeight: 700, color: colors.text, marginBottom: 2 }}>{title}</div>
             <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 12 }}>
-              {rows.length} order{rows.length === 1 ? '' : 's'}
+              {rows.length} order
             </div>
             <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {loading ? (
-                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Loading...</p>
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Memuat...</p>
               ) : rows.length === 0 ? (
-                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Empty.</p>
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Kosong.</p>
               ) : (
                 rows.map((row) => (
                   <div
@@ -680,7 +680,7 @@ function OrderLists() {
                     )}
                     {row.status === 'AWAITING_LABEL_SCAN' && (
                       <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
-                        Waiting on confirm-scan — check the printer
+                        Menunggu scan konfirmasi — cek printer
                       </div>
                     )}
                     {key === 'readyToCheck' && (
@@ -761,7 +761,7 @@ function CancelMasalahList() {
   }
 
   const columns = [
-    { key: 'cancelled', title: 'Cancelled' },
+    { key: 'cancelled', title: 'Dibatalkan' },
     { key: 'masalah', title: 'Masalah' },
   ];
 
@@ -774,13 +774,13 @@ function CancelMasalahList() {
             <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
               <div style={{ fontWeight: 700, color: colors.text, marginBottom: 2 }}>{title}</div>
               <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 12 }}>
-                {rows.length} order{rows.length === 1 ? '' : 's'}
+                {rows.length} order
               </div>
               <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {loading ? (
-                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Loading...</p>
+                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Memuat...</p>
                 ) : rows.length === 0 ? (
-                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Empty.</p>
+                  <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Kosong.</p>
                 ) : (
                   rows.map((row) => (
                     <div
@@ -855,7 +855,7 @@ function Daftar() {
           <h2>${data.name}</h2>
           ${renderCode39Svg(data.login_barcode)}
           <p style="letter-spacing: 2px;">${data.login_barcode}</p>
-          <p style="font-size: 11px;">Scan this barcode at the Packing Station to log in.</p>
+          <p style="font-size: 11px;">Scan barcode ini di Packing Station untuk masuk.</p>
         </body>
       </html>
     `;
@@ -972,7 +972,7 @@ function Daftar() {
         </div>
         {result && (
           <p style={{ marginTop: 16, color: colors.text }}>
-            Barcode for <strong>{result.name}</strong>:{' '}
+            Barcode untuk <strong>{result.name}</strong>:{' '}
             <span style={{ fontFamily: 'monospace', fontSize: 18, color: colors.green }}>{result.login_barcode}</span>
           </p>
         )}

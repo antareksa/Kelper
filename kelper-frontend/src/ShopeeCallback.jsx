@@ -7,8 +7,8 @@ import { refreshActiveShopId } from './shopConfig';
 // each app's code is only valid against its own /auth[/brand]/exchange, so
 // which endpoint gets called must match which app's redirect URI brought us
 // here (App.jsx's isShopeeBrandCallback decides that from the URL path).
-function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shopee Connection' }) {
-  const [message, setMessage] = useState('Connecting to Shopee...');
+function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Koneksi Shopee' }) {
+  const [message, setMessage] = useState('Menghubungkan ke Shopee...');
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -28,7 +28,7 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
         if (exchangeUrl === '/auth/exchange') {
           await refreshActiveShopId();
         }
-        setMessage('Connected! Returning to Shopee config...');
+        setMessage('Terhubung! Kembali ke konfigurasi Shopee...');
         setTimeout(backToConfig, 1200);
       } catch (err) {
         setError(err.message);
@@ -50,8 +50,8 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Shope
       <h2>{title}</h2>
       {error ? (
         <>
-          <p style={{ color: '#c62828' }}>Failed: {error}</p>
-          <button onClick={backToConfig} style={{ padding: '8px 16px', marginTop: 12 }}>Back to main menu</button>
+          <p style={{ color: '#c62828' }}>Gagal: {error}</p>
+          <button onClick={backToConfig} style={{ padding: '8px 16px', marginTop: 12 }}>Kembali ke menu utama</button>
         </>
       ) : (
         <p>{message}</p>

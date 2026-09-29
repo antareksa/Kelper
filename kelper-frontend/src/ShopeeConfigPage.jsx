@@ -51,7 +51,7 @@ function DashboardSettings() {
     <div style={{ ...card(), flex: 1, minWidth: 260 }}>
       <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Pengaturan Dashboard</div>
       <label style={{ display: 'block', fontSize: 12, color: colors.textDim, marginBottom: 4 }}>
-        Ads tax percentage (%)
+        Persentase pajak iklan (%)
       </label>
       <div style={{ display: 'flex', gap: 8 }}>
         <input

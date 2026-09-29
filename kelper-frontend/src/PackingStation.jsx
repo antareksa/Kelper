@@ -232,7 +232,7 @@ function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message
         }}
       >
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors.green, flexShrink: 0 }} className="kelper-pulse" />
-        {message || 'Barcode Scanner Active...'}
+        {message || 'Pemindai Barcode Aktif...'}
       </div>
     </div>
   );
@@ -242,16 +242,16 @@ function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message
 // barcode cards for these — previously only referenced here, never actually
 // rendered anywhere despite being fully defined.
 export const COMMANDS = [
-  { cmd: 'NEXT_ORDER', desc: 'Start processing the next available fresh order — automatically picks the highest-priority one (Instant first). Does not resume Pack Besok leftovers; scan that specific order\'s BESOK- barcode instead.' },
-  { cmd: 'PAUSE', desc: 'Pause the station (freezes scanning) while you step away.' },
-  { cmd: 'RESUME', desc: 'Resume the station after a pause.' },
-  { cmd: 'UNDO', desc: 'Revert your last item scan.' },
-  { cmd: 'MASALAH', desc: 'Flag the current order as a problem — needs manual resolution.' },
-  { cmd: 'RELEASE_ORDER', desc: "Give up this order and put it back in the pool for any station (e.g. you're not going to finish it)." },
-  { cmd: 'REPRINT', desc: 'After scanning all items: if the label fails to scan back (printer issue), reprint it without creating a new shipment.' },
-  { cmd: 'SHIPPING_MODE', desc: 'Switch this station to Shipping Mode — scan packed labels to confirm courier pickup, separate from packing.' },
-  { cmd: 'PACKING_MODE', desc: 'Switch back to normal packing from Shipping Mode.' },
-  { cmd: 'LOGOUT', desc: 'End this operator\'s shift on this station (station stays configured for the next operator).' },
+  { cmd: 'NEXT_ORDER', desc: 'Mulai proses order baru berikutnya yang tersedia — otomatis memilih yang prioritasnya tertinggi (Instant lebih dulu). Tidak melanjutkan sisa Pack Besok; scan barcode BESOK- milik order tersebut untuk itu.' },
+  { cmd: 'PAUSE', desc: 'Jeda station (menghentikan sementara proses scan) saat Anda meninggalkan tempat.' },
+  { cmd: 'RESUME', desc: 'Lanjutkan station setelah dijeda.' },
+  { cmd: 'UNDO', desc: 'Batalkan scan item terakhir Anda.' },
+  { cmd: 'MASALAH', desc: 'Tandai order saat ini sebagai masalah — perlu penyelesaian manual.' },
+  { cmd: 'RELEASE_ORDER', desc: 'Lepaskan order ini dan kembalikan ke antrian untuk station manapun (misalnya Anda tidak akan menyelesaikannya).' },
+  { cmd: 'REPRINT', desc: 'Setelah semua item discan: jika label gagal terscan kembali (masalah printer), cetak ulang tanpa membuat pengiriman baru.' },
+  { cmd: 'SHIPPING_MODE', desc: 'Alihkan station ini ke Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan kurir, terpisah dari proses packing.' },
+  { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman.' },
+  { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
 ];
 
 async function post(path, body) {
@@ -563,7 +563,7 @@ function PackingStation() {
         setOperatorName('');
         setState(null);
         setLastSku(null);
-        notify('Session timed out after 1 hour of inactivity — logged out.', 'error');
+        notify('Sesi berakhir setelah 1 jam tidak aktif — keluar otomatis.', 'error');
       }
     }, 60000);
     return () => clearInterval(interval);
@@ -602,13 +602,13 @@ function PackingStation() {
   // The "what to do next" bar is always derived from current state — never
   // set imperatively — so it can't drift out of sync with what's actually true.
   function getGuidance() {
-    if (!operatorName) return { text: 'Scan your operator barcode to log in.', type: 'info' };
-    if (mode === 'shipping') return { text: 'Shipping Mode — scan a packed label to confirm pickup. Scan PACKING_MODE to go back.', type: 'info' };
-    if (paused) return { text: 'Station paused. Scan RESUME to continue.', type: 'info' };
+    if (!operatorName) return { text: 'Scan barcode operator Anda untuk masuk.', type: 'info' };
+    if (mode === 'shipping') return { text: 'Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan. Scan PACKING_MODE untuk kembali.', type: 'info' };
+    if (paused) return { text: 'Station dijeda. Scan RESUME untuk melanjutkan.', type: 'info' };
     if (!state) return { text: 'Menunggu orderan masuk...', type: 'info' };
     const { session, allComplete } = state;
 
-    if (session.status === 'DONE') return { text: 'Order done! Grabbing next order...', type: 'success' };
+    if (session.status === 'DONE') return { text: 'Order selesai! Mengambil order berikutnya...', type: 'success' };
     // Client-requested (2026-09-23): "Ready to Check" auto-assigns a labeled
     // Pack Besok order to this station (see /next-order), but the operator
     // still has to physically confirm they have the right box by scanning
@@ -627,7 +627,7 @@ function PackingStation() {
         : { text: 'Mohon tunggu label barcode sementara. Scan label resi sementara jika sudah di tempel', type: 'success' };
     }
     if (session.status === 'EXCEPTION') {
-      return { text: 'Order flagged as a problem (MASALAH) — needs manual resolution.', type: 'error' };
+      return { text: 'Order ditandai sebagai masalah (MASALAH) — perlu penyelesaian manual.', type: 'error' };
     }
     if (session.status === 'AWAITING_LABEL_SCAN') {
       // Never claim "printed" here — a browser has no way to know whether a
@@ -635,20 +635,20 @@ function PackingStation() {
       // exists), and asserting success when we don't know it is exactly
       // what left operators stuck staring at "scan to confirm" with nothing
       // in hand. The scan itself is the only real confirmation there is.
-      return { text: `Printing label for ${state.order.order_sn} — scan its barcode once it's out to confirm. If nothing comes out, scan REPRINT.`, type: 'info' };
+      return { text: `Mencetak label untuk ${state.order.order_sn} — scan barcode-nya setelah keluar untuk konfirmasi. Jika tidak ada yang keluar, scan REPRINT.`, type: 'info' };
     }
     if (session.status === 'READY_FOR_PICKUP') {
-      return { text: `Confirmed — put it on the package. Grabbing next order...`, type: 'success' };
+      return { text: `Terkonfirmasi — tempelkan pada paket. Mengambil order berikutnya...`, type: 'success' };
     }
     if (session.status === 'IN_PROGRESS') {
       if (state.items.length === 0) {
-        return { text: 'No item data from Shopee yet for this order — nothing to scan. Waiting for it to arrive (checking automatically), or scan RELEASE_ORDER to put it back and try a different one.', type: 'error' };
+        return { text: 'Belum ada data item dari Shopee untuk order ini — tidak ada yang bisa discan. Menunggu data masuk (dicek otomatis), atau scan RELEASE_ORDER untuk mengembalikannya dan coba order lain.', type: 'error' };
       }
       return allComplete
-        ? { text: 'All items scanned — finishing up...', type: 'success' }
-        : { text: 'Scan each item on the order.', type: 'info' };
+        ? { text: 'Semua item sudah discan — menyelesaikan...', type: 'success' }
+        : { text: 'Scan setiap item pada order.', type: 'info' };
     }
-    return { text: 'Scan NEXT_ORDER to continue.', type: 'info' };
+    return { text: 'Scan NEXT_ORDER untuk melanjutkan.', type: 'info' };
   }
 
   function applyState(data) {
@@ -903,7 +903,7 @@ function PackingStation() {
       applyState(data);
     } catch (err) {
       setState(null);
-      notify(err.message === 'no_orders' ? 'No orders ready right now — checking automatically.' : err.message, 'error');
+      notify(err.message === 'no_orders' ? 'Belum ada order yang siap — dicek otomatis.' : err.message, 'error');
     }
   }
 
@@ -916,7 +916,7 @@ function PackingStation() {
     setOperatorName('');
     setState(null);
     setLastSku(null);
-    notify('Logged out', 'info');
+    notify('Berhasil keluar', 'info');
   }
 
   async function handleOperatorBarcode(barcode) {
@@ -925,12 +925,12 @@ function PackingStation() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setOperatorName(data.name);
-      notify(`Welcome, ${data.name}.`, 'success');
+      notify(`Selamat datang, ${data.name}.`, 'success');
       // No separate NEXT_ORDER scan needed to start a shift — go straight
       // into the first order the same way the station already auto-advances
       // between orders (see applyState).
       setBusy(true);
-      setBusyLabel('Finding the next order...');
+      setBusyLabel('Mencari order berikutnya...');
       try {
         await grabNextOrder(data.name);
       } finally {
@@ -948,7 +948,7 @@ function PackingStation() {
     if (!value) return;
 
     if (submittingRef.current) {
-      return notify('Still processing the previous scan — try again in a moment.', 'error');
+      return notify('Masih memproses scan sebelumnya — coba lagi sebentar.', 'error');
     }
 
     // Not identified yet — every scan here is treated as an operator login
@@ -964,21 +964,21 @@ function PackingStation() {
     }
 
     if (value === 'LOGOUT') return handleLogout();
-    if (value === 'PAUSE') { setPaused(true); return notify('Paused', 'info'); }
-    if (value === 'RESUME') { setPaused(false); return notify('Resumed', 'info'); }
+    if (value === 'PAUSE') { setPaused(true); return notify('Dijeda', 'info'); }
+    if (value === 'RESUME') { setPaused(false); return notify('Dilanjutkan', 'info'); }
     // Mode toggle works regardless of pause/session state — switching to
     // check on pickups shouldn't require first resolving whatever the
     // packing side happens to be doing.
-    if (value === 'SHIPPING_MODE') { setMode('shipping'); return notify('Shipping Mode — scan a packed label to confirm pickup.', 'info'); }
-    if (value === 'PACKING_MODE') { setMode('packing'); return notify('Back to Packing Mode.', 'info'); }
-    if (paused) return notify('Station is paused. Scan RESUME first.', 'error');
+    if (value === 'SHIPPING_MODE') { setMode('shipping'); return notify('Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan.', 'info'); }
+    if (value === 'PACKING_MODE') { setMode('packing'); return notify('Kembali ke Mode Packing.', 'info'); }
+    if (paused) return notify('Station sedang dijeda. Scan RESUME terlebih dahulu.', 'error');
 
     if (mode === 'shipping') {
       submittingRef.current = true;
       try {
         const data = await post('/packing/confirm-pickup', { order_sn: value });
         setLastPickup({ order_sn: data.order_sn, created_at: data.created_at, picked_up_at: data.picked_up_at });
-        return notify(`${data.order_sn} confirmed picked up.`, 'success');
+        return notify(`${data.order_sn} terkonfirmasi sudah diambil.`, 'success');
       } catch (err) {
         return notify(err.message, 'error');
       } finally {
@@ -991,10 +991,10 @@ function PackingStation() {
       if (value === 'NEXT_ORDER') {
         const doneStatuses = ['DONE', 'DEFERRED_READY', 'READY_FOR_PICKUP'];
         if (state && !doneStatuses.includes(state.session.status)) {
-          return notify('Finish or defer the current order first.', 'error');
+          return notify('Selesaikan atau tunda order saat ini terlebih dahulu.', 'error');
         }
         setBusy(true);
-        setBusyLabel('Finding the next order...');
+        setBusyLabel('Mencari order berikutnya...');
         try {
           await grabNextOrder();
         } finally {
@@ -1007,7 +1007,7 @@ function PackingStation() {
         // no active session — only NEXT_ORDER or resuming a Pack Besok barcode make sense here
         if (value.startsWith('BESOK-')) {
           setBusy(true);
-          setBusyLabel('Confirming order status...');
+          setBusyLabel('Mengonfirmasi status order...');
           try {
             const data = await post('/packing/resume-besok', { internal_barcode: value });
             applyState(data);
@@ -1016,7 +1016,7 @@ function PackingStation() {
           }
           return;
         }
-        return notify('No active order. Scan NEXT_ORDER first.', 'error');
+        return notify('Tidak ada order aktif. Scan NEXT_ORDER terlebih dahulu.', 'error');
       }
 
       // RESUMING: this order was auto-assigned to the station (see
@@ -1038,7 +1038,7 @@ function PackingStation() {
         if (value === 'REPRINT') {
           await post('/packing/reprint', { session_id: state.session.id });
           autoPrintLabel(state.session.id);
-          return notify('Reprinting label...', 'info');
+          return notify('Mencetak ulang label...', 'info');
         }
         const data = await post('/packing/confirm-print', { session_id: state.session.id, order_sn: value });
         return applyState(data);
@@ -1048,16 +1048,16 @@ function PackingStation() {
         if (value === 'MASALAH') {
           const data = await post('/packing/masalah', { session_id: state.session.id });
           setState(data);
-          return notify('Order flagged as a problem (MASALAH).', 'error');
+          return notify('Order ditandai sebagai masalah (MASALAH).', 'error');
         }
         if (value === 'RELEASE_ORDER') {
           await post('/packing/release-order', { session_id: state.session.id });
           setState(null);
           setLastSku(null);
-          return notify(`Order ${state.order.order_sn} released back to the pool.`, 'success');
+          return notify(`Order ${state.order.order_sn} dikembalikan ke antrian.`, 'success');
         }
         if (value === 'UNDO') {
-          if (!lastSku) return notify('Nothing to undo.', 'error');
+          if (!lastSku) return notify('Tidak ada yang bisa dibatalkan.', 'error');
           const data = await post('/packing/undo-last-scan', { session_id: state.session.id, sku: lastSku });
           setLastSku(null);
           return applyState(data);
@@ -1076,7 +1076,7 @@ function PackingStation() {
           });
           if (grown) {
             flashPanel('success');
-            notify(`${grown.product_name} scanned (${grown.scanned_qty}/${grown.qty})`, 'success');
+            notify(`${grown.product_name} berhasil discan (${grown.scanned_qty}/${grown.qty})`, 'success');
           }
           return applyState(data);
         } catch (err) {
@@ -1087,7 +1087,7 @@ function PackingStation() {
         }
       }
 
-      notify('Unexpected state — scan NEXT_ORDER to reset.', 'error');
+      notify('Status tidak terduga — scan NEXT_ORDER untuk reset.', 'error');
     } catch (err) {
       notify(err.message, 'error');
     } finally {
@@ -1103,9 +1103,9 @@ function PackingStation() {
             <IconMonitor size={18} />
             <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Station</span>
           </div>
-          <label style={setupLabelStyle}>Station ID</label>
+          <label style={setupLabelStyle}>ID Station</label>
           <input data-mouse-input="true" value={stationId} onChange={(e) => setStationId(e.target.value)} style={setupInputStyle} />
-          <button data-mouse-input="true" type="submit" style={setupSubmitStyle}>Continue</button>
+          <button data-mouse-input="true" type="submit" style={setupSubmitStyle}>Lanjutkan</button>
           {infoMessage && (
             <p style={{ marginTop: 12, fontSize: 13, color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim }}>
               {infoMessage}
@@ -1114,9 +1114,9 @@ function PackingStation() {
         </form>
 
         <div style={{ ...setupCardStyle, width: 320, marginTop: 16 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: colors.text, marginBottom: 12 }}>Hardware Test</div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: colors.text, marginBottom: 12 }}>Uji Perangkat</div>
 
-          <label style={setupLabelStyle}>Paper size (mm)</label>
+          <label style={setupLabelStyle}>Ukuran Kertas (mm)</label>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <input
               data-mouse-input="true"
@@ -1140,25 +1140,25 @@ function PackingStation() {
           </div>
 
           <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleTestPrint} style={{ ...setupSubmitStyle, marginBottom: 12 }}>
-            Test Print
+            Uji Cetak
           </button>
 
           <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={startHardwareCheck} style={{ ...setupSubmitStyle, marginBottom: 8 }}>
-            Check Hardware
+            Cek Hardware
           </button>
           {hwCheckStatus === 'awaiting_scan' && (
             <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.textDim }}>
-              Printed <strong>{hwCheckCode}</strong> — scan it below to confirm.
+              <strong>{hwCheckCode}</strong> sudah dicetak — scan di bawah untuk konfirmasi.
             </p>
           )}
           {hwCheckStatus === 'pass' && (
             <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.green }}>
-              ✅ Hardware ready — printer and scanner both confirmed.
+              ✅ Hardware siap — printer dan scanner sudah terkonfirmasi.
             </p>
           )}
           {hwCheckStatus === 'fail' && (
             <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: colors.red }}>
-              ❌ Scanned value didn't match the printed barcode. Scan CHECK_HW to retry.
+              ❌ Hasil scan tidak cocok dengan barcode yang dicetak. Scan CHECK_HW untuk mencoba lagi.
             </p>
           )}
 
@@ -1175,19 +1175,19 @@ function PackingStation() {
             Video packing tersimpan otomatis ke folder ".packing-videos" (diatur oleh start-packing-station.bat) — tidak perlu pengaturan lain.
           </p>
 
-          <label style={setupLabelStyle}>Scan here (or scan TEST_PRINT / CHECK_HW — no mouse needed)</label>
+          <label style={setupLabelStyle}>Scan di sini (atau scan TEST_PRINT / CHECK_HW — tidak perlu mouse)</label>
           <input
             ref={testScanInputRef}
             value={testScanValue}
             onChange={(e) => setTestScanValue(e.target.value)}
             onKeyDown={handleTestScan}
             onBlur={() => testScanInputRef.current && testScanInputRef.current.focus()}
-            placeholder="Scan or type, then press Enter"
+            placeholder="Scan atau ketik, lalu tekan Enter"
             style={setupInputStyle}
           />
           {lastTestScan !== null && (
             <p style={{ marginTop: 8, fontSize: 13, color: colors.green }}>
-              Last scanned: <strong>{lastTestScan}</strong>
+              Terakhir discan: <strong>{lastTestScan}</strong>
             </p>
           )}
         </div>
@@ -1213,20 +1213,20 @@ function PackingStation() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
-            {mode === 'shipping' ? 'Shipping Mode' : 'Packing Station'}
+            {mode === 'shipping' ? 'Mode Pengiriman' : 'Packing Station'}
           </div>
           <div style={{ fontSize: 12, color: colors.textDim }}>{stationId}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
-            {operatorName || 'Not logged in'}{paused ? ' (PAUSED)' : ''}
+            {operatorName || 'Belum masuk'}{paused ? ' (DIJEDA)' : ''}
           </div>
           {operatorName && (
             <button
               onClick={handleLogout}
               style={{ fontSize: 11, padding: '3px 10px', marginTop: 4, background: colors.cardAlt, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 6, cursor: 'pointer', fontFamily: 'var(--sans)' }}
             >
-              Logout
+              Keluar
             </button>
           )}
         </div>

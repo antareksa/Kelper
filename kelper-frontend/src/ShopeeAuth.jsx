@@ -14,7 +14,7 @@ function ShopeeAuth() {
   }
 
   if (checking) {
-    return <span style={{ fontSize: 12, opacity: 0.6 }}>Checking Shopee...</span>;
+    return <span style={{ fontSize: 12, opacity: 0.6 }}>Memeriksa Shopee...</span>;
   }
 
   if (connected) {
@@ -25,10 +25,10 @@ function ShopeeAuth() {
     return (
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
-          ✓ Shopee Connected{shopName ? ` — ${shopName}` : ''}
+          ✓ Shopee Terhubung{shopName ? ` — ${shopName}` : ''}
         </div>
         <button onClick={handleDisconnect} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75, marginTop: 6 }}>
-          Disconnect
+          Putuskan
         </button>
       </div>
     );
@@ -36,7 +36,7 @@ function ShopeeAuth() {
 
   return (
     <button onClick={loginShopee} style={{ fontSize: 12, padding: '4px 10px' }}>
-      Connect
+      Hubungkan
     </button>
   );
 }

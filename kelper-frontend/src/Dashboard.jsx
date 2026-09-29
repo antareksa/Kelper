@@ -17,10 +17,10 @@ const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
-  { path: '/packing-station/active-station', label: 'Active Station', Icon: IconMonitor },
-  { path: '/packing-station/order-lists', label: 'Order Lists', Icon: IconTag },
+  { path: '/packing-station/active-station', label: 'Station Aktif', Icon: IconMonitor },
+  { path: '/packing-station/order-lists', label: 'Daftar Order', Icon: IconTag },
   { path: '/packing-station/daftar', label: 'Daftar', Icon: IconUser },
-  { path: '/packing-station/cancel-masalah', label: 'Cancel & Masalah', Icon: IconAlertTriangle },
+  { path: '/packing-station/cancel-masalah', label: 'Batal & Masalah', Icon: IconAlertTriangle },
 ];
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
@@ -96,11 +96,11 @@ function Dashboard() {
             <IconGrid size={18} />
             <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Admin</span>
           </div>
-          <label style={labelStyle}>Username</label>
+          <label style={labelStyle}>Nama Pengguna</label>
           <input value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} />
-          <label style={labelStyle}>Password</label>
+          <label style={labelStyle}>Kata Sandi</label>
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-          <button type="submit" style={submitStyle}>Login</button>
+          <button type="submit" style={submitStyle}>Masuk</button>
           {error && <p style={{ color: colors.red, marginTop: 12, fontSize: 13 }}>{error}</p>}
         </form>
       </div>
@@ -124,7 +124,7 @@ function Dashboard() {
             Belum ada toko Shopee yang terhubung. Hubungkan toko Anda terlebih dahulu untuk menggunakan Dashboard.
           </p>
           <button onClick={shopee.loginShopee} style={submitStyle}>
-            Connect
+            Hubungkan
           </button>
         </div>
       </div>
@@ -154,7 +154,7 @@ function Dashboard() {
                 Toko belum terhubung ke Shopee. Sinkronisasi pesanan dan katalog produk tidak akan berjalan sampai ini terhubung.
               </p>
               <button onClick={shopee.loginShopee} style={{ ...submitStyle, marginBottom: 10 }}>
-                Connect
+                Hubungkan
               </button>
               <button
                 onClick={() => setShopeeModalDismissed(true)}
@@ -186,7 +186,7 @@ function Dashboard() {
               <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: 0.3, fontFamily: 'var(--heading)' }}>KELPER</span>
             </div>
             <div style={{ fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.5, padding: '0 10px', marginBottom: 6 }}>
-              Main
+              Utama
             </div>
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <button
@@ -264,14 +264,14 @@ function Dashboard() {
                 style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
               >
                 <IconSettings size={16} />
-                Settings
+                Pengaturan
               </button>
               <button
                 onClick={handleLogout}
                 style={{ ...sideItemStyle, background: 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)' }}
               >
                 <IconPower size={16} />
-                Logout
+                Keluar
               </button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '8px 8px 0' }}>

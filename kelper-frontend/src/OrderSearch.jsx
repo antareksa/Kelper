@@ -14,9 +14,9 @@ const SESSION_STATUS_LABEL = {
   IN_PROGRESS: 'Sedang Dikerjakan',
   RESUMING: 'Sedang Dikerjakan',
   AWAITING_LABEL_SCAN: 'Menunggu Scan Label',
-  DEFERRED_READY: 'Ready to Process Tomorrow',
-  READY_FOR_PICKUP: 'Ready to Pickup',
-  EXCEPTION: 'Problem Order',
+  DEFERRED_READY: 'Diproses Besok',
+  READY_FOR_PICKUP: 'Siap Diambil',
+  EXCEPTION: 'Order Bermasalah',
   DONE: 'Selesai (Diambil Kurir)',
 };
 
@@ -116,7 +116,7 @@ export default function OrderSearch() {
             </div>
             <div style={{ textAlign: 'right', fontSize: 12.5, color: colors.textDim }}>
               <div>DITERIMA - {formatDateTime(result.created_at)}</div>
-              <div>SHIPPING - {result.shipping_carrier || '—'}{result.is_instant ? ' (Instant)' : ''}</div>
+              <div>PENGIRIMAN - {result.shipping_carrier || '—'}{result.is_instant ? ' (Instant)' : ''}</div>
             </div>
           </div>
 
@@ -127,7 +127,7 @@ export default function OrderSearch() {
             )}
             {result.needs_retry_ship && <StatusBadge label="Perlu Retry Ship" accent={colors.red} />}
             {result.tracking_no && <StatusBadge label={`AWB: ${result.tracking_no}`} />}
-            {result.session?.forced && <StatusBadge label="FORCED" accent={colors.orange} />}
+            {result.session?.forced && <StatusBadge label="DIPAKSA" accent={colors.orange} />}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: result.session ? 16 : 0 }}>

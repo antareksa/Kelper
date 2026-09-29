@@ -15,15 +15,15 @@ function ShopeeBrandAuth() {
   }
 
   if (checking) {
-    return <span style={{ fontSize: 12, opacity: 0.6 }}>Checking Brand Portal...</span>;
+    return <span style={{ fontSize: 12, opacity: 0.6 }}>Memeriksa Brand Portal...</span>;
   }
 
   if (connected) {
     return (
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4 }}>✓ Brand Portal Connected</div>
+        <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4 }}>✓ Brand Portal Terhubung</div>
         <button onClick={handleDisconnect} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75, marginTop: 6 }}>
-          Disconnect
+          Putuskan
         </button>
       </div>
     );
@@ -31,7 +31,7 @@ function ShopeeBrandAuth() {
 
   return (
     <button onClick={loginShopee} style={{ fontSize: 12, padding: '4px 10px' }}>
-      Connect
+      Hubungkan
     </button>
   );
 }
