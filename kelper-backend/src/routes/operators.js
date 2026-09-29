@@ -25,6 +25,11 @@ router.get('/lookup', (req, res) => {
       VALUES (?, ?, ?)
       ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at
     `).run(station_id, operator.name, now());
+    // Client-requested (2026-09-30): station_sessions above is a live-only
+    // table (one row per station, overwritten/deleted on every check-in/out)
+    // with no memory of past shifts -- this append-only log is what actually
+    // powers the Kinerja Operator report's absensi columns.
+    db.prepare('INSERT INTO attendance_log (station_id, operator_name, checked_in_at) VALUES (?, ?, ?)').run(station_id, operator.name, now());
   }
 
   res.json(operator);
@@ -36,6 +41,15 @@ router.post('/check-out', (req, res) => {
   const { station_id } = req.body;
   if (!station_id) return res.status(400).json({ error: 'station_id is required' });
   db.prepare('DELETE FROM station_sessions WHERE station_id = ?').run(station_id);
+  // Closes out the most recent still-open shift for this station -- "open"
+  // (checked_out_at IS NULL) rather than matching by operator name, since a
+  // station can only have one operator checked in at a time anyway, and this
+  // stays correct even if station_id got reused across shifts on the same
+  // physical machine.
+  db.prepare(`
+    UPDATE attendance_log SET checked_out_at = ?
+    WHERE id = (SELECT id FROM attendance_log WHERE station_id = ? AND checked_out_at IS NULL ORDER BY checked_in_at DESC LIMIT 1)
+  `).run(now(), station_id);
   res.json({ ok: true });
 });
 

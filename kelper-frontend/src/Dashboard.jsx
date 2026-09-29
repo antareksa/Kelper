@@ -4,11 +4,12 @@ import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
 import OrderSearch from './OrderSearch';
+import OperatorPerformance from './OperatorPerformance';
 import ShopeeConfigPage from './ShopeeConfigPage';
 import { useShopeeConnection } from './useShopeeConnection';
 import { SHOP_ID } from './shopConfig';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
@@ -21,6 +22,7 @@ const PACKING_SUB_ITEMS = [
   { path: '/packing-station/order-lists', label: 'Daftar Order', Icon: IconTag },
   { path: '/packing-station/daftar', label: 'Daftar', Icon: IconUser },
   { path: '/packing-station/cancel-masalah', label: 'Batal & Masalah', Icon: IconAlertTriangle },
+  { path: '/packing-station/kinerja-operator', label: 'Kinerja Operator', Icon: IconHistory },
 ];
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
@@ -354,6 +356,7 @@ function Dashboard() {
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
             <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
+            <Route path="/packing-station/kinerja-operator" element={<OperatorPerformance />} />
             <Route path="/config/shopee" element={<ShopeeConfigPage />} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>

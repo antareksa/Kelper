@@ -82,6 +82,19 @@ db.exec(`
     checked_in_at INTEGER NOT NULL
   );
 
+  -- Client-requested (2026-09-30): persistent attendance history -- unlike
+  -- station_sessions above (one live row per station, deleted on checkout,
+  -- so it has no memory of past shifts), this is append-only: one row per
+  -- check-in, updated with checked_out_at when that shift ends. Powers the
+  -- Kinerja Operator report's absensi columns.
+  CREATE TABLE IF NOT EXISTS attendance_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    station_id TEXT NOT NULL,
+    operator_name TEXT NOT NULL,
+    checked_in_at INTEGER NOT NULL,
+    checked_out_at INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS products (
     sku TEXT PRIMARY KEY,
     name TEXT,
@@ -243,6 +256,14 @@ if (!packingSessionCols.includes('exception_reason')) {
 // the notification survives page reloads until someone actually acts on it.
 if (!packingSessionCols.includes('needs_resolve')) {
   db.exec('ALTER TABLE packing_sessions ADD COLUMN needs_resolve INTEGER NOT NULL DEFAULT 0');
+}
+// Client-requested (2026-09-30): when the operator's confirm-print scan
+// succeeded (see routes/packing.js's /confirm-print) -- the real end of
+// "handling" this order (scanning items through the label-scan confirm),
+// as opposed to completed_at (set much later, at courier pickup). Powers
+// the Kinerja Operator report's per-order/average duration figures.
+if (!packingSessionCols.includes('label_confirmed_at')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN label_confirmed_at INTEGER');
 }
 
 // Non-destructive migration for the server's background sync flow: orders

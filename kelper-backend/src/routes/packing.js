@@ -478,7 +478,7 @@ router.post('/confirm-print', (req, res) => {
     });
   }
 
-  db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP' WHERE id = ?").run(session_id);
+  db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP', label_confirmed_at = ? WHERE id = ?").run(now(), session_id);
   db.prepare('UPDATE orders SET label_printed = 1 WHERE order_sn = ?').run(state.order.order_sn);
   console.log(`[server] bucket: ${state.order.order_sn} -> Ready to Pickup (label_printed confirmed via scan)`);
   res.json(getSessionWithOrder(session_id));
