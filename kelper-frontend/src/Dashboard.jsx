@@ -154,6 +154,19 @@ function Dashboard() {
     );
   }
 
+  // Client-requested (2026-09-30): full-screen, no sidebar at all — a TV/
+  // monitor display in the packing area, not an admin working screen. Every
+  // other route always gets the sidebar shell below; this one specific path
+  // bypasses it entirely rather than adding a "hide sidebar" prop that every
+  // other route would have to remember not to set.
+  if (location.pathname === '/packing-station/order-lists/view-only') {
+    return (
+      <div style={{ background: colors.bg, height: '100vh', boxSizing: 'border-box', padding: 24, overflow: 'hidden', fontFamily: 'var(--sans)' }}>
+        <PackingStationDashboard view="listsViewOnly" />
+      </div>
+    );
+  }
+
   return (
     <div style={{ background: colors.bg, height: '100vh', display: 'flex', overflow: 'hidden', fontFamily: 'var(--sans)' }}>
       <>
@@ -353,7 +366,6 @@ function Dashboard() {
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
-            <Route path="/packing-station/order-lists/view-only" element={<PackingStationDashboard view="listsViewOnly" />} />
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
             <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
             <Route path="/packing-station/kinerja-operator" element={<OperatorPerformance />} />
