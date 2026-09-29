@@ -498,8 +498,23 @@ function PackingStation() {
     try {
       downloadPackingVideo(orderSn, blob);
     } catch (err) {
-      console.warn(`[packing-video] failed to save video for ${orderSn}:`, err.message);
+      console.warn(`[packing-video] failed to save video locally for ${orderSn}:`, err.message);
     }
+    uploadPackingVideoToCloud(orderSn, blob);
+  }
+
+  // Second copy, offsite (client-requested 2026-09-30) -- fire-and-forget,
+  // never awaited by the caller. The local download above is already this
+  // station's durable copy; a failed cloud upload (offline station, GCS
+  // hiccup) is background backup noise, not something that should ever
+  // interrupt or slow down packing.
+  function uploadPackingVideoToCloud(orderSn, blob) {
+    const form = new FormData();
+    form.append('order_sn', orderSn);
+    form.append('video', blob, `${orderSn}.webm`);
+    fetch(`${API_BASE}/packing/upload-video`, { method: 'POST', body: form }).catch((err) => {
+      console.warn(`[packing-video] cloud upload failed for ${orderSn}:`, err.message);
+    });
   }
 
   // One-time real permission grant (replaces the --use-fake-ui-for-media-

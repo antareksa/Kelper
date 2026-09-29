@@ -19,5 +19,9 @@
   "sync": {
     "pollIntervalMs": 5000,
     "autoBookShipping": true
+  },
+  "evidence": {
+    "gcsEnabled": true,
+    "gcsBucket": "kelper-storage"
   }
 }

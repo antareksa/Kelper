@@ -33,6 +33,16 @@ const DEFAULTS = {
     pollIntervalMs: 5000,
     autoBookShipping: true,
   },
+  // Client-requested (2026-09-30): packing video evidence, backed up to GCS
+  // Nearline in addition to each station's own local download (see
+  // PackingStation.jsx's downloadPackingVideo). Off by default -- local dev
+  // has no GCS service account attached, so uploads would just fail loudly
+  // on every packed order. config.production.json turns this on once the
+  // VM's attached service account (see setup notes) is in place.
+  evidence: {
+    gcsEnabled: false,
+    gcsBucket: 'kelper-storage',
+  },
 };
 
 function deepMerge(base, override) {

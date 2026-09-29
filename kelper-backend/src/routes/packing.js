@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const multer = require('multer');
 const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getOrderDetail, cancelOrder } = require('../shopee/client');
@@ -8,8 +9,10 @@ const { getConfig } = require('../config');
 const { isProduction } = require('../env');
 const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
 const { startOfDayWIB } = require('../wib');
+const { uploadPackingVideo } = require('../gcs');
 
 const router = express.Router();
+const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -318,6 +321,30 @@ router.post('/masalah', (req, res) => {
   const { session_id } = req.body;
   db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session_id);
   res.json(getSessionWithOrder(session_id));
+});
+
+// Packing video evidence upload (client-requested 2026-09-30) -- a second,
+// offsite copy of the local download PackingStation.jsx already saves to
+// each station's disk (see downloadPackingVideo there). Best-effort in both
+// directions: a GCS hiccup here must never surface to the operator or block
+// packing, same rule as the camera itself being unavailable. Skipped
+// entirely when evidence.gcsEnabled is off (e.g. local dev with no GCS
+// service account attached).
+router.post('/upload-video', uploadVideo.single('video'), async (req, res) => {
+  const { order_sn } = req.body;
+  if (!order_sn || !req.file) {
+    return res.status(400).json({ error: 'order_sn_and_video_required' });
+  }
+  const { gcsEnabled, gcsBucket } = getConfig().evidence;
+  if (!gcsEnabled) return res.json({ ok: true, skipped: true });
+
+  try {
+    await uploadPackingVideo(gcsBucket, order_sn, req.file.buffer);
+    res.json({ ok: true });
+  } catch (err) {
+    console.warn(`[packing-video] GCS upload failed for ${order_sn}: ${err.message}`);
+    res.status(502).json({ error: 'gcs_upload_failed', message: err.message });
+  }
 });
 
 // RELEASE_ORDER — let a stuck order (operator started it and never came back)
