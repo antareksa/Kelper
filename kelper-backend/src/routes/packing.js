@@ -549,24 +549,30 @@ router.post('/confirm-pickup', (req, res) => {
 // Shipping Mode's live pickup queue (client-requested 2026-09-30) -- station-
 // facing (no admin auth, same as the rest of this file's scan endpoints), so
 // the operator sees exactly what's still waiting for the courier instead of
-// a blank "scan a label" prompt with no context. Covers both on-time and
-// Late Pickup (needs_retry_ship) sessions -- a courier grabbing the box
-// doesn't care about that flag, it's still physically sitting there. Sorted
-// instant-first (courier picks those up first, same convention as Order
-// Lists' other buckets), then oldest-waiting first within each group.
+// a blank "scan a label" prompt with no context. Scoped to just this
+// station's own packed orders (client-requested 2026-09-30) -- a station
+// only physically holds what it packed itself, so showing every station's
+// queue here would list boxes this operator can't actually see or hand over.
+// Covers both on-time and Late Pickup (needs_retry_ship) sessions -- a
+// courier grabbing the box doesn't care about that flag, it's still
+// physically sitting there. Sorted instant-first (courier picks those up
+// first, same convention as Order Lists' other buckets), then
+// oldest-waiting first within each group.
 router.get('/pickup-list', (req, res) => {
   const shopId = Number(req.query.shop_id);
+  const { station_id: stationId } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  if (!stationId) return res.status(400).json({ error: 'station_id_required', message: 'station_id is required' });
 
   const orders = db
     .prepare(`
       SELECT o.order_sn, o.shipping_carrier, o.is_instant
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ? AND ps.station_id = ?
       ORDER BY o.is_instant DESC, ps.last_activity_at ASC
     `)
-    .all(shopId);
+    .all(shopId, stationId);
 
   res.json({ orders });
 });

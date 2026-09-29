@@ -646,7 +646,7 @@ function PackingStation() {
     let cancelled = false;
     async function loadPickupList() {
       try {
-        const res = await fetch(`${API_BASE}/packing/pickup-list?shop_id=${SHOP_ID}`);
+        const res = await fetch(`${API_BASE}/packing/pickup-list?shop_id=${SHOP_ID}&station_id=${stationId}`);
         if (res.ok && !cancelled) setPickupList((await res.json()).orders);
       } catch {
         // best-effort — a missed refresh just means a stale list until the next poll
@@ -655,7 +655,7 @@ function PackingStation() {
     loadPickupList();
     const interval = setInterval(loadPickupList, 3000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [mode]);
+  }, [mode, stationId]);
 
   // Detects the backend auto-releasing this session after 1h of inactivity
   // (operator walked away and never came back) and logs the operator out —
