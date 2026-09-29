@@ -730,6 +730,105 @@ function OrderLists() {
   );
 }
 
+// Order Lists — view-only (client-requested 2026-09-30) — a passive, no-
+// login-actions-needed display of just the 7 buckets for a TV/monitor
+// screen in the packing area: no fetching toggle, no Konfigurasi Packing
+// Station settings, no bulk-action buttons, and no click-to-open Order
+// Detail (rows are plain, non-interactive — "just an image" of the current
+// state). Deliberately its own component rather than a stripped-down prop
+// on OrderLists — that component's state (settings, sync toggle, bulk
+// actions, the detail modal) simply doesn't exist here at all.
+function OrderListsViewOnly() {
+  const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], latePickup: [], readyTomorrow: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, REFRESH_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function load() {
+    try {
+      const res = await apiFetch(`${API_BASE}/packing/order-lists?shop_id=${SHOP_ID}`);
+      if (res.ok) setLists(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const columns = [
+    { key: 'waitingList', title: 'Daftar Tunggu' },
+    { key: 'processing', title: 'Diproses' },
+    { key: 'readyToCheck', title: 'Siap Dicek' },
+    { key: 'onProgressCheck', title: 'Sedang Discan' },
+    { key: 'readyForPickup', title: 'Siap Diambil' },
+    { key: 'latePickup', title: 'Pickup Terlambat' },
+    { key: 'readyTomorrow', title: 'Diproses Besok' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 12, height: '100%' }}>
+      {columns.map(({ key, title }) => {
+        const rows = lists[key];
+        return (
+          <div key={key} style={{ flex: 1, ...card(), display: 'flex', flexDirection: 'column', minWidth: 0, boxSizing: 'border-box' }}>
+            <div style={{ fontWeight: 700, color: colors.text, marginBottom: 2 }}>{title}</div>
+            <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 12 }}>
+              {rows.length} order
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {loading ? (
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Memuat...</p>
+              ) : rows.length === 0 ? (
+                <p style={{ color: colors.textDim, fontSize: 13, margin: 0 }}>Kosong.</p>
+              ) : (
+                rows.map((row) => (
+                  <div key={row.order_sn} style={{ padding: 8, borderRadius: 6, background: colors.cardAlt, fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
+                    {(row.station_id || row.operator_name) && (
+                      <div style={{ color: colors.textDim, marginTop: 2 }}>
+                        {row.station_id}
+                        {row.operator_name && ` (${row.operator_name})`}
+                      </div>
+                    )}
+                    {row.status === 'AWAITING_LABEL_SCAN' && (
+                      <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
+                        Menunggu scan konfirmasi — cek printer
+                      </div>
+                    )}
+                    {key === 'readyToCheck' && (
+                      <div style={{ color: row.label_ready ? colors.green : colors.textFaint, marginTop: 2 }}>
+                        {row.label_ready ? 'Label siap' : 'Menunggu label'}
+                      </div>
+                    )}
+                    {key === 'readyToCheck' && row.internal_barcode && (
+                      <div style={{ color: colors.orange, marginTop: 2, fontFamily: 'ui-monospace, monospace' }}>
+                        Scan: {row.internal_barcode}
+                      </div>
+                    )}
+                    {key === 'readyForPickup' && row.pickup_time_label && (
+                      <div style={{ color: colors.textDim, marginTop: 2 }}>
+                        Pickup: {row.pickup_time_label}
+                      </div>
+                    )}
+                    {key === 'latePickup' && (
+                      <div style={{ color: colors.red, marginTop: 2, fontWeight: 600 }}>
+                        Jadwal pickup terlewat{row.pickup_time_label ? ` (${row.pickup_time_label})` : ''} — atur ulang di Shopee
+                      </div>
+                    )}
+                    <OrderTags tags={row.tags} />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Cancel & Masalah (client-requested 2026-09-27) — cancelled orders vanish
 // from every Order Lists bucket once CANCELLED, with nowhere else to see
 // them; Masalah (Problem Order/EXCEPTION) already has a live bucket in Order
@@ -1065,7 +1164,7 @@ function Daftar() {
 function PackingStationDashboard({ view = 'active' }) {
   return (
     <div style={{ minHeight: 'calc(100vh - 160px)' }}>
-      {view === 'active' ? <ActiveStation /> : view === 'lists' ? <OrderLists /> : view === 'cancelMasalah' ? <CancelMasalahList /> : <Daftar />}
+      {view === 'active' ? <ActiveStation /> : view === 'lists' ? <OrderLists /> : view === 'listsViewOnly' ? <OrderListsViewOnly /> : view === 'cancelMasalah' ? <CancelMasalahList /> : <Daftar />}
     </div>
   );
 }

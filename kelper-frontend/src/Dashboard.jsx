@@ -353,6 +353,7 @@ function Dashboard() {
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
+            <Route path="/packing-station/order-lists/view-only" element={<PackingStationDashboard view="listsViewOnly" />} />
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
             <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
             <Route path="/packing-station/kinerja-operator" element={<OperatorPerformance />} />
