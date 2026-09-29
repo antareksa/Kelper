@@ -18,10 +18,9 @@ const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
-  { path: '/packing-station/active-station', label: 'Station Aktif', Icon: IconMonitor },
-  { path: '/packing-station/order-lists', label: 'Daftar Order', Icon: IconTag },
-  { path: '/packing-station/daftar', label: 'Daftar', Icon: IconUser },
-  { path: '/packing-station/cancel-masalah', label: 'Batal & Masalah', Icon: IconAlertTriangle },
+  { path: '/packing-station/order-lists', label: 'Orderan', Icon: IconTag },
+  { path: '/packing-station/daftar', label: 'Daftar Staff', Icon: IconUser },
+  { path: '/packing-station/cancel-masalah', label: 'Orderan Bermasalah', Icon: IconAlertTriangle },
   { path: '/packing-station/kinerja-operator', label: 'Kinerja Operator', Icon: IconHistory },
 ];
 
@@ -351,7 +350,7 @@ function Dashboard() {
             <Route path="/home" element={<MainDashboard />} />
             <Route path="/list-barang" element={<ListBarang />} />
             <Route path="/order" element={<OrderSearch />} />
-            <Route path="/packing-station" element={<Navigate to="/packing-station/active-station" replace />} />
+            <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
