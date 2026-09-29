@@ -198,6 +198,58 @@ function ActionMessageCard({ order, receivedAt, message, type }) {
   );
 }
 
+// Shipping Mode's live queue (client-requested 2026-09-30) — replaces the
+// old "scan a label" placeholder with the actual list of what's still
+// waiting for the courier, so the operator can see at a glance what's left
+// instead of scanning blind. Sorting (instant first, then oldest-waiting) is
+// done server-side (see /packing/pickup-list); the INSTANT badge here just
+// makes that sort visible rather than implying anything else about the row.
+function PickupQueueCard({ orders }) {
+  if (orders.length === 0) {
+    return (
+      <div style={card({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 })}>
+        <div style={{ textAlign: 'center', fontSize: 16, fontWeight: 600, color: colors.textDim, padding: '28px 12px' }}>
+          Tidak ada order yang akan dipickup ekpedisi
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 })}>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {orders.map((o) => (
+          <div
+            key={o.order_sn}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              padding: '14px 16px',
+              borderRadius: 8,
+              border: `1px solid ${colors.border}`,
+              background: colors.cardAlt,
+            }}
+          >
+            <span style={{ fontSize: 20, fontWeight: 700, color: colors.text, fontFamily: 'monospace' }}>
+              {o.order_sn}
+              {o.is_instant && (
+                <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.orange, padding: '2px 6px', borderRadius: 4, verticalAlign: 'middle' }}>
+                  INSTANT
+                </span>
+              )}
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: colors.textDim, textTransform: 'uppercase', flexShrink: 0 }}>
+              {o.shipping_carrier || '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // The bottom bar doubles as both the scan-capture point and the feedback
 // channel: "Barcode Scanner Active..." when idle, or the latest scan result
 // (colored per type) right after one — one place to look, instead of a
@@ -330,7 +382,7 @@ function PackingStation() {
   const [hwCheckStatus, setHwCheckStatus] = useState('idle'); // idle | awaiting_scan | pass | fail
 
   const [mode, setMode] = useState('packing'); // packing | shipping — toggled by scanning SHIPPING_MODE / PACKING_MODE
-  const [lastPickup, setLastPickup] = useState(null); // { order_sn, created_at, picked_up_at } — most recent Shipping Mode confirmation
+  const [pickupList, setPickupList] = useState([]); // [{ order_sn, shipping_carrier, is_instant }] — Shipping Mode's live queue
   const [state, setState] = useState(null); // { session, order, items, allComplete, tracking_no, internal_barcode }
   const [lastSku, setLastSku] = useState(null);
   const [infoMessage, setInfoMessage] = useState('');
@@ -580,6 +632,30 @@ function PackingStation() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operatorName, paused, mode, state, busy]);
+
+  // Shipping Mode's live pickup queue (client-requested 2026-09-30) — same
+  // 3s cadence as the idle NEXT_ORDER poll above: this only ever hits our
+  // own already-synced database, never Shopee directly, so there's no rate
+  // limit or cost to checking often. Cleared (empty list) on leaving
+  // Shipping Mode rather than left stale for whenever it's re-entered.
+  useEffect(() => {
+    if (mode !== 'shipping') {
+      setPickupList([]);
+      return;
+    }
+    let cancelled = false;
+    async function loadPickupList() {
+      try {
+        const res = await fetch(`${API_BASE}/packing/pickup-list?shop_id=${SHOP_ID}`);
+        if (res.ok && !cancelled) setPickupList((await res.json()).orders);
+      } catch {
+        // best-effort — a missed refresh just means a stale list until the next poll
+      }
+    }
+    loadPickupList();
+    const interval = setInterval(loadPickupList, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [mode]);
 
   // Detects the backend auto-releasing this session after 1h of inactivity
   // (operator walked away and never came back) and logs the operator out —
@@ -1008,7 +1084,9 @@ function PackingStation() {
       submittingRef.current = true;
       try {
         const data = await post('/packing/confirm-pickup', { order_sn: value });
-        setLastPickup({ order_sn: data.order_sn, created_at: data.created_at, picked_up_at: data.picked_up_at });
+        // Optimistic — drops it from the on-screen queue immediately instead
+        // of waiting up to 3s for the next poll to notice.
+        setPickupList((list) => list.filter((o) => o.order_sn !== data.order_sn));
         return notify(`${data.order_sn} terkonfirmasi sudah diambil.`, 'success');
       } catch (err) {
         return notify(err.message, 'error');
@@ -1286,16 +1364,7 @@ function PackingStation() {
           </div>
         )}
         {mode === 'shipping' ? (
-          lastPickup ? (
-            <ActionMessageCard
-              order={{ order_sn: lastPickup.order_sn }}
-              receivedAt={lastPickup.created_at}
-              type="info"
-              message={`DIPICKUP EKSPEDISI - ${formatReceivedAt(lastPickup.picked_up_at)}`}
-            />
-          ) : (
-            <ActionMessageCard type="info" message="Scan label resi untuk mulai proses pickup order oleh ekpedisi" />
-          )
+          <PickupQueueCard orders={pickupList} />
         ) : showItemScan ? (
           <ItemScanCard
             order={state.order}

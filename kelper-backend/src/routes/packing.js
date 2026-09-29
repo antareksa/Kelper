@@ -546,6 +546,31 @@ router.post('/confirm-pickup', (req, res) => {
   res.json({ ok: true, order_sn: scannedOrderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
 });
 
+// Shipping Mode's live pickup queue (client-requested 2026-09-30) -- station-
+// facing (no admin auth, same as the rest of this file's scan endpoints), so
+// the operator sees exactly what's still waiting for the courier instead of
+// a blank "scan a label" prompt with no context. Covers both on-time and
+// Late Pickup (needs_retry_ship) sessions -- a courier grabbing the box
+// doesn't care about that flag, it's still physically sitting there. Sorted
+// instant-first (courier picks those up first, same convention as Order
+// Lists' other buckets), then oldest-waiting first within each group.
+router.get('/pickup-list', (req, res) => {
+  const shopId = Number(req.query.shop_id);
+  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+
+  const orders = db
+    .prepare(`
+      SELECT o.order_sn, o.shipping_carrier, o.is_instant
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+      ORDER BY o.is_instant DESC, ps.last_activity_at ASC
+    `)
+    .all(shopId);
+
+  res.json({ orders });
+});
+
 // "Force All Pickup" (client-requested 2026-09-25) — the bulk form of
 // confirm-pickup, for every order currently sitting in Ready to Pickup, the
 // same as scanning each one's label in Shipping Mode without needing the
