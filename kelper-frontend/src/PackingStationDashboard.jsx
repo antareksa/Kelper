@@ -915,6 +915,15 @@ function Daftar() {
   // admin can post physical scannable cards at a station instead of the
   // operator needing to type these. Same iframe/print pattern as the login
   // barcode above.
+  //
+  // cmd.replace('_', '-') before encoding: Code 39 has no underscore in its
+  // character set (see Barcode.jsx's CODE39_PATTERNS) — renderCode39Svg just
+  // silently drops unsupported characters, so a barcode encoded straight
+  // from "SHIPPING_MODE" actually reads back as "SHIPPINGMODE" and never
+  // matches PackingStation.jsx's exact command check. Hyphen IS supported,
+  // and PackingStation.jsx's COMMAND_BARCODE_ALIASES maps it back to the
+  // real underscore command on scan — the printed/displayed text label
+  // still shows the real command name either way.
   function printCommandBarcode(cmd) {
     const iframe = printFrameRef.current;
     if (!iframe) return;
@@ -934,7 +943,7 @@ function Daftar() {
         </head>
         <body>
           <h2>${cmd}</h2>
-          ${renderCode39Svg(cmd)}
+          ${renderCode39Svg(cmd.replace(/_/g, '-'))}
           <p style="letter-spacing: 2px;">${cmd}</p>
         </body>
       </html>
@@ -957,7 +966,7 @@ function Daftar() {
       ({ cmd }) => `
         <div class="card">
           <h2>${cmd}</h2>
-          ${renderCode39Svg(cmd)}
+          ${renderCode39Svg(cmd.replace(/_/g, '-'))}
           <p style="letter-spacing: 2px;">${cmd}</p>
         </div>
       `

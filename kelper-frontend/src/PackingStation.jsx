@@ -254,6 +254,21 @@ export const COMMANDS = [
   { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
 ];
 
+// Code 39 (the printed command barcodes, see PackingStationDashboard.jsx's
+// printCommandBarcode) has no underscore in its character set, so the
+// printed barcode for e.g. SHIPPING_MODE actually encodes the hyphenated
+// form instead. Mapping it back here keeps the real command constants above
+// byte-exact everywhere else in this file, while still accepting what
+// actually comes off the printed barcode. Only these four commands contain
+// an underscore; none of the aliases can collide with a real order_sn or a
+// BESOK- temp barcode.
+const COMMAND_BARCODE_ALIASES = {
+  'NEXT-ORDER': 'NEXT_ORDER',
+  'RELEASE-ORDER': 'RELEASE_ORDER',
+  'SHIPPING-MODE': 'SHIPPING_MODE',
+  'PACKING-MODE': 'PACKING_MODE',
+};
+
 async function post(path, body) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -958,9 +973,10 @@ function PackingStation() {
 
   async function handleScanSubmit(e) {
     if (e) e.preventDefault();
-    const value = scanValue.trim();
+    const raw = scanValue.trim();
     setScanValue('');
-    if (!value) return;
+    if (!raw) return;
+    const value = COMMAND_BARCODE_ALIASES[raw] ?? raw;
 
     if (submittingRef.current) {
       return notify('Masih memproses scan sebelumnya — coba lagi sebentar.', 'error');
