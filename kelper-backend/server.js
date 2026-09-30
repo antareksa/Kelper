@@ -21,6 +21,12 @@ const reportsRoutes = require('./src/routes/reports');
 const webhookRoutes = require('./src/routes/webhook');
 const { startShopeeSync } = require('./src/shopeeSync');
 const { requireAdminAuth } = require('./src/adminSession');
+const { seedFromEnvIfEmpty } = require('./src/adminUsers');
+
+// One-time bootstrap of the first admin_users row from the old ADMIN_USERNAME/
+// ADMIN_PASSWORD env-var pair -- a no-op once any admin exists (see
+// adminUsers.js). Must run before the server accepts any login attempt.
+seedFromEnvIfEmpty();
 
 const app = express();
 // Production sits behind Caddy (one reverse-proxy hop) — without this,

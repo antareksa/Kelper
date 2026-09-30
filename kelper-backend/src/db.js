@@ -224,6 +224,18 @@ db.exec(`
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   );
+
+  -- Client-requested (2026-10-01): more than one admin login (e.g. a
+  -- separate, revocable credential for a Shopee reviewer during the Go Live
+  -- process, without sharing the real admin's own password) -- replaces the
+  -- old single ADMIN_USERNAME/ADMIN_PASSWORD env-var pair. password_hash is
+  -- salt:scrypt-hash (see adminUsers.js), never plaintext.
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Non-destructive migration for existing local databases created before

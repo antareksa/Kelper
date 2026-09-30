@@ -1,12 +1,14 @@
 const express = require('express');
 const { checkLocked, recordFailure, recordSuccess } = require('../loginGuard');
 const { createSession, destroySession } = require('../adminSession');
+const { findAdmin, verifyPassword } = require('../adminUsers');
 
 const router = express.Router();
 
-// Plaintext comparison against .env — still true, but now backed by a real
-// session (see adminSession.js): every other admin route requires the token
-// this returns, not just this login screen's own success response.
+// Checked against admin_users (see adminUsers.js), not a single .env pair --
+// still backed by a real session either way (see adminSession.js): every
+// other admin route requires the token this returns, not just this login
+// screen's own success response.
 router.post('/login', (req, res) => {
   const ip = req.ip;
   const retryAfterSeconds = checkLocked(ip);
@@ -20,7 +22,8 @@ router.post('/login', (req, res) => {
   }
 
   const { username, password } = req.body;
-  const ok = username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD;
+  const admin = findAdmin(username);
+  const ok = admin && verifyPassword(password, admin.password_hash);
   if (!ok) {
     recordFailure(ip);
     return res.status(401).json({ error: 'invalid_credentials', message: 'Wrong username or password' });
