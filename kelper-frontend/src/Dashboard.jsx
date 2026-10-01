@@ -135,8 +135,11 @@ function Dashboard() {
   // below (a dismissible reminder for a shop that WAS connected but its
   // token lapsed), there's no historical data to fall back to here, so
   // every route under this would just fire shop_id-less requests and show
-  // empty/broken content. Blocks the whole dashboard, not dismissible.
-  if (!SHOP_ID) {
+  // empty/broken content. Blocks the whole dashboard, not dismissible --
+  // except /config/shopee itself (see the pathname check below), which is
+  // where the actual "Hubungkan" controls for both the main app and Brand
+  // Portal live and needs no shop_id to render.
+  if (!SHOP_ID && location.pathname !== '/config/shopee') {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
         <div style={{ ...cardStyle, width: 360, textAlign: 'center' }}>
@@ -146,7 +149,12 @@ function Dashboard() {
           <p style={{ fontSize: 13, color: colors.textDim, marginBottom: 22, lineHeight: 1.55 }}>
             Belum ada toko Shopee yang terhubung. Hubungkan toko Anda terlebih dahulu untuk menggunakan Dashboard.
           </p>
-          <button onClick={shopee.loginShopee} style={submitStyle}>
+          {/* Client-requested (2026-10-02): goes to the Settings page
+              (where the real Shopee connection controls live) instead of
+              immediately firing the OAuth login itself -- lets the admin
+              see/choose which app (main vs Brand Portal) to connect, rather
+              than this button always kicking off the main app's login. */}
+          <button onClick={() => navigate('/config/shopee')} style={submitStyle}>
             Hubungkan
           </button>
         </div>
