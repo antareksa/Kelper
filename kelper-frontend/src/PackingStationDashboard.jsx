@@ -476,30 +476,39 @@ function OrderLists() {
               {syncEnabled === null ? 'Memeriksa status fetching...' : syncEnabled ? 'Fetching Order: Aktif' : 'Fetching Order: Dikunci'}
             </div>
             <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 1 }}>
-              {syncEnabled
+              {syncEnabled === null
+                ? ''
+                : syncEnabled
                 ? 'Server sedang mengambil pesanan baru dari Shopee secara otomatis.'
-                : 'Server tidak akan mengambil pesanan baru sampai fetching dimulai di sini.'}
+                : 'Server tidak akan mengambil pesanan baru. Hanya bisa dibuka lewat SSH (fetch-lock.js unlock).'}
             </div>
           </div>
         </div>
-        <button
-          onClick={toggleSync}
-          disabled={syncEnabled === null || toggling}
-          style={{
-            padding: '8px 16px',
-            borderRadius: 8,
-            border: 'none',
-            fontWeight: 600,
-            fontSize: 13,
-            flexShrink: 0,
-            cursor: syncEnabled === null || toggling ? 'default' : 'pointer',
-            background: syncEnabled ? colors.redDim : colors.greenDim,
-            color: syncEnabled ? colors.red : colors.green,
-            opacity: toggling ? 0.6 : 1,
-          }}
-        >
-          {syncEnabled ? 'Kunci Fetching' : 'Mulai Fetching'}
-        </button>
+        {/* Client-requested (2026-10-02): once locked, unlocking is
+            deliberately SSH-only (scripts/fetch-lock.js) -- no button here
+            to undo it, so a lock made for a reason (e.g. testing before a
+            new shop should start receiving real orders) can't be casually
+            clicked away from the Dashboard itself. */}
+        {syncEnabled && (
+          <button
+            onClick={toggleSync}
+            disabled={toggling}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 8,
+              border: 'none',
+              fontWeight: 600,
+              fontSize: 13,
+              flexShrink: 0,
+              cursor: toggling ? 'default' : 'pointer',
+              background: colors.redDim,
+              color: colors.red,
+              opacity: toggling ? 0.6 : 1,
+            }}
+          >
+            Kunci Fetching
+          </button>
+        )}
       </div>
 
       <div style={{ ...card(), display: 'flex', alignItems: 'flex-end', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
