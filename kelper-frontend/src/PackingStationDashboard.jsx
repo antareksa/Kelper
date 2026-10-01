@@ -473,7 +473,7 @@ function OrderLists() {
           />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5 }}>
-              {syncEnabled === null ? 'Memeriksa status fetching...' : syncEnabled ? 'Fetching Order: Aktif' : 'Fetching Order: Dijeda'}
+              {syncEnabled === null ? 'Memeriksa status fetching...' : syncEnabled ? 'Fetching Order: Aktif' : 'Fetching Order: Dikunci'}
             </div>
             <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 1 }}>
               {syncEnabled
@@ -498,7 +498,7 @@ function OrderLists() {
             opacity: toggling ? 0.6 : 1,
           }}
         >
-          {syncEnabled ? 'Jeda Fetching' : 'Mulai Fetching'}
+          {syncEnabled ? 'Kunci Fetching' : 'Mulai Fetching'}
         </button>
       </div>
 
