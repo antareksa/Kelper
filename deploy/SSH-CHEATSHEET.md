@@ -110,3 +110,47 @@ Opens the real production secrets/config file for editing (Partner IDs,
 keys, admin credentials, etc.). Save with `Ctrl+O`, Enter, then exit with
 `Ctrl+X`. **Restart the service afterward** (see above) for changes to take
 effect.
+
+## Switch both Shopee apps from sandbox to LIVE
+
+Do these in order. Both apps (main + Brand Portal) share one `AUTH_BASE` and
+one `API_BASE`, so the host change hits both at once — swap all four
+credentials in the same sitting, or the app left on test credentials will
+fail against the live host.
+
+**1. Lock fetching first**, so nothing starts pulling real orders the moment
+the real shop connects:
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/fetch-lock.js lock
+```
+
+**2. Edit `.env.production`** (`nano /opt/kelper/kelper-backend/.env.production`)
+and change these six lines (get the Live Partner ID/Key from Partner Console
+-> App List -> your app -> App Key, one app at a time):
+```
+SHOPEE_PARTNER_ID=<main app LIVE Partner ID>
+SHOPEE_PARTNER_KEY=<main app LIVE Key>
+SHOPEE_BRAND_PARTNER_ID=<Brand Portal LIVE Partner ID>
+SHOPEE_BRAND_PARTNER_KEY=<Brand Portal LIVE Key>
+SHOPEE_AUTH_BASE=https://partner.shopeemobile.com/api/v2/shop/auth_partner
+SHOPEE_API_BASE=https://partner.shopeemobile.com
+```
+Leave `SHOPEE_REDIRECT_URI`, `SHOPEE_BRAND_REDIRECT_URI` and
+`SHOPEE_PUSH_CALLBACK_URL` alone (they're `dashboard.kelper.co.id` URLs and
+don't change between sandbox and live).
+
+**3. Restart**, then reconnect both apps from Dashboard -> Pengaturan:
+```bash
+sudo systemctl restart kelper
+```
+Old sandbox tokens stop working against the live host, so you will see
+`Invalid access_token` lines in the logs until you reconnect — expected.
+
+**4. Reconnect** the main app and Brand Portal (Hubungkan) in Pengaturan.
+The newest connection becomes the active shop automatically.
+
+**5. Only when packing stations are ready**, unlock fetching:
+```bash
+NODE_ENV=production node scripts/fetch-lock.js unlock
+```
