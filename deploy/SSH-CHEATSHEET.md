@@ -148,6 +148,19 @@ Leave `SHOPEE_REDIRECT_URI`, `SHOPEE_BRAND_REDIRECT_URI` and
 `SHOPEE_PUSH_CALLBACK_URL` alone (they're `dashboard.kelper.co.id` URLs and
 don't change between sandbox and live).
 
+**Also add these two lines for Brand Portal on live** (not needed on sandbox;
+leave them out of `.env.development`):
+```
+SHOPEE_BRAND_AUTH_BASE=https://open.shopee.com/auth
+SHOPEE_BRAND_AUTH_TYPE=principal
+```
+Brand Portal accounts log in through a different Shopee login than seller
+accounts. Without these, the Brand "Hubungkan" sends them through the seller
+login, where they have no shop to authorize, and Shopee answers "no supported
+resources available for this authorize/deauthorize operation". Check a line
+isn't already there before adding it (`Ctrl+W` in nano), so it doesn't end up
+duplicated.
+
 **3. Restart**, then reconnect both apps from Dashboard -> Pengaturan:
 ```bash
 sudo systemctl restart kelper

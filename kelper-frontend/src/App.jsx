@@ -15,12 +15,17 @@ import { API_BASE } from './apiBase';
 const LANDING_PATH = window.location.pathname.replace(/\/+$/, '');
 const LANDING_PARAM_NAMES = [...new URLSearchParams(window.location.search).keys()];
 
-// Shopee's redirect carries shop_id when a shop account authorized, or
-// main_account_id when a main account did (see routes/auth.js's runExchange)
-// -- a callback with only the latter used to be silently ignored.
+// A Shopee redirect always lands on /check-connection or
+// /check-connection-brand with a one-time `code`; which id comes with it
+// depends on the kind of authorization (shop_id for a shop account,
+// main_account_id for a main account, others for other kinds -- see
+// routes/auth.js's runExchange). Requiring a specific id here made a callback
+// carrying a different one silently open as a normal Dashboard, so the path
+// plus the code is what identifies it now. (A code+shop_id on any other path
+// still counts, as before.)
 function isShopeeCallback() {
   const params = new URLSearchParams(window.location.search);
-  return params.has('code') && (params.has('shop_id') || params.has('main_account_id'));
+  return params.has('code') && (window.location.pathname.startsWith('/check-connection') || params.has('shop_id'));
 }
 
 // The Brand Portal app (a separate Shopee app, see ShopeeBrandAuth) is

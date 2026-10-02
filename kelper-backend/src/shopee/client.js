@@ -8,6 +8,8 @@ const {
   SHOPEE_BRAND_PARTNER_ID,
   SHOPEE_BRAND_PARTNER_KEY,
   SHOPEE_BRAND_REDIRECT_URI,
+  SHOPEE_BRAND_AUTH_BASE,
+  SHOPEE_BRAND_AUTH_TYPE,
   SHOPEE_AUTH_BASE,
   SHOPEE_API_BASE,
 } = process.env;
@@ -18,11 +20,35 @@ const {
 // reading the main app's env vars, so the same OAuth logic works for either
 // app without duplicating it. Existing callers are unaffected: the default
 // is exactly the main app's credentials, i.e. today's behavior.
-const MAIN_CREDENTIALS = { partnerId: SHOPEE_PARTNER_ID, partnerKey: SHOPEE_PARTNER_KEY, redirectUri: SHOPEE_REDIRECT_URI };
-const BRAND_CREDENTIALS = { partnerId: SHOPEE_BRAND_PARTNER_ID, partnerKey: SHOPEE_BRAND_PARTNER_KEY, redirectUri: SHOPEE_BRAND_REDIRECT_URI };
+//
+// authBase/authType: where the authorization link points and which kind of
+// authorization it asks for. Shopee's authorization page supports several
+// kinds, each with its own login system (read from its public page: shop,
+// user, supplier and principal, among others) -- `principal` is the Brand
+// Portal kind, with a different login than the seller sign-in `seller` (a
+// shop authorization) opens. A Brand Portal account sent through the seller
+// login has no shop to authorize and gets "no supported resources available
+// for this authorize/deauthorize operation". The Brand app can therefore be
+// pointed at its own link via SHOPEE_BRAND_AUTH_BASE / SHOPEE_BRAND_AUTH_TYPE;
+// unset (e.g. sandbox, where any test shop account is accepted) it falls back
+// to the main app's link and `seller`, exactly as before.
+const MAIN_CREDENTIALS = {
+  partnerId: SHOPEE_PARTNER_ID,
+  partnerKey: SHOPEE_PARTNER_KEY,
+  redirectUri: SHOPEE_REDIRECT_URI,
+  authBase: SHOPEE_AUTH_BASE,
+  authType: 'seller',
+};
+const BRAND_CREDENTIALS = {
+  partnerId: SHOPEE_BRAND_PARTNER_ID,
+  partnerKey: SHOPEE_BRAND_PARTNER_KEY,
+  redirectUri: SHOPEE_BRAND_REDIRECT_URI,
+  authBase: SHOPEE_BRAND_AUTH_BASE || SHOPEE_AUTH_BASE,
+  authType: SHOPEE_BRAND_AUTH_TYPE || 'seller',
+};
 
 function buildAuthUrl(creds = MAIN_CREDENTIALS) {
-  const url = new URL(SHOPEE_AUTH_BASE);
+  const url = new URL(creds.authBase);
 
   // Live host: the classic v2 authorization link, which (unlike the
   // sandbox's newer auth page below) requires a signed URL -- confirmed
@@ -42,18 +68,20 @@ function buildAuthUrl(creds = MAIN_CREDENTIALS) {
   }
 
   url.searchParams.set('partner_id', creds.partnerId);
-  url.searchParams.set('auth_type', 'seller');
+  url.searchParams.set('auth_type', creds.authType);
   url.searchParams.set('redirect_uri', creds.redirectUri);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('state', crypto.randomBytes(8).toString('hex'));
   return url.toString();
 }
 
-// Shopee's redirect carries `shop_id` when a shop account authorized, or
-// `main_account_id` when a main account did (never both) -- get_access_token
-// takes whichever applies. A main-account response lists the authorized
-// shops in shop_id_list instead of the caller already knowing which one.
-async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS, mainAccountId = null) {
+// idParams: whichever id Shopee's redirect carried, forwarded as-is --
+// `shop_id` for a shop account, `main_account_id` for a main account (never
+// both), and possibly others for the other authorization kinds (e.g. a
+// principal). Already numeric; see routes/auth.js's ID_PARAMS. A response
+// for a main account lists the authorized shops in shop_id_list instead of
+// the caller already knowing which one.
+async function exchangeToken(code, idParams = {}, creds = MAIN_CREDENTIALS) {
   const path = '/api/v2/auth/token/get';
   const timestamp = Math.floor(Date.now() / 1000);
   const sign = signPublic(creds.partnerId, path, timestamp, creds.partnerKey);
@@ -65,7 +93,7 @@ async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS, mainAccount
     body: JSON.stringify({
       code,
       partner_id: Number(creds.partnerId),
-      ...(mainAccountId ? { main_account_id: Number(mainAccountId) } : { shop_id: Number(shopId) }),
+      ...idParams,
     }),
   });
 

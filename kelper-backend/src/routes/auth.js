@@ -22,41 +22,63 @@ function logExchange(label, message) {
   console.log(`[server] shopee auth exchange (${label}): ${message}`);
 }
 
+// The id Shopee's redirect can carry, depending on the kind of authorization
+// (a shop account, a main account, and the other kinds Shopee's authorization
+// page supports, e.g. a Brand Portal principal). Whitelisted and numeric-only
+// before being forwarded to Shopee's token endpoint.
+const ID_PARAMS = ['shop_id', 'main_account_id', 'principal_id', 'user_id', 'supplier_id', 'merchant_id'];
+
+// The id lists get_access_token can return. Logged (ids only, never tokens)
+// so an authorization kind we haven't seen before shows what Shopee sent back.
+const ID_LISTS = ['shop_id_list', 'merchant_id_list', 'supplier_id_list', 'user_id_list', 'principal_id_list'];
+
 async function runExchange(label, req, res, creds, table) {
-  const { code, shop_id, main_account_id } = req.query;
-  if (!code || (!shop_id && !main_account_id)) {
-    logExchange(label, `rejected, missing params (code ${code ? 'present' : 'MISSING'}, shop_id ${shop_id ? 'present' : 'MISSING'}, main_account_id ${main_account_id ? 'present' : 'absent'})`);
-    return res.status(400).json({ error: 'code and shop_id (or main_account_id) query params are required' });
+  const { code } = req.query;
+  const idParams = {};
+  for (const name of ID_PARAMS) {
+    if (/^\d+$/.test(String(req.query[name] || ''))) idParams[name] = Number(req.query[name]);
+  }
+  const who = Object.keys(idParams).length
+    ? Object.entries(idParams).map(([k, v]) => `${k}=${v}`).join(' ')
+    : '(code only)';
+  if (!code) {
+    logExchange(label, `rejected, no code (ids: ${who})`);
+    return res.status(400).json({ error: 'code query param is required' });
   }
 
   let data;
   try {
-    data = await exchangeToken(code, shop_id, creds, shop_id ? null : main_account_id);
+    data = await exchangeToken(code, idParams, creds);
   } catch (err) {
     logExchange(label, `could not reach Shopee: ${err.message}`);
     return res.status(502).json({ error: 'exchange_failed', message: err.message });
   }
-  const who = shop_id ? `shop_id=${shop_id}` : `main_account_id=${main_account_id}`;
   if (data.error) {
     logExchange(label, `${who} refused by Shopee: ${data.error} - ${data.message || ''}`);
     return res.status(400).json(data);
   }
 
-  let shopId = shop_id ? Number(shop_id) : null;
+  let shopId = idParams.shop_id || null;
   let tokens = data;
 
-  // Authorized through a main account (client-reported 2026-10-02: the
-  // redirect carried code + main_account_id and no shop_id, so the callback
-  // was silently ignored and nothing connected). Shopee lists the shops it
+  // No shop_id in the redirect (client-reported 2026-10-02: a main-account
+  // authorization carried code + main_account_id, so the callback was
+  // silently ignored and nothing connected). Shopee lists the shops it
   // authorized in shop_id_list; KELPER supports one active shop at a time, so
-  // the first is used and the rest are logged.
+  // the first is used and the rest are logged. An authorization kind that
+  // lists no shops at all (e.g. principal ids only) can't be mapped to a shop
+  // yet -- nothing is stored, and the response says what Shopee returned.
   if (!shopId) {
+    const lists = ID_LISTS
+      .filter((name) => Array.isArray(data[name]) && data[name].length > 0)
+      .map((name) => `${name}=[${data[name].join(', ')}]`)
+      .join(' ');
+    logExchange(label, `${who} authorized: ${lists || '(no id lists returned)'}`);
     const shops = data.shop_id_list || [];
-    logExchange(label, `${who} authorized shops=[${shops.join(', ')}] merchants=[${(data.merchant_id_list || []).join(', ')}]`);
     if (shops.length === 0) {
       return res.status(400).json({
         error: 'no_shops_authorized',
-        message: 'Shopee authorized this account but did not list any shop under it.',
+        message: `Shopee authorized this account but did not list any shop under it (${lists || 'no ids returned'}).`,
       });
     }
     shopId = Number(shops[0]);
@@ -101,11 +123,11 @@ async function runExchange(label, req, res, creds, table) {
 router.get('/exchange', (req, res) => runExchange('main', req, res, undefined, 'shopee_tokens'));
 
 // The Shopee redirect lands on the frontend first (/check-connection*), and
-// the frontend only calls /exchange when the URL has both `code` and
-// `shop_id` -- if Shopee sends something else (e.g. main_account_id instead
-// of shop_id) the page just opens as a normal Dashboard and the backend is
-// never contacted, so /exchange can't log it. The frontend therefore reports
-// what actually arrived here. Parameter NAMES only, never values: the code
+// the backend is only contacted once the page decides the URL is a callback
+// and calls /exchange -- a redirect shaped in a way the page doesn't
+// recognize just opens as a normal Dashboard, so /exchange can't log it. The
+// frontend therefore reports what actually arrived here, regardless of
+// whether it recognized it. Parameter NAMES only, never values: the code
 // is a one-time credential. Public on purpose (the callback happens before
 // any admin login), so everything is whitelisted/sanitized before it reaches
 // the log.

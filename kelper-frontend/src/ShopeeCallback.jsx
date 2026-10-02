@@ -14,13 +14,14 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Konek
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
-    const shopId = params.get('shop_id');
-    const mainAccountId = params.get('main_account_id');
 
-    // Whichever of the two Shopee sent -- see routes/auth.js's runExchange.
+    // Forward whichever id Shopee sent (see routes/auth.js's ID_PARAMS) --
+    // which one depends on the kind of authorization. The backend validates
+    // and whitelists these; this just passes them along.
     const exchangeParams = new URLSearchParams({ code });
-    if (shopId) exchangeParams.set('shop_id', shopId);
-    else if (mainAccountId) exchangeParams.set('main_account_id', mainAccountId);
+    for (const name of ['shop_id', 'main_account_id', 'principal_id', 'user_id', 'supplier_id', 'merchant_id']) {
+      if (params.get(name)) exchangeParams.set(name, params.get(name));
+    }
 
     (async () => {
       try {
