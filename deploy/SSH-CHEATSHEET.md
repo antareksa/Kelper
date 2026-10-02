@@ -96,6 +96,14 @@ Live-tails the logs (Ctrl+C to stop watching). Useful for watching what the
 server is doing in real time.
 
 ```bash
+sudo journalctl -u kelper --since "10 min ago" --no-pager | grep -E "callback landed|auth exchange"
+```
+Shows every Shopee connection attempt: what the redirect brought back
+(parameter names only), and whether the token exchange was refused,
+failed, or connected. Never prints the code or any token. Use this right
+after someone authorizes a shop and it doesn't seem to connect.
+
+```bash
 sudo systemctl restart kelper
 ```
 Restarts the backend — needed after editing `.env.production` by hand (the

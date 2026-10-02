@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { buildAuthUrl, exchangeToken, BRAND_CREDENTIALS } = require('../shopee/client');
+const { buildAuthUrl, exchangeToken, refreshToken, BRAND_CREDENTIALS } = require('../shopee/client');
 const { getValidAccessToken, getValidBrandAccessToken } = require('../shopee/tokenStore');
 
 const router = express.Router();
@@ -23,22 +23,64 @@ function logExchange(label, message) {
 }
 
 async function runExchange(label, req, res, creds, table) {
-  const { code, shop_id } = req.query;
-  if (!code || !shop_id) {
-    logExchange(label, `rejected, missing params (code ${code ? 'present' : 'MISSING'}, shop_id ${shop_id ? 'present' : 'MISSING'})`);
-    return res.status(400).json({ error: 'code and shop_id query params are required' });
+  const { code, shop_id, main_account_id } = req.query;
+  if (!code || (!shop_id && !main_account_id)) {
+    logExchange(label, `rejected, missing params (code ${code ? 'present' : 'MISSING'}, shop_id ${shop_id ? 'present' : 'MISSING'}, main_account_id ${main_account_id ? 'present' : 'absent'})`);
+    return res.status(400).json({ error: 'code and shop_id (or main_account_id) query params are required' });
   }
 
   let data;
   try {
-    data = await exchangeToken(code, shop_id, creds);
+    data = await exchangeToken(code, shop_id, creds, shop_id ? null : main_account_id);
   } catch (err) {
-    logExchange(label, `shop_id=${shop_id} could not reach Shopee: ${err.message}`);
+    logExchange(label, `could not reach Shopee: ${err.message}`);
     return res.status(502).json({ error: 'exchange_failed', message: err.message });
   }
+  const who = shop_id ? `shop_id=${shop_id}` : `main_account_id=${main_account_id}`;
   if (data.error) {
-    logExchange(label, `shop_id=${shop_id} refused by Shopee: ${data.error} - ${data.message || ''}`);
+    logExchange(label, `${who} refused by Shopee: ${data.error} - ${data.message || ''}`);
     return res.status(400).json(data);
+  }
+
+  let shopId = shop_id ? Number(shop_id) : null;
+  let tokens = data;
+
+  // Authorized through a main account (client-reported 2026-10-02: the
+  // redirect carried code + main_account_id and no shop_id, so the callback
+  // was silently ignored and nothing connected). Shopee lists the shops it
+  // authorized in shop_id_list; KELPER supports one active shop at a time, so
+  // the first is used and the rest are logged.
+  if (!shopId) {
+    const shops = data.shop_id_list || [];
+    logExchange(label, `${who} authorized shops=[${shops.join(', ')}] merchants=[${(data.merchant_id_list || []).join(', ')}]`);
+    if (shops.length === 0) {
+      return res.status(400).json({
+        error: 'no_shops_authorized',
+        message: 'Shopee authorized this account but did not list any shop under it.',
+      });
+    }
+    shopId = Number(shops[0]);
+    if (shops.length > 1) {
+      logExchange(label, `WARNING: ${shops.length} shops were authorized but only one can be active -- using shop_id=${shopId}`);
+    }
+
+    // Whether Shopee accepts a refresh by shop_id for a token that came from
+    // a main-account authorization isn't something the docs make clear, and
+    // finding out 4 hours after connecting (when the access token expires)
+    // would be a bad time. So refresh once right now: on success the fresh
+    // pair is what gets stored; on failure the original pair is kept and the
+    // log says so loudly while someone is still watching.
+    try {
+      const refreshed = await refreshToken(tokens.refresh_token, shopId, creds);
+      if (refreshed.error) {
+        logExchange(label, `refresh check for shop_id=${shopId} FAILED (${refreshed.error} - ${refreshed.message || ''}); keeping the original tokens, which will stop working when the access token expires`);
+      } else {
+        tokens = refreshed;
+        logExchange(label, `refresh check for shop_id=${shopId} ok`);
+      }
+    } catch (err) {
+      logExchange(label, `refresh check for shop_id=${shopId} could not reach Shopee: ${err.message}; keeping the original tokens`);
+    }
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -50,10 +92,10 @@ async function runExchange(label, req, res, creds, table) {
       refresh_token = excluded.refresh_token,
       expires_at = excluded.expires_at,
       updated_at = excluded.updated_at
-  `).run(Number(shop_id), data.access_token, data.refresh_token, now + data.expire_in, now);
+  `).run(shopId, tokens.access_token, tokens.refresh_token, now + tokens.expire_in, now);
 
-  logExchange(label, `connected shop_id=${shop_id}`);
-  res.json({ ok: true, shop_id: Number(shop_id), expires_at: now + data.expire_in });
+  logExchange(label, `connected shop_id=${shopId}`);
+  res.json({ ok: true, shop_id: shopId, expires_at: now + tokens.expire_in });
 }
 
 router.get('/exchange', (req, res) => runExchange('main', req, res, undefined, 'shopee_tokens'));

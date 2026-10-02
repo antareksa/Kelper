@@ -15,9 +15,12 @@ import { API_BASE } from './apiBase';
 const LANDING_PATH = window.location.pathname.replace(/\/+$/, '');
 const LANDING_PARAM_NAMES = [...new URLSearchParams(window.location.search).keys()];
 
+// Shopee's redirect carries shop_id when a shop account authorized, or
+// main_account_id when a main account did (see routes/auth.js's runExchange)
+// -- a callback with only the latter used to be silently ignored.
 function isShopeeCallback() {
   const params = new URLSearchParams(window.location.search);
-  return params.has('code') && params.has('shop_id');
+  return params.has('code') && (params.has('shop_id') || params.has('main_account_id'));
 }
 
 // The Brand Portal app (a separate Shopee app, see ShopeeBrandAuth) is

@@ -49,7 +49,11 @@ function buildAuthUrl(creds = MAIN_CREDENTIALS) {
   return url.toString();
 }
 
-async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS) {
+// Shopee's redirect carries `shop_id` when a shop account authorized, or
+// `main_account_id` when a main account did (never both) -- get_access_token
+// takes whichever applies. A main-account response lists the authorized
+// shops in shop_id_list instead of the caller already knowing which one.
+async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS, mainAccountId = null) {
   const path = '/api/v2/auth/token/get';
   const timestamp = Math.floor(Date.now() / 1000);
   const sign = signPublic(creds.partnerId, path, timestamp, creds.partnerKey);
@@ -60,8 +64,8 @@ async function exchangeToken(code, shopId, creds = MAIN_CREDENTIALS) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       code,
-      shop_id: Number(shopId),
       partner_id: Number(creds.partnerId),
+      ...(mainAccountId ? { main_account_id: Number(mainAccountId) } : { shop_id: Number(shopId) }),
     }),
   });
 

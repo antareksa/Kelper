@@ -15,10 +15,16 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Konek
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     const shopId = params.get('shop_id');
+    const mainAccountId = params.get('main_account_id');
+
+    // Whichever of the two Shopee sent -- see routes/auth.js's runExchange.
+    const exchangeParams = new URLSearchParams({ code });
+    if (shopId) exchangeParams.set('shop_id', shopId);
+    else if (mainAccountId) exchangeParams.set('main_account_id', mainAccountId);
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}${exchangeUrl}?code=${code}&shop_id=${shopId}`);
+        const res = await fetch(`${API_BASE}${exchangeUrl}?${exchangeParams}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
         // Only the main app's connection changes which shop is "active" —
