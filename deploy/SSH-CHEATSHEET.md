@@ -150,6 +150,13 @@ Old sandbox tokens stop working against the live host, so you will see
 **4. Reconnect** the main app and Brand Portal (Hubungkan) in Pengaturan.
 The newest connection becomes the active shop automatically.
 
+If the Shopee page that opens shows an error instead of a login:
+- `Wrong sign` -> the Partner Key doesn't match that Partner ID. Usual causes:
+  the *Test* Key was pasted instead of the *Live* Key, the main/Brand keys got
+  swapped, or a stray space/newline got copied into `.env.production`.
+- `no timestamp` -> the code on the VM is older than the signed-link fix;
+  run the deploy command first.
+
 **5. Only when packing stations are ready**, unlock fetching:
 ```bash
 NODE_ENV=production node scripts/fetch-lock.js unlock

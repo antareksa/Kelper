@@ -23,6 +23,24 @@ const BRAND_CREDENTIALS = { partnerId: SHOPEE_BRAND_PARTNER_ID, partnerKey: SHOP
 
 function buildAuthUrl(creds = MAIN_CREDENTIALS) {
   const url = new URL(SHOPEE_AUTH_BASE);
+
+  // Live host: the classic v2 authorization link, which (unlike the
+  // sandbox's newer auth page below) requires a signed URL -- confirmed
+  // against the live host, which answered an unsigned link with
+  // {"error":"error_param","message":"no timestamp."}. Sign string is
+  // partner_id + path + timestamp, same as every other public v2 call, and
+  // the return URL goes in `redirect` rather than `redirect_uri`. The
+  // timestamp is built per call (this runs at click time, see
+  // routes/auth.js), so the link is always fresh.
+  if (url.pathname === '/api/v2/shop/auth_partner') {
+    const timestamp = Math.floor(Date.now() / 1000);
+    url.searchParams.set('partner_id', creds.partnerId);
+    url.searchParams.set('timestamp', String(timestamp));
+    url.searchParams.set('sign', signPublic(creds.partnerId, url.pathname, timestamp, creds.partnerKey));
+    url.searchParams.set('redirect', creds.redirectUri);
+    return url.toString();
+  }
+
   url.searchParams.set('partner_id', creds.partnerId);
   url.searchParams.set('auth_type', 'seller');
   url.searchParams.set('redirect_uri', creds.redirectUri);
