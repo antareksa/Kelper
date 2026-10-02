@@ -13,20 +13,37 @@ router.get('/login-url', (req, res) => {
   res.json({ url: buildAuthUrl() });
 });
 
-router.get('/exchange', async (req, res) => {
+// Everything below logs the outcome of each connection attempt (never the
+// code or any token) -- this route used to say nothing at all, so a rejected
+// or never-attempted exchange was invisible on the server. Added when a real
+// client authorization landed back on the Dashboard still disconnected and
+// there was nothing to read to tell why.
+function logExchange(label, message) {
+  console.log(`[server] shopee auth exchange (${label}): ${message}`);
+}
+
+async function runExchange(label, req, res, creds, table) {
   const { code, shop_id } = req.query;
   if (!code || !shop_id) {
+    logExchange(label, `rejected, missing params (code ${code ? 'present' : 'MISSING'}, shop_id ${shop_id ? 'present' : 'MISSING'})`);
     return res.status(400).json({ error: 'code and shop_id query params are required' });
   }
 
-  const data = await exchangeToken(code, shop_id);
+  let data;
+  try {
+    data = await exchangeToken(code, shop_id, creds);
+  } catch (err) {
+    logExchange(label, `shop_id=${shop_id} could not reach Shopee: ${err.message}`);
+    return res.status(502).json({ error: 'exchange_failed', message: err.message });
+  }
   if (data.error) {
+    logExchange(label, `shop_id=${shop_id} refused by Shopee: ${data.error} - ${data.message || ''}`);
     return res.status(400).json(data);
   }
 
   const now = Math.floor(Date.now() / 1000);
   db.prepare(`
-    INSERT INTO shopee_tokens (shop_id, access_token, refresh_token, expires_at, updated_at)
+    INSERT INTO ${table} (shop_id, access_token, refresh_token, expires_at, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(shop_id) DO UPDATE SET
       access_token = excluded.access_token,
@@ -35,7 +52,29 @@ router.get('/exchange', async (req, res) => {
       updated_at = excluded.updated_at
   `).run(Number(shop_id), data.access_token, data.refresh_token, now + data.expire_in, now);
 
+  logExchange(label, `connected shop_id=${shop_id}`);
   res.json({ ok: true, shop_id: Number(shop_id), expires_at: now + data.expire_in });
+}
+
+router.get('/exchange', (req, res) => runExchange('main', req, res, undefined, 'shopee_tokens'));
+
+// The Shopee redirect lands on the frontend first (/check-connection*), and
+// the frontend only calls /exchange when the URL has both `code` and
+// `shop_id` -- if Shopee sends something else (e.g. main_account_id instead
+// of shop_id) the page just opens as a normal Dashboard and the backend is
+// never contacted, so /exchange can't log it. The frontend therefore reports
+// what actually arrived here. Parameter NAMES only, never values: the code
+// is a one-time credential. Public on purpose (the callback happens before
+// any admin login), so everything is whitelisted/sanitized before it reaches
+// the log.
+router.post('/callback-seen', (req, res) => {
+  const { path, params } = req.body || {};
+  const safePath = ['/check-connection', '/check-connection-brand'].includes(path) ? path : '(unexpected path)';
+  const names = Array.isArray(params)
+    ? params.filter((p) => typeof p === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(p)).slice(0, 20)
+    : [];
+  console.log(`[server] shopee callback landed on the frontend: path=${safePath} params=[${names.join(', ')}]`);
+  res.json({ ok: true });
 });
 
 // Forgets the locally stored token so the Dashboard shows disconnected and
@@ -92,30 +131,7 @@ router.get('/brand/login-url', (req, res) => {
   res.json({ url: buildAuthUrl(BRAND_CREDENTIALS) });
 });
 
-router.get('/brand/exchange', async (req, res) => {
-  const { code, shop_id } = req.query;
-  if (!code || !shop_id) {
-    return res.status(400).json({ error: 'code and shop_id query params are required' });
-  }
-
-  const data = await exchangeToken(code, shop_id, BRAND_CREDENTIALS);
-  if (data.error) {
-    return res.status(400).json(data);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  db.prepare(`
-    INSERT INTO shopee_brand_tokens (shop_id, access_token, refresh_token, expires_at, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(shop_id) DO UPDATE SET
-      access_token = excluded.access_token,
-      refresh_token = excluded.refresh_token,
-      expires_at = excluded.expires_at,
-      updated_at = excluded.updated_at
-  `).run(Number(shop_id), data.access_token, data.refresh_token, now + data.expire_in, now);
-
-  res.json({ ok: true, shop_id: Number(shop_id), expires_at: now + data.expire_in });
-});
+router.get('/brand/exchange', (req, res) => runExchange('brand', req, res, BRAND_CREDENTIALS, 'shopee_brand_tokens'));
 
 router.post('/brand/logout', (req, res) => {
   const { shop_id } = req.body;

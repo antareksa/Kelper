@@ -6,6 +6,14 @@ import Dashboard from './Dashboard';
 import ShopeeCallback from './ShopeeCallback';
 import { colors } from './theme';
 import { initActiveShopId } from './shopConfig';
+import { API_BASE } from './apiBase';
+
+// Captured at module load, before anything renders: Dashboard's router
+// redirects unknown paths (a /check-connection landing it doesn't recognize
+// becomes /home) before App's own effects run, which would otherwise leave
+// nothing to report.
+const LANDING_PATH = window.location.pathname.replace(/\/+$/, '');
+const LANDING_PARAM_NAMES = [...new URLSearchParams(window.location.search).keys()];
 
 function isShopeeCallback() {
   const params = new URLSearchParams(window.location.search);
@@ -49,6 +57,22 @@ function App() {
 
   useEffect(() => {
     initActiveShopId().finally(() => setShopIdReady(true));
+  }, []);
+
+  // Tells the backend a Shopee authorization just landed here, and which
+  // query parameter NAMES came with it (never values -- the code is a
+  // one-time credential), so a connection that silently doesn't complete
+  // can be diagnosed from the server log instead of needing the person who
+  // authorized to dig through their browser history. See routes/auth.js's
+  // /callback-seen.
+  useEffect(() => {
+    if (!LANDING_PATH.startsWith('/check-connection')) return;
+    fetch(`${API_BASE}/auth/callback-seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: LANDING_PATH, params: LANDING_PARAM_NAMES }),
+      keepalive: true,
+    }).catch(() => {});
   }, []);
 
   // Named for what it did before dedicated hostnames existed — now returns
