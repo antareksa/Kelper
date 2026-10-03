@@ -20,7 +20,7 @@ function formatRupiah(value) {
 }
 
 const TABLE_GRID = '32px minmax(220px,2fr) 90px 100px 90px 100px 90px 130px 130px 44px';
-const SUB_GRID = '110px 1fr 90px 110px 100px 150px 100px 90px 80px 80px 120px 120px 90px';
+const SUB_GRID = '110px 1fr 90px 110px 140px 150px 100px 90px 80px 80px 120px 120px 90px';
 
 function SummaryCard({ label, value, accent }) {
   return (
@@ -237,7 +237,81 @@ function CurrencyInput({ sku, field, value, onSaved }) {
   );
 }
 
-function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved }) {
+// Manually-entered barcode ("Kode") — what the Packing Station matches a scan
+// against (see routes/products.js's PUT /:sku/barcode). Same save-on-blur/
+// Enter pattern as the inputs above, but text, and a refusal (e.g. the
+// barcode already belongs to another SKU) is shown under the field instead
+// of silently reverting: a quietly wrong barcode would make a scan resolve to
+// the wrong item, so the person needs to see why it wasn't accepted.
+function BarcodeInput({ sku, value, onSaved }) {
+  const [draft, setDraft] = useState(value ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setDraft(value ?? '');
+  }, [value]);
+
+  async function save() {
+    const next = draft.trim() === '' ? null : draft.trim();
+    if (next === (value ?? null)) {
+      setDraft(value ?? '');
+      setError(null);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`${API_BASE}/products/${encodeURIComponent(sku)}/barcode`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        onSaved(data.barcode ?? null);
+      } else {
+        setError(data.message || 'Gagal menyimpan barcode.');
+        setDraft(value ?? '');
+      }
+    } catch {
+      setError('Gagal menyimpan barcode.');
+      setDraft(value ?? '');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <input
+        type="text"
+        value={draft}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => { setDraft(e.target.value); setError(null); }}
+        onBlur={save}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        placeholder="—"
+        disabled={saving}
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          background: colors.cardAlt,
+          border: `1px solid ${error ? colors.red : colors.border}`,
+          borderRadius: 6,
+          color: colors.text,
+          fontFamily: 'ui-monospace, monospace',
+          fontSize: 12,
+          padding: '4px 6px',
+          opacity: saving ? 0.6 : 1,
+        }}
+      />
+      {error && <div style={{ color: colors.red, fontSize: 10.5, marginTop: 3, lineHeight: 1.3 }}>{error}</div>}
+    </div>
+  );
+}
+
+function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved, onBarcodeSaved }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -355,8 +429,8 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
                   <div>
                     <CurrencyInput sku={v.sku} field="hpp" value={v.hpp} onSaved={(next) => onHppSaved(v.sku, next)} />
                   </div>
-                  <div style={{ color: v.barcode == null ? colors.textFaint : colors.text, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
-                    {v.barcode ?? '—'}
+                  <div>
+                    <BarcodeInput sku={v.sku} value={v.barcode} onSaved={(next) => onBarcodeSaved(v.sku, next)} />
                   </div>
                   <div>
                     <CurrencyInput sku={v.sku} field="price" value={v.price} onSaved={(next) => onPriceSaved(v.sku, next)} />
@@ -433,6 +507,13 @@ function ListBarang() {
         const profitPct = profit != null && v.price ? Math.round((profit / v.price) * 1000) / 10 : null;
         return { ...v, hpp: next, profit, profitPct };
       }),
+    })));
+  }
+
+  function handleBarcodeSaved(sku, next) {
+    setCatalog((prev) => prev.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => (v.sku === sku ? { ...v, barcode: next } : v)),
     })));
   }
 
@@ -634,6 +715,7 @@ function ListBarang() {
                     onStockSaved={handleStockSaved}
                     onHppSaved={handleHppSaved}
                     onPriceSaved={handlePriceSaved}
+                    onBarcodeSaved={handleBarcodeSaved}
                   />
                 ))}
               </div>

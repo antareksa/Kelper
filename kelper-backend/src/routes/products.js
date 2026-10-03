@@ -143,6 +143,60 @@ router.put('/:sku/price', (req, res) => {
   res.json({ ok: true, sku, price });
 });
 
+const upsertBarcode = db.prepare(`
+  INSERT INTO products (sku, barcode, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    barcode = excluded.barcode,
+    updated_at = excluded.updated_at
+`);
+
+// Client-requested (2026-10-03): inline single-SKU barcode edit in List
+// Barang. Until now a barcode could only arrive through the Excel import, and
+// one misaligned row left a product with no barcode (and its barcode number
+// sitting in the HPP column), so the Packing Station couldn't match that
+// product's scan at all -- see routes/packing.js's /scan-item, which resolves
+// a scanned value through products.barcode first.
+//
+// Rejects a barcode already used by a DIFFERENT product (or equal to another
+// product's SKU): /scan-item takes the first match, so a shared value would
+// silently resolve to the wrong item instead of failing visibly. Only touches
+// barcode/updated_at, like the HPP/price edits. Empty clears it back to null.
+router.put('/:sku/barcode', (req, res) => {
+  const sku = req.params.sku;
+  const raw = req.body.barcode;
+  if (raw !== null && typeof raw !== 'string') {
+    return res.status(400).json({ error: 'invalid_barcode', message: 'barcode must be text or null.' });
+  }
+  const barcode = raw == null || raw.trim() === '' ? null : raw.trim();
+  if (barcode !== null && !/^[A-Za-z0-9._\-/]{1,64}$/.test(barcode)) {
+    return res.status(400).json({
+      error: 'invalid_barcode',
+      message: 'Barcode hanya boleh huruf, angka, dan . _ - / (tanpa spasi), maksimal 64 karakter.',
+    });
+  }
+
+  if (barcode !== null) {
+    const sameBarcode = db.prepare('SELECT sku FROM products WHERE barcode = ? AND sku != ?').get(barcode, sku);
+    if (sameBarcode) {
+      return res.status(409).json({
+        error: 'duplicate_barcode',
+        message: `Barcode ${barcode} sudah dipakai SKU ${sameBarcode.sku}.`,
+      });
+    }
+    const sameAsSku = db.prepare('SELECT sku FROM products WHERE sku = ? AND sku != ?').get(barcode, sku);
+    if (sameAsSku) {
+      return res.status(409).json({
+        error: 'duplicate_barcode',
+        message: `Barcode ${barcode} sama dengan SKU ${sameAsSku.sku}.`,
+      });
+    }
+  }
+
+  upsertBarcode.run(sku, barcode, Math.floor(Date.now() / 1000));
+  res.json({ ok: true, sku, barcode });
+});
+
 const upsertItem = db.prepare(`
   INSERT INTO shopee_items (item_id, shop_id, item_sku, name, item_status, min_purchase_limit, has_model, image_url, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
