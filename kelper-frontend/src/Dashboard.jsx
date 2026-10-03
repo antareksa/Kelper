@@ -15,7 +15,7 @@ import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } fro
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
-const BUNDLE_TAB = { path: '/bundle', label: 'Bundle', Icon: IconBox };
+const BUNDLE_TAB = { path: '/bundle', label: 'List Bundle', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };

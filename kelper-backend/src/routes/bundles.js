@@ -3,9 +3,7 @@ const db = require('../db');
 
 const router = express.Router();
 
-// A bundle listing's SKU starts with KELPER (KELPER-12, "KELPER 22"); single
-// products are KEL-xx (see products.js's isBundleSku, same rule).
-const isBundleSku = (sku) => /^KELPER/i.test(String(sku || ''));
+const { isBundleSku } = require('../bundleUtil');
 
 // One entry per Shopee listing with a single variant (the Robot test item
 // with two variants has no one SKU, so it never appears): the SKU it is

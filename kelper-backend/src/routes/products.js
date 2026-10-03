@@ -5,6 +5,7 @@ const db = require('../db');
 const { getValidAccessToken } = require('../shopee/tokenStore');
 const { getItemList, getItemBaseInfo, getModelList } = require('../shopee/client');
 const { startOfMonthWIB } = require('../wib');
+const { isBundleSku } = require('../bundleUtil');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -697,7 +698,9 @@ function skuQtyInRange(startTs, endTs) {
 // products.price (editable — see PUT /:sku/price above), never
 // shopee_item_models.price, same as buildSkuPriceMap in routes/dashboard.js.
 router.get('/catalog', (req, res) => {
-  const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all();
+  // Bundles are managed on the List Bundle page (client-requested 2026-10-03),
+  // so they are left out of List Barang.
+  const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all().filter((i) => !isBundleSku(i.item_sku));
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
 
