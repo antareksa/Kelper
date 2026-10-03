@@ -109,6 +109,9 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
                     <div>
                       <div style={{ color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{it.sku}</div>
                       <div style={{ color: colors.textDim, fontSize: 11 }}>{it.product_name}</div>
+                      {it.from_bundles?.length > 0 && (
+                        <div style={{ color: colors.orange, fontSize: 11 }}>Isi bundle {it.from_bundles.join(', ')}</div>
+                      )}
                     </div>
                     <div style={{ color: colors.text, fontFamily: 'var(--num)', fontWeight: 600 }}>{it.scanned_qty}/{it.qty}</div>
                   </div>

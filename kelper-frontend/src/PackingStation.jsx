@@ -72,6 +72,9 @@ function ItemRow({ item, isCurrent }) {
           {item.product_name}
         </div>
         <div style={{ fontSize: 11, color: colors.textDim, fontFamily: 'monospace' }}>{item.sku}</div>
+        {item.from_bundles?.length > 0 && (
+          <div style={{ fontSize: 11, color: colors.orange, marginTop: 2 }}>Isi bundle {item.from_bundles.join(', ')}</div>
+        )}
       </div>
       <div
         style={{

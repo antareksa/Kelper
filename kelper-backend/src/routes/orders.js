@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const { syncAndLabelOrders } = require('../shopeeSync');
 const { getSetting, setSetting } = require('../settings');
+const { expandPackingItems } = require('../packingItems');
 
 const router = express.Router();
 
@@ -49,7 +50,7 @@ router.get('/search', (req, res) => {
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(orderSn);
   if (!order) return res.status(404).json({ error: 'order_not_found' });
 
-  const items = db.prepare('SELECT sku, product_name, qty FROM order_items WHERE order_sn = ?').all(orderSn);
+  const items = expandPackingItems(orderSn).map(({ sku, product_name, qty, from_bundles }) => ({ sku, product_name, qty, from_bundles }));
   const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ? ORDER BY id DESC LIMIT 1').get(orderSn);
   const progressBySku = session
     ? Object.fromEntries(

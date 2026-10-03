@@ -10,6 +10,7 @@ const { isProduction } = require('../env');
 const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
 const { startOfDayWIB } = require('../wib');
 const { uploadPackingVideo } = require('../gcs');
+const { expandPackingItems } = require('../packingItems');
 
 const router = express.Router();
 const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -51,7 +52,7 @@ function getSessionWithOrder(sessionId) {
     SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, is_dropoff, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
     FROM orders WHERE order_sn = ?
   `).get(session.order_sn);
-  const items = db.prepare('SELECT * FROM order_items WHERE order_sn = ?').all(session.order_sn);
+  const items = expandPackingItems(session.order_sn);
   const progress = db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(sessionId);
   const progressBySku = Object.fromEntries(progress.map((p) => [p.sku, p.scanned_qty]));
   // barcode is a display hint only (what the operator should physically scan
@@ -1015,7 +1016,7 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
   if (!resolved) return res.status(404).json({ error: 'order_not_found' });
   const { order, session, bucket, rank } = resolved;
 
-  const items = db.prepare('SELECT sku, product_name, qty FROM order_items WHERE order_sn = ?').all(order_sn);
+  const items = expandPackingItems(order_sn).map(({ sku, product_name, qty, from_bundles }) => ({ sku, product_name, qty, from_bundles }));
   const progressBySku = session
     ? Object.fromEntries(
         db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(session.id).map((p) => [p.sku, p.scanned_qty])
