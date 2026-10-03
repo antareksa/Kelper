@@ -96,6 +96,23 @@ tick. It refuses on purpose if an operator already worked on the order
 (releasing could lose scan records), if it has scan records, or if the order
 is cancelled, and tells you why.
 
+## Check Biaya Iklan (ad spend)
+
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/check-ads.js
+```
+Prints what the Dashboard has stored for the last 7 days (and the tax % it
+adds), then pulls today's spend live from Shopee, hour by hour, so you can
+compare the two. Read-only.
+
+```bash
+NODE_ENV=production node scripts/check-ads.js 02-10-2026   # another date (DD-MM-YYYY)
+NODE_ENV=production node scripts/check-ads.js --stored     # stored values only, no Shopee call
+```
+If it says the access token has expired, wait a minute (the server renews it)
+and run it again.
+
 ## Check service status / logs
 
 ```bash
