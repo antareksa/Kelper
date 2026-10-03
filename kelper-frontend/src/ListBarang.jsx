@@ -458,6 +458,8 @@ function ListBarang() {
   const [expandedSku, setExpandedSku] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('active'); // active | archived | all
+  // Click a column header to sort by it, click again to flip the direction.
+  const [sort, setSort] = useState({ key: 'sku', dir: 'asc' });
   const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -610,6 +612,44 @@ function ListBarang() {
     return p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.variants.some((v) => v.sku.toLowerCase().includes(q));
   });
 
+  const sortValue = {
+    name: (p) => p.name,
+    sku: (p) => p.sku,
+    trend: (p) => p.trendPct,
+    minPurchase: (p) => p.minPurchase,
+    profit: (p) => avgProfitPct(p.variants),
+    omsetIni: (p) => p.omsetIni,
+    omsetLalu: (p) => p.omsetLalu,
+  }[sort.key];
+  const sign = sort.dir === 'asc' ? 1 : -1;
+  // Text compares in natural order (KEL-2 before KEL-10); a product with no
+  // value for the column (e.g. no HPP, so no profit %) always sorts last,
+  // whichever direction is chosen, rather than clumping at the top of "desc".
+  const sorted = [...filtered].sort((a, b) => {
+    const va = sortValue(a);
+    const vb = sortValue(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const cmp = typeof va === 'string' ? va.localeCompare(vb, undefined, { numeric: true, sensitivity: 'base' }) : va - vb;
+    return cmp * sign;
+  });
+
+  // Text columns start ascending, number columns start with the biggest.
+  function handleSort(key) {
+    if (sort.key === key) setSort({ key, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
+    else setSort({ key, dir: key === 'name' || key === 'sku' ? 'asc' : 'desc' });
+  }
+  const sortHeader = (key, label) => (
+    <div
+      onClick={() => handleSort(key)}
+      style={{ cursor: 'pointer', userSelect: 'none', color: sort.key === key ? colors.text : undefined, whiteSpace: 'nowrap' }}
+      title="Klik untuk mengurutkan"
+    >
+      {label}{sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </div>
+  );
+
   const allVariants = statusFiltered.flatMap((p) => p.variants);
   const skuKosong = allVariants.filter((v) => v.hpp == null).length;
   const avgMargin = avgProfitPct(allVariants);
@@ -736,18 +776,18 @@ function ListBarang() {
               <div style={{ minWidth: 900 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: TABLE_GRID, gap: 10, padding: '10px 12px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: `1px solid ${colors.border}` }}>
                   <div />
-                  <div>Item SKU</div>
+                  {sortHeader('name', 'Item SKU')}
                   <div />
-                  <div>SKU Induk</div>
-                  <div>Tren</div>
-                  <div>Min. Pembelian</div>
-                  <div>Est % Profit</div>
-                  <div>Omset Bulan Ini</div>
-                  <div>Omset Bulan Lalu</div>
+                  {sortHeader('sku', 'SKU Induk')}
+                  {sortHeader('trend', 'Tren')}
+                  {sortHeader('minPurchase', 'Min. Pembelian')}
+                  {sortHeader('profit', 'Est % Profit')}
+                  {sortHeader('omsetIni', 'Omset Bulan Ini')}
+                  {sortHeader('omsetLalu', 'Omset Bulan Lalu')}
                   <div>Aksi</div>
                 </div>
 
-                {filtered.map((p) => (
+                {sorted.map((p) => (
                   <ProductRow
                     key={p.item_id}
                     product={p}
