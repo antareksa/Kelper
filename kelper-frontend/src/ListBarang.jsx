@@ -468,6 +468,7 @@ function ListBarang() {
   const shopName = useShopName();
   const fileInputRef = useRef(null);
   const stockFileInputRef = useRef(null);
+  const barcodeFileInputRef = useRef(null);
 
   useEffect(() => {
     loadCatalog();
@@ -570,10 +571,14 @@ function ListBarang() {
         if (!res.ok) throw new Error(data.message || data.error);
 
         const notes = [];
+        if (data.bundlesSet != null) notes.push(`${data.bundlesSet} bundle diisi`);
+        if (data.ambiguous?.length > 0) notes.push(`Satu nama dengan beberapa barcode, dilewati: ${data.ambiguous.join('; ')}`);
+        if (data.conflicts?.length > 0) notes.push(`Barcode bentrok: ${data.conflicts.join('; ')}`);
+        if (data.unresolvedBundles?.length > 0) notes.push(`Bundle dilewati: ${data.unresolvedBundles.join('; ')}`);
         if (data.skippedRows?.length > 0) notes.push(`${data.skippedRows.length} baris dilewati — SKU kosong`);
         if (data.unmatched?.length > 0) notes.push(`Nama tidak cocok dengan produk: ${data.unmatched.join('; ')}`);
         if (data.unreadable?.length > 0) notes.push(`Nilai kosong/tidak terbaca (tidak diubah): ${data.unreadable.join('; ')}`);
-        setUploadMessage(`Berhasil impor ${label} untuk ${data.imported} SKU.${notes.length ? ` ${notes.join('. ')}.` : ''}`);
+        setUploadMessage(`Berhasil impor ${label} untuk ${data.imported ?? data.barcodesSet} SKU.${notes.length ? ` ${notes.join('. ')}.` : ''}`);
         setUploadMessageType(notes.length ? 'info' : 'success');
         await loadCatalog();
       } catch (err) {
@@ -586,6 +591,7 @@ function ListBarang() {
   }
   const handleFileChange = makeUploadHandler('import-hpp', 'HPP');
   const handleStockFileChange = makeUploadHandler('import-stock', 'stok');
+  const handleBarcodeFileChange = makeUploadHandler('import-barcode', 'barcode');
 
   // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
   // one taken down by Shopee) — neither is "NORMAL" anymore, but the item
@@ -690,6 +696,17 @@ function ListBarang() {
         >
           <IconUpload size={15} />
           Unggah Stok
+        </button>
+
+        <input ref={barcodeFileInputRef} type="file" accept=".xlsx" onChange={handleBarcodeFileChange} style={{ display: 'none' }} />
+        <button
+          onClick={() => barcodeFileInputRef.current?.click()}
+          disabled={uploading}
+          style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
+          title="Impor barcode produk dan isi bundle dari Excel (Product List: GTIN + nama produk)"
+        >
+          <IconUpload size={15} />
+          Unggah Barcode
         </button>
       </div>
 

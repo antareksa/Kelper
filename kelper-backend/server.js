@@ -16,6 +16,7 @@ const ordersRoutes = require('./src/routes/orders');
 const operatorsRoutes = require('./src/routes/operators');
 const adminRoutes = require('./src/routes/admin');
 const productsRoutes = require('./src/routes/products');
+const bundlesRoutes = require('./src/routes/bundles');
 const dashboardRoutes = require('./src/routes/dashboard');
 const reportsRoutes = require('./src/routes/reports');
 const webhookRoutes = require('./src/routes/webhook');
@@ -63,6 +64,7 @@ app.use('/orders', requireAdminAuth, ordersRoutes);
 app.use('/operators', operatorsRoutes);
 app.use('/admin', adminRoutes);
 app.use('/products', requireAdminAuth, productsRoutes);
+app.use('/bundles', requireAdminAuth, bundlesRoutes);
 app.use('/dashboard', requireAdminAuth, dashboardRoutes);
 app.use('/reports', requireAdminAuth, reportsRoutes);
 

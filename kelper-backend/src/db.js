@@ -429,4 +429,20 @@ if (!orderItemCols.includes('hpp_snapshot')) {
   db.exec('ALTER TABLE order_items ADD COLUMN hpp_snapshot INTEGER');
 }
 
+// Client-requested (2026-10-03): which single products make up each bundle
+// listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
+// bundle_sku is a Shopee listing, component_sku a single product -- so the
+// Bundle menu can show a bundle's items and a later packing change can expand
+// a bundle order into the parts to scan. qty is how many of the component one
+// bundle contains. Filled from the barcode sheet (/products/import-barcode)
+// or edited by hand in the Bundle menu.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bundle_items (
+    bundle_sku TEXT NOT NULL,
+    component_sku TEXT NOT NULL,
+    qty INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (bundle_sku, component_sku)
+  );
+`);
+
 module.exports = db;

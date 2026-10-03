@@ -218,6 +218,140 @@ router.put('/:sku/stock', (req, res) => {
   res.json({ ok: true, sku, stock });
 });
 
+const BARCODE_PATTERN = /^[A-Za-z0-9._\-/]{1,64}$/;
+
+// A bundle listing's SKU starts with KELPER (KELPER-12, "KELPER 22"); the
+// single products are KEL-xx. Used to tell a bundle from a product when the
+// barcode sheet lists one listing name on several rows.
+const isBundleSku = (sku) => /^KELPER/i.test(String(sku || ''));
+
+// The client's "BARCODE ONLINE" sheet (a Shopee Product List export): per row,
+// a GTIN (column under the "GTIN" header) and the Shopee listing name two
+// columns to its right. A listing on ONE row is a single product and gets
+// that GTIN as its barcode. A bundle listing is on SEVERAL rows, one per
+// component GTIN ("8994450940097 X 10" = ten of that component). Each
+// component GTIN is resolved to a single product through the same sheet's
+// single rows, and the bundle's item list is stored in bundle_items.
+//
+// Anything it can't place with certainty is returned by name, not guessed:
+//  - unmatched: listing name that isn't a known product
+//  - ambiguous: a non-bundle listing that appears with more than one GTIN
+//  - conflicts: a barcode already used by a different product
+//  - unresolvedBundles: a bundle with a component GTIN no product owns
+router.post('/import-barcode', upload.single('file'), async (req, res) => {
+  const sheet = await loadSheet(req, res);
+  if (!sheet) return;
+
+  let headerRow = null;
+  let gtinCol = null;
+  sheet.eachRow((row, rowNumber) => {
+    if (headerRow != null) return;
+    row.eachCell((cell, col) => {
+      if (headerRow == null && /^gtin$/i.test(cellText(cell))) {
+        headerRow = rowNumber;
+        gtinCol = col;
+      }
+    });
+  });
+  if (headerRow == null) {
+    return res.status(400).json({ error: 'gtin_column_missing', message: 'Kolom "GTIN" tidak ditemukan di sheet pertama.' });
+  }
+  const shortNameCol = gtinCol + 1;
+  const nameCol = gtinCol + 2;
+
+  // Group rows by listing name.
+  const groups = new Map();
+  const unmatched = [];
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= headerRow) return;
+    const m = cellText(row.getCell(gtinCol)).match(/^(\d{8,14})(?:\s*[xX]\s*(\d+))?$/);
+    if (!m) return; // blank, or a repeated header row
+    const name = cellText(row.getCell(nameCol));
+    if (!name) {
+      unmatched.push(`${cellText(row.getCell(shortNameCol)) || m[1]} (tanpa nama produk Shopee)`);
+      return;
+    }
+    const key = normalizeName(name);
+    if (!groups.has(key)) groups.set(key, { name, entries: [] });
+    const g = groups.get(key);
+    const qty = m[2] ? Number(m[2]) : 1;
+    if (!g.entries.some((e) => e.gtin === m[1] && e.qty === qty)) g.entries.push({ gtin: m[1], qty });
+  });
+
+  const nameToSku = buildNameToSku();
+  const singles = []; // { sku, gtin }
+  const bundles = []; // { sku, name, entries }
+  const ambiguous = [];
+  for (const [key, g] of groups) {
+    const sku = nameToSku.get(key);
+    if (!sku) {
+      unmatched.push(g.name);
+    } else if (g.entries.length === 1 && g.entries[0].qty === 1 && !isBundleSku(sku)) {
+      singles.push({ sku, gtin: g.entries[0].gtin });
+    } else if (isBundleSku(sku)) {
+      bundles.push({ sku, name: g.name, entries: g.entries });
+    } else {
+      ambiguous.push(g.name);
+    }
+  }
+
+  // Barcodes for single products.
+  const now = Math.floor(Date.now() / 1000);
+  const conflicts = [];
+  const gtinToSku = new Map();
+  let barcodesSet = 0;
+  const seenGtin = new Map();
+  for (const s of singles) {
+    if (seenGtin.has(s.gtin) && seenGtin.get(s.gtin) !== s.sku) {
+      conflicts.push(`${s.gtin} dipakai ${seenGtin.get(s.gtin)} dan ${s.sku} di file`);
+      continue;
+    }
+    seenGtin.set(s.gtin, s.sku);
+    if (!BARCODE_PATTERN.test(s.gtin)) continue;
+    const other = db.prepare('SELECT sku FROM products WHERE barcode = ? AND sku != ?').get(s.gtin, s.sku);
+    if (other) {
+      conflicts.push(`${s.gtin} (${s.sku}) sudah dipakai ${other.sku}`);
+      continue;
+    }
+    upsertBarcode.run(s.sku, s.gtin, now);
+    gtinToSku.set(s.gtin, s.sku);
+    barcodesSet += 1;
+  }
+
+  // Bundles: resolve each component GTIN, preferring this sheet's singles,
+  // then any barcode already stored.
+  const unresolvedBundles = [];
+  let bundlesSet = 0;
+  const replaceItems = db.transaction((bundleSku, items) => {
+    db.prepare('DELETE FROM bundle_items WHERE bundle_sku = ?').run(bundleSku);
+    for (const it of items) {
+      db.prepare('INSERT INTO bundle_items (bundle_sku, component_sku, qty) VALUES (?, ?, ?)').run(bundleSku, it.sku, it.qty);
+    }
+  });
+  for (const b of bundles) {
+    const items = [];
+    let failed = null;
+    for (const e of b.entries) {
+      const sku = gtinToSku.get(e.gtin) || db.prepare('SELECT sku FROM products WHERE barcode = ?').get(e.gtin)?.sku;
+      if (!sku || sku === b.sku) {
+        failed = e.gtin;
+        break;
+      }
+      const existing = items.find((i) => i.sku === sku);
+      if (existing) existing.qty += e.qty;
+      else items.push({ sku, qty: e.qty });
+    }
+    if (failed) {
+      unresolvedBundles.push(`${b.name}: barcode ${failed} bukan milik produk mana pun`);
+      continue;
+    }
+    replaceItems(b.sku, items);
+    bundlesSet += 1;
+  }
+
+  res.json({ ok: true, barcodesSet, bundlesSet, unmatched, ambiguous, conflicts, unresolvedBundles });
+});
+
 // Bulk version of the stock edit above, from the client's daily stock sheet
 // ("STOKAN ONLINE ..."): matches each DESCRIPSI to a product by listing name
 // and sets the local stock count to its "STOK AKHIR" column. A row whose

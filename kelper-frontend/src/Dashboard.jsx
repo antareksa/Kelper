@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
+import BundleList from './BundleList';
 import OrderSearch from './OrderSearch';
 import OperatorPerformance from './OperatorPerformance';
 import ShopeeConfigPage from './ShopeeConfigPage';
@@ -14,6 +15,7 @@ import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } fro
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
+const BUNDLE_TAB = { path: '/bundle', label: 'Bundle', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
@@ -26,6 +28,7 @@ const PACKING_SUB_ITEMS = [
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
 const ItemsIcon = ITEMS_TAB.Icon;
+const BundleIcon = BUNDLE_TAB.Icon;
 const OrderIcon = ORDER_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
@@ -250,6 +253,14 @@ function Dashboard() {
               </button>
 
               <button
+                onClick={() => navigate(BUNDLE_TAB.path)}
+                style={navItemStyle(location.pathname === BUNDLE_TAB.path)}
+              >
+                <BundleIcon size={16} />
+                {BUNDLE_TAB.label}
+              </button>
+
+              <button
                 onClick={() => navigate(ORDER_TAB.path)}
                 style={navItemStyle(location.pathname === ORDER_TAB.path)}
               >
@@ -370,6 +381,7 @@ function Dashboard() {
             <Route path="/" element={<Navigate to="/home" replace />} />
             <Route path="/home" element={<MainDashboard />} />
             <Route path="/list-barang" element={<ListBarang />} />
+            <Route path="/bundle" element={<BundleList />} />
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
