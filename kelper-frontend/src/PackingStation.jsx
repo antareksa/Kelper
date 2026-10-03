@@ -626,13 +626,43 @@ function PackingStation() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ station_id: stationId }),
-          // Lets the request finish even when this is the browser closing
-          // the page — check-out also hands back any order still being
-          // scanned, which is exactly what must not be lost on a closed tab.
           keepalive: true,
         });
       }
     };
+  }, [operatorName, stationId]);
+
+  // Heartbeat. This cleanup above does NOT run when the window is closed or
+  // the PC is switched off, so on its own an operator who just walks away
+  // would stay checked in forever. While logged in, tell the server every 30s
+  // that this station is alive; when the beats stop the server checks the
+  // station out itself (stationPresence.js: hands back its orders, closes the
+  // absensi shift). If it answers `active: false` the station was already
+  // checked out — e.g. the network was down for a few minutes — so log out
+  // here too rather than keep working in a session the server has forgotten.
+  useEffect(() => {
+    if (!operatorName) return;
+    let cancelled = false;
+    async function beat() {
+      try {
+        const res = await fetch(`${API_BASE}/operators/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ station_id: stationId }),
+        });
+        const data = await res.json();
+        if (!cancelled && data.active === false) {
+          handleLogout('Koneksi station terputus — scan ulang barcode operator untuk masuk.');
+        }
+      } catch {
+        // Offline for a moment: keep going, the next beat retries. The server
+        // only gives up on this station after several minutes of silence.
+      }
+    }
+    beat();
+    const interval = setInterval(beat, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operatorName, stationId]);
 
   // Auto-retry when idle so a station with nothing to do picks up a newly

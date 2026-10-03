@@ -3,7 +3,9 @@ const crypto = require('crypto');
 const db = require('../db');
 const { startOfTodayWIB } = require('../wib');
 const { requireAdminAuth } = require('../adminSession');
-const { releaseStationSessions } = require('../sessionRelease');
+const { touchStation, checkOutStation, startPresenceSweep } = require('../stationPresence');
+
+startPresenceSweep();
 
 const router = express.Router();
 
@@ -22,10 +24,10 @@ router.get('/lookup', (req, res) => {
 
   if (station_id) {
     db.prepare(`
-      INSERT INTO station_sessions (station_id, operator_name, checked_in_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at
-    `).run(station_id, operator.name, now());
+      INSERT INTO station_sessions (station_id, operator_name, checked_in_at, last_seen_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at, last_seen_at = excluded.last_seen_at
+    `).run(station_id, operator.name, now(), now());
     // Client-requested (2026-09-30): station_sessions above is a live-only
     // table (one row per station, overwritten/deleted on every check-in/out)
     // with no memory of past shifts -- this append-only log is what actually
@@ -41,21 +43,22 @@ router.get('/lookup', (req, res) => {
 router.post('/check-out', (req, res) => {
   const { station_id } = req.body;
   if (!station_id) return res.status(400).json({ error: 'station_id is required' });
-  db.prepare('DELETE FROM station_sessions WHERE station_id = ?').run(station_id);
-  // Anything this station was still scanning goes back to the queue — an
-  // operator who logs out (or whose station times out) must not strand their
-  // order.
-  releaseStationSessions(station_id);
-  // Closes out the most recent still-open shift for this station -- "open"
-  // (checked_out_at IS NULL) rather than matching by operator name, since a
-  // station can only have one operator checked in at a time anyway, and this
-  // stays correct even if station_id got reused across shifts on the same
-  // physical machine.
-  db.prepare(`
-    UPDATE attendance_log SET checked_out_at = ?
-    WHERE id = (SELECT id FROM attendance_log WHERE station_id = ? AND checked_out_at IS NULL ORDER BY checked_in_at DESC LIMIT 1)
-  `).run(now(), station_id);
+  // Removes the station from Active Station, hands back anything it was
+  // still scanning, and closes its open absensi shift — all in
+  // stationPresence.js, shared with the dead-station sweep.
+  checkOutStation(station_id);
   res.json({ ok: true });
+});
+
+// The station page calls this every 30s while an operator is logged in, so a
+// PC that is switched off (or an app that is closed) without logging out is
+// noticed and checked out by the sweep in stationPresence.js. `active: false`
+// means this station has no live session any more — the sweep already checked
+// it out — and the page logs its operator out instead of carrying on.
+router.post('/heartbeat', (req, res) => {
+  const { station_id } = req.body;
+  if (!station_id) return res.status(400).json({ error: 'station_id is required' });
+  res.json({ ok: true, active: touchStation(station_id) });
 });
 
 // Admin "Active Station" view — every currently checked-in station, what

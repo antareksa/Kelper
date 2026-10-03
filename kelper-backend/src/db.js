@@ -429,6 +429,17 @@ if (!orderItemCols.includes('hpp_snapshot')) {
   db.exec('ALTER TABLE order_items ADD COLUMN hpp_snapshot INTEGER');
 }
 
+// Client-requested (2026-10-03): when a station last proved it is alive (a
+// heartbeat from the page, or any request it makes while working — see
+// stationPresence.js). station_sessions only knew WHEN an operator checked in,
+// so a PC switched off or an app closed without logging out left the station
+// "logged in" forever with its shift open in the absensi. NULL on rows created
+// before this column existed; the sweep falls back to checked_in_at for those.
+const stationSessionCols = db.prepare("PRAGMA table_info(station_sessions)").all().map((c) => c.name);
+if (!stationSessionCols.includes('last_seen_at')) {
+  db.exec('ALTER TABLE station_sessions ADD COLUMN last_seen_at INTEGER');
+}
+
 // Client-requested (2026-10-03): which single products make up each bundle
 // listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
 // bundle_sku is a Shopee listing, component_sku a single product -- so the

@@ -13,6 +13,7 @@ const { uploadPackingVideo } = require('../gcs');
 const { expandPackingItems } = require('../packingItems');
 const { isBookingInFlight } = require('../shopeeSync');
 const { releaseInProgress, releaseStationSessions } = require('../sessionRelease');
+const { touchStation } = require('../stationPresence');
 
 const router = express.Router();
 const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -187,6 +188,7 @@ router.post('/next-order', async (req, res) => {
   if (!station_id || !shop_id) {
     return res.status(400).json({ error: 'station_id and shop_id are required' });
   }
+  touchStation(station_id); // idle stations poll this every 3s, so it doubles as a heartbeat
 
   // If this station already has an unfinished session (e.g. the browser reloaded
   // mid-order), resume it instead of locking a new one. AWAITING_LABEL_SCAN is
@@ -278,6 +280,7 @@ router.post('/scan-item', (req, res) => {
   const { session_id, sku: scannedValue } = req.body;
   const state = getSessionWithOrder(session_id);
   if (!state) return res.status(404).json({ error: 'session_not_found' });
+  touchStation(state.session.station_id);
   if (state.session.status !== 'IN_PROGRESS') {
     return res.status(400).json({ error: 'session_not_active', status: state.session.status });
   }
@@ -487,6 +490,7 @@ router.post('/confirm-print', (req, res) => {
   const scanned = scannedLabelValue(req.body);
   const state = getSessionWithOrder(session_id);
   if (!state) return res.status(404).json({ error: 'session_not_found' });
+  touchStation(state.session.station_id);
   if (state.session.status !== 'AWAITING_LABEL_SCAN') {
     return res.status(400).json({ error: 'not_awaiting_label_scan', status: state.session.status });
   }
@@ -599,6 +603,7 @@ router.get('/pickup-list', (req, res) => {
   const { station_id: stationId } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
   if (!stationId) return res.status(400).json({ error: 'station_id_required', message: 'station_id is required' });
+  touchStation(stationId);
 
   const orders = db
     .prepare(`
