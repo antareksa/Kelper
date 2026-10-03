@@ -700,7 +700,14 @@ function skuQtyInRange(startTs, endTs) {
 router.get('/catalog', (req, res) => {
   // Bundles are managed on the List Bundle page (client-requested 2026-10-03),
   // so they are left out of List Barang.
-  const items = db.prepare('SELECT * FROM shopee_items ORDER BY name').all().filter((i) => !isBundleSku(i.item_sku));
+  // Sorted by SKU in natural order (KEL-2 before KEL-10, not after it), the
+  // way the client numbers its products (client-requested 2026-10-03).
+  const skuOf = (i) => i.item_sku || `ITEM-${i.item_id}`;
+  const items = db
+    .prepare('SELECT * FROM shopee_items')
+    .all()
+    .filter((i) => !isBundleSku(i.item_sku))
+    .sort((a, b) => skuOf(a).localeCompare(skuOf(b), undefined, { numeric: true, sensitivity: 'base' }));
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
 
