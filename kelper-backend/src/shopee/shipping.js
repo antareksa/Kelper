@@ -33,9 +33,12 @@ const PREFERRED_SHIPPING_DOCUMENT_TYPE = 'THERMAL_AIR_WAYBILL';
 // permanent, not transient, confirmed by it appearing identically on every
 // one of 15 checks in testing.
 async function createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, type, cfg) {
+  // type undefined = name no type at all and let Shopee use the courier's own
+  // default (see pollTrackingAndDocument's fallback).
+  const typeLabel = type || 'default type';
   const createResult = await createShippingDocument(accessToken, shopId, orderSn, trackingNumber, type);
   if (createResult.error) {
-    return { ok: false, error: `create_shipping_document(${type}) failed: ${createResult.message || createResult.error}` };
+    return { ok: false, error: `create_shipping_document(${typeLabel}) failed: ${createResult.message || createResult.error}` };
   }
 
   const { maxAttempts, delayMs } = cfg.documentPoll;
@@ -46,7 +49,7 @@ async function createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumb
     if (entry?.status === 'READY') return { ok: true };
     if (entry?.fail_error) return { ok: false, error: `${entry.fail_error}: ${entry.fail_message}` };
   }
-  return { ok: false, error: `shipping_document_type=${type} did not become ready in time` };
+  return { ok: false, error: `shipping_document_type=${typeLabel} did not become ready in time` };
 }
 
 // Auto-picks the shop's default pickup address and the recommended time slot,
@@ -136,7 +139,23 @@ async function pollTrackingAndDocument(accessToken, shopId, orderSn, cfg) {
 
   const bootstrap = await createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, BOOTSTRAP_SHIPPING_DOCUMENT_TYPE, cfg);
   if (!bootstrap.ok) {
-    throw new Error(`Shipping document bootstrap (${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE}) failed: ${bootstrap.error}`);
+    // Confirmed on the live shop (2026-10-03, SiCepat REG and SPX Standard):
+    // the explicit NORMAL request is refused with
+    // logistics.shipping_document_should_print_first -- the very error this
+    // bootstrap exists to avoid on the sandbox -- while a request naming NO
+    // type succeeds immediately (Shopee generates the courier's suggested
+    // type, THERMAL for both of those channels). Two real customers' orders
+    // were stuck retrying until they'd have been flagged to Masalah. So when
+    // the NORMAL step is refused, fall back to naming no type: the original
+    // behaviour from before types were forced, which worked for every
+    // courier, just possibly with that courier's own layout. The matching
+    // download then names no type either (documentType null).
+    console.warn(`[server] ${orderSn}: ${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE} was refused (${bootstrap.error}) -- falling back to the courier's default document`);
+    const fallback = await createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, undefined, cfg);
+    if (!fallback.ok) {
+      throw new Error(`Shipping document bootstrap (${BOOTSTRAP_SHIPPING_DOCUMENT_TYPE}) failed: ${bootstrap.error}; default document also failed: ${fallback.error}`);
+    }
+    return { trackingNumber, documentType: null };
   }
 
   const preferred = await createAndAwaitDocument(accessToken, shopId, orderSn, trackingNumber, PREFERRED_SHIPPING_DOCUMENT_TYPE, cfg);
