@@ -220,16 +220,12 @@ router.put('/:sku/stock', (req, res) => {
 
 const BARCODE_PATTERN = /^[A-Za-z0-9._\-/]{1,64}$/;
 
-// A bundle listing's SKU starts with KELPER (KELPER-12, "KELPER 22"); the
-// single products are KEL-xx. Used to tell a bundle from a product when the
-// barcode sheet lists one listing name on several rows.
-const isBundleSku = (sku) => /^KELPER/i.test(String(sku || ''));
-
 // The client's "BARCODE ONLINE" sheet (a Shopee Product List export): per row,
 // a GTIN (column under the "GTIN" header) and the Shopee listing name two
 // columns to its right. A listing on ONE row is a single product and gets
-// that GTIN as its barcode. A bundle listing is on SEVERAL rows, one per
-// component GTIN ("8994450940097 X 10" = ten of that component). Each
+// that GTIN as its barcode. A bundle listing is a merged block of SEVERAL
+// rows, one per component GTIN ("8994450940097 X 10" = ten of that
+// component) -- detected from that layout alone, see below. Each
 // component GTIN is resolved to a single product through the same sheet's
 // single rows, and the bundle's item list is stored in bundle_items.
 //
@@ -259,9 +255,18 @@ router.post('/import-barcode', upload.single('file'), async (req, res) => {
   const shortNameCol = gtinCol + 1;
   const nameCol = gtinCol + 2;
 
-  // Group rows by listing name.
-  const groups = new Map();
+  // Bundles are detected from the sheet's own layout, not from any SKU
+  // naming: a BLOCK is a run of consecutive rows sharing both the short name
+  // and the Shopee listing name (in the sheet they are merged cells, ExcelJS
+  // mirrors the merged value onto every row). A block with several rows is a
+  // bundle -- one row per component barcode -- and so is a single row written
+  // "<barcode> X <n>" (n of that component). A one-row block is a single
+  // product. Rows that merely share a listing name but have DIFFERENT short
+  // names (two separate products typed against one listing) are not a block,
+  // so they are never mistaken for a bundle.
+  const blocks = [];
   const unmatched = [];
+  let prev = null;
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber <= headerRow) return;
     const m = cellText(row.getCell(gtinCol)).match(/^(\d{8,14})(?:\s*[xX]\s*(\d+))?$/);
@@ -269,29 +274,52 @@ router.post('/import-barcode', upload.single('file'), async (req, res) => {
     const name = cellText(row.getCell(nameCol));
     if (!name) {
       unmatched.push(`${cellText(row.getCell(shortNameCol)) || m[1]} (tanpa nama produk Shopee)`);
+      prev = null;
       return;
     }
+    const shortKey = normalizeName(cellText(row.getCell(shortNameCol)));
     const key = normalizeName(name);
-    if (!groups.has(key)) groups.set(key, { name, entries: [] });
-    const g = groups.get(key);
     const qty = m[2] ? Number(m[2]) : 1;
-    if (!g.entries.some((e) => e.gtin === m[1] && e.qty === qty)) g.entries.push({ gtin: m[1], qty });
+    if (prev && prev.key === key && prev.shortKey === shortKey) {
+      if (!prev.entries.some((e) => e.gtin === m[1] && e.qty === qty)) prev.entries.push({ gtin: m[1], qty });
+    } else {
+      prev = { key, shortKey, name, entries: [{ gtin: m[1], qty }] };
+      blocks.push(prev);
+    }
   });
+
+  // Per listing: its bundle blocks and its single blocks. The same bundle
+  // typed twice (as the sheet does for Handle + Sponge Mop) just repeats the
+  // same components.
+  const listings = new Map();
+  for (const b of blocks) {
+    if (!listings.has(b.key)) listings.set(b.key, { name: b.name, bundleEntries: new Map(), bundleConflict: false, singleGtins: new Set(), hasBundle: false });
+    const l = listings.get(b.key);
+    if (b.entries.length > 1 || b.entries.some((e) => e.qty > 1)) {
+      l.hasBundle = true;
+      for (const e of b.entries) {
+        if (l.bundleEntries.has(e.gtin) && l.bundleEntries.get(e.gtin) !== e.qty) l.bundleConflict = true;
+        l.bundleEntries.set(e.gtin, e.qty);
+      }
+    } else {
+      l.singleGtins.add(b.entries[0].gtin);
+    }
+  }
 
   const nameToSku = buildNameToSku();
   const singles = []; // { sku, gtin }
   const bundles = []; // { sku, name, entries }
   const ambiguous = [];
-  for (const [key, g] of groups) {
+  for (const [key, l] of listings) {
     const sku = nameToSku.get(key);
     if (!sku) {
-      unmatched.push(g.name);
-    } else if (g.entries.length === 1 && g.entries[0].qty === 1 && !isBundleSku(sku)) {
-      singles.push({ sku, gtin: g.entries[0].gtin });
-    } else if (isBundleSku(sku)) {
-      bundles.push({ sku, name: g.name, entries: g.entries });
+      unmatched.push(l.name);
+    } else if (l.hasBundle && l.singleGtins.size === 0 && !l.bundleConflict) {
+      bundles.push({ sku, name: l.name, entries: [...l.bundleEntries].map(([gtin, qty]) => ({ gtin, qty })) });
+    } else if (!l.hasBundle && l.singleGtins.size === 1) {
+      singles.push({ sku, gtin: [...l.singleGtins][0] });
     } else {
-      ambiguous.push(g.name);
+      ambiguous.push(l.name);
     }
   }
 
