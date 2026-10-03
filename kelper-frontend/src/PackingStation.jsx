@@ -363,6 +363,11 @@ async function post(path, body) {
 // throwing if it genuinely can't do it.
 const VIDEO_CONSTRAINTS = { width: { ideal: 1920 }, height: { ideal: 1080 } };
 
+// Client-requested (2026-10-03): an operator who does nothing for this long is
+// logged out automatically, in every state except plain "waiting for an order"
+// (see the idle-logout effect in PackingStation).
+const IDLE_LOGOUT_MS = 10 * 60 * 1000;
+
 function downloadPackingVideo(orderSn, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -681,11 +686,45 @@ function PackingStation() {
         setOperatorName('');
         setState(null);
         setLastSku(null);
-        notify('Sesi berakhir setelah 1 jam tidak aktif — keluar otomatis.', 'error');
+        notify('Sesi berakhir karena tidak aktif — keluar otomatis.', 'error');
       }
     }, 60000);
     return () => clearInterval(interval);
   }, [state?.session?.id, state?.session?.status]);
+
+  // Idle auto-logout. "Activity" is any key press (a barcode scanner types
+  // keys) or click on the station. The clock restarts whenever the station
+  // itself changes state — logging in, an order arriving, finishing a step,
+  // pausing, switching mode — so a long order is timed from its last step,
+  // not from when it was handed over. NOT timed: a logged-in station simply
+  // waiting for an order to appear (nothing for the operator to do yet).
+  // Logging out hands back any order still being scanned via check-out
+  // (see the check-out effect above); the server's stale sweep covers a
+  // station whose browser died before it could log out.
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => {
+    const mark = () => { lastActivityRef.current = Date.now(); };
+    window.addEventListener('keydown', mark);
+    window.addEventListener('pointerdown', mark);
+    return () => {
+      window.removeEventListener('keydown', mark);
+      window.removeEventListener('pointerdown', mark);
+    };
+  }, []);
+  useEffect(() => {
+    lastActivityRef.current = Date.now();
+  }, [operatorName, state?.session?.id, state?.session?.status, paused, mode]);
+  const waitingForOrder = mode === 'packing' && !state && !paused;
+  useEffect(() => {
+    if (!operatorName || waitingForOrder) return;
+    const interval = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= IDLE_LOGOUT_MS) {
+        handleLogout(`Keluar otomatis karena tidak ada aktivitas ${IDLE_LOGOUT_MS / 60000} menit.`);
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorName, waitingForOrder]);
 
   // Self-healing for the "order booked but Shopee hasn't sent item details
   // yet" gap: the server backfills order_items in the background on its
@@ -1039,11 +1078,17 @@ function PackingStation() {
     setStationReady(true);
   }
 
-  function handleLogout() {
+  // `message` is only a string for the automatic logout — the Keluar button
+  // passes its click event here, which must not be shown as text.
+  function handleLogout(message) {
     setOperatorName('');
     setState(null);
     setLastSku(null);
-    notify('Berhasil keluar', 'info');
+    // Whoever badges in next starts fresh, not paused or stuck in Shipping Mode.
+    setPaused(false);
+    setMode('packing');
+    if (typeof message === 'string') notify(message, 'error');
+    else notify('Berhasil keluar', 'info');
   }
 
   async function handleOperatorBarcode(barcode) {

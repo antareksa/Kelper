@@ -13,7 +13,7 @@
     "maxBookingFailures": 5
   },
   "session": {
-    "staleSessionSeconds": 3600,
+    "staleSessionSeconds": 600,
     "staleCheckIntervalMs": 60000
   },
   "sync": {

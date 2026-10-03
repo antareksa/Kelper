@@ -36,7 +36,7 @@ const DEFAULTS = {
     minBookingFailureMinutes: 10,
   },
   session: {
-    staleSessionSeconds: 3600,
+    staleSessionSeconds: 600,
     staleCheckIntervalMs: 60000,
   },
   sync: {
