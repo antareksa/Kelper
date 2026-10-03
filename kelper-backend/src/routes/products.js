@@ -29,22 +29,141 @@ const upsertProduct = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
-// Client's cost-tracking sheet has a fixed column order: Nama | SKU | Modal |
-// Barcode. "Modal" is HPP (cost price). Row 1 is always the header.
-router.post('/import-hpp', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'file_required', message: 'No file was uploaded.' });
+// ExcelJS hands back formula cells as { formula, result } (or a bare
+// { sharedFormula } when the file carries no cached value) and rich text as
+// { richText }. Only a cell that actually resolves to a value is usable.
+function cellValue(cell) {
+  const v = cell.value;
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    if ('result' in v) return v.result ?? null;
+    if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join('');
+    if ('text' in v) return v.text;
+    return null; // formula with no cached result
+  }
+  return v;
+}
 
+function cellText(cell) {
+  const v = cellValue(cell);
+  return v == null ? '' : String(v).trim();
+}
+
+// The client's spreadsheets identify products by their Shopee listing NAME,
+// not SKU. Names are compared after lowercasing, dropping every
+// non-alphanumeric character, and folding the one spelling the sheets and
+// Shopee disagree on (telescopic/teleskopik), so spacing, punctuation and
+// "125CM" vs "125 cm" differences don't matter.
+function normalizeName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/telescopic/g, 'teleskopik')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+// Name -> SKU for every product we know by name: single-variant Shopee
+// listings (SKU = model SKU or item SKU, same rule as /catalog) plus names
+// kept in the products table. A normalized name that points at two different
+// SKUs is ambiguous and dropped, so an upload never guesses between them.
+function buildNameToSku() {
+  const map = new Map();
+  const ambiguous = new Set();
+  const add = (name, sku) => {
+    const key = normalizeName(name);
+    if (!key || !sku) return;
+    if (map.has(key) && map.get(key) !== sku) ambiguous.add(key);
+    else map.set(key, sku);
+  };
+
+  const modelsByItem = new Map();
+  for (const m of db.prepare('SELECT item_id, model_sku FROM shopee_item_models').all()) {
+    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+    modelsByItem.get(m.item_id).push(m);
+  }
+  for (const item of db.prepare('SELECT item_id, item_sku, name FROM shopee_items').all()) {
+    const itemModels = modelsByItem.get(item.item_id) || [];
+    if (itemModels.length > 1) continue; // variations share one listing name
+    add(item.name, itemModels[0]?.model_sku || item.item_sku);
+  }
+  for (const p of db.prepare("SELECT sku, name FROM products WHERE name IS NOT NULL AND name != ''").all()) {
+    add(p.name, p.sku);
+  }
+  for (const key of ambiguous) map.delete(key);
+  return map;
+}
+
+// Finds a header cell by its text so an upload still works if the client adds
+// or reorders columns; returns the 1-based column number or null.
+function findColumn(sheet, headerRow, pattern) {
+  let found = null;
+  sheet.getRow(headerRow).eachCell((cell, col) => {
+    if (found == null && pattern.test(cellText(cell))) found = col;
+  });
+  return found;
+}
+
+// Parses the uploaded workbook's first sheet, or answers 400 itself and
+// returns null.
+async function loadSheet(req, res) {
+  if (!req.file) {
+    res.status(400).json({ error: 'file_required', message: 'No file was uploaded.' });
+    return null;
+  }
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(req.file.buffer);
   } catch {
-    return res.status(400).json({ error: 'invalid_file', message: 'Could not read this as an Excel (.xlsx) file.' });
+    res.status(400).json({ error: 'invalid_file', message: 'Could not read this as an Excel (.xlsx) file.' });
+    return null;
   }
-
   const sheet = workbook.worksheets[0];
-  if (!sheet) return res.status(400).json({ error: 'empty_file', message: 'The file has no sheets.' });
+  if (!sheet) {
+    res.status(400).json({ error: 'empty_file', message: 'The file has no sheets.' });
+    return null;
+  }
+  return sheet;
+}
+
+// Two accepted layouts, told apart by the header row:
+//  - "Nama Barang online | HPP" (the client's sheet from 2026-10-03): matched
+//    to products by listing name; writes HPP only.
+//  - the older "Nama | SKU | Modal | Barcode" sheet: matched by SKU.
+// Row 1 is always the header.
+router.post('/import-hpp', upload.single('file'), async (req, res) => {
+  const sheet = await loadSheet(req, res);
+  if (!sheet) return;
 
   const now = Math.floor(Date.now() / 1000);
+
+  if (!/sku/i.test(cellText(sheet.getRow(1).getCell(2)))) {
+    const nameCol = findColumn(sheet, 1, /nama/i) || 1;
+    const hppCol = findColumn(sheet, 1, /hpp|modal/i) || 2;
+    const nameToSku = buildNameToSku();
+    let imported = 0;
+    const unmatched = [];
+    const unreadable = [];
+
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const name = cellText(row.getCell(nameCol));
+      if (!name) return;
+      const hpp = parseRupiah(cellValue(row.getCell(hppCol)));
+      if (hpp == null) {
+        unreadable.push(name);
+        return;
+      }
+      const sku = nameToSku.get(normalizeName(name));
+      if (!sku) {
+        unmatched.push(name);
+        return;
+      }
+      upsertHpp.run(sku, hpp, now);
+      imported += 1;
+    });
+
+    return res.json({ ok: true, imported, unmatched, unreadable, skippedRows: [] });
+  }
+
   let imported = 0;
   const skippedRows = [];
 
@@ -68,7 +187,7 @@ router.post('/import-hpp', upload.single('file'), async (req, res) => {
     imported += 1;
   });
 
-  res.json({ ok: true, imported, skippedRows });
+  res.json({ ok: true, imported, skippedRows, unmatched: [], unreadable: [] });
 });
 
 router.get('/', (req, res) => {
@@ -97,6 +216,53 @@ router.put('/:sku/stock', (req, res) => {
   }
   upsertStock.run(sku, stock, Math.floor(Date.now() / 1000));
   res.json({ ok: true, sku, stock });
+});
+
+// Bulk version of the stock edit above, from the client's daily stock sheet
+// ("STOKAN ONLINE ..."): matches each DESCRIPSI to a product by listing name
+// and sets the local stock count to its "STOK AKHIR" column. A row whose
+// STOK AKHIR is empty (or a formula the file carries no result for) is
+// reported, never written as 0 -- an unknown count must not read as sold out.
+router.post('/import-stock', upload.single('file'), async (req, res) => {
+  const sheet = await loadSheet(req, res);
+  if (!sheet) return;
+
+  const nameCol = findColumn(sheet, 1, /descrip|deskrip|nama/i) || 1;
+  const stockCol = findColumn(sheet, 1, /stok\s*akhir|stock\s*akhir/i);
+  if (!stockCol) {
+    return res.status(400).json({
+      error: 'stock_column_missing',
+      message: 'Kolom "STOK AKHIR" tidak ditemukan di baris pertama sheet pertama.',
+    });
+  }
+
+  const nameToSku = buildNameToSku();
+  const now = Math.floor(Date.now() / 1000);
+  let imported = 0;
+  const unmatched = [];
+  const unreadable = [];
+
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const name = cellText(row.getCell(nameCol));
+    if (!name) return;
+
+    const raw = cellValue(row.getCell(stockCol));
+    const stock = raw === null || raw === '' ? null : Number(raw);
+    if (stock === null || !Number.isFinite(stock) || stock < 0) {
+      unreadable.push(name);
+      return;
+    }
+    const sku = nameToSku.get(normalizeName(name));
+    if (!sku) {
+      unmatched.push(name);
+      return;
+    }
+    upsertStock.run(sku, Math.round(stock), now);
+    imported += 1;
+  });
+
+  res.json({ ok: true, imported, unmatched, unreadable });
 });
 
 const upsertHpp = db.prepare(`

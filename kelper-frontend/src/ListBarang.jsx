@@ -467,6 +467,7 @@ function ListBarang() {
   const [uploadMessageType, setUploadMessageType] = useState('info'); // info | error | success
   const shopName = useShopName();
   const fileInputRef = useRef(null);
+  const stockFileInputRef = useRef(null);
 
   useEffect(() => {
     loadCatalog();
@@ -544,35 +545,47 @@ function ListBarang() {
     }
   }
 
-  // Imports HPP + Code (barcode) from the client's Excel sheet (Nama, SKU,
-  // Modal, Barcode) and assigns them onto the matching product by SKU — the
-  // join happens server-side in /products/catalog, so reloading it here is
-  // enough to reflect the new HPP/Code values against the Shopee variants.
-  async function handleFileChange(e) {
-    const file = e.target.files[0];
-    e.target.value = ''; // allow re-selecting the same file to re-import after a fix
-    if (!file) return;
+  // Imports HPP / stock from the client's Excel sheets and assigns them onto
+  // the matching product — the join to the Shopee variants happens
+  // server-side in /products/catalog, so reloading it here is enough to
+  // reflect the new values.
+  //
+  // The HPP sheet is "Nama Barang online | HPP" and the stock sheet carries a
+  // "STOK AKHIR" column; both match products by listing name, so rows that
+  // couldn't be matched or read come back by name and are listed for the
+  // client to fix rather than silently dropped.
+  function makeUploadHandler(endpoint, label) {
+    return async (e) => {
+      const file = e.target.files[0];
+      e.target.value = ''; // allow re-selecting the same file to re-import after a fix
+      if (!file) return;
 
-    setUploading(true);
-    setUploadMessage(null);
-    try {
-      const body = new FormData();
-      body.append('file', file);
-      const res = await apiFetch(`${API_BASE}/products/import-hpp`, { method: 'POST', body });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
+      setUploading(true);
+      setUploadMessage(null);
+      try {
+        const body = new FormData();
+        body.append('file', file);
+        const res = await apiFetch(`${API_BASE}/products/${endpoint}`, { method: 'POST', body });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || data.error);
 
-      const skippedNote = data.skippedRows.length > 0 ? ` (${data.skippedRows.length} baris dilewati — SKU kosong)` : '';
-      setUploadMessage(`Berhasil impor HPP untuk ${data.imported} SKU.${skippedNote}`);
-      setUploadMessageType('success');
-      await loadCatalog();
-    } catch (err) {
-      setUploadMessage(err.message);
-      setUploadMessageType('error');
-    } finally {
-      setUploading(false);
-    }
+        const notes = [];
+        if (data.skippedRows?.length > 0) notes.push(`${data.skippedRows.length} baris dilewati — SKU kosong`);
+        if (data.unmatched?.length > 0) notes.push(`Nama tidak cocok dengan produk: ${data.unmatched.join('; ')}`);
+        if (data.unreadable?.length > 0) notes.push(`Nilai kosong/tidak terbaca (tidak diubah): ${data.unreadable.join('; ')}`);
+        setUploadMessage(`Berhasil impor ${label} untuk ${data.imported} SKU.${notes.length ? ` ${notes.join('. ')}.` : ''}`);
+        setUploadMessageType(notes.length ? 'info' : 'success');
+        await loadCatalog();
+      } catch (err) {
+        setUploadMessage(err.message);
+        setUploadMessageType('error');
+      } finally {
+        setUploading(false);
+      }
+    };
   }
+  const handleFileChange = makeUploadHandler('import-hpp', 'HPP');
+  const handleStockFileChange = makeUploadHandler('import-stock', 'stok');
 
   // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
   // one taken down by Shopee) — neither is "NORMAL" anymore, but the item
@@ -662,16 +675,27 @@ function ListBarang() {
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor HPP & Kode dari Excel (Nama, SKU, Modal, Barcode)"
+          title="Impor HPP dari Excel (Nama Barang online, HPP)"
         >
           <IconUpload size={15} />
           {uploading ? 'Mengimpor...' : 'Unggah HPP'}
+        </button>
+
+        <input ref={stockFileInputRef} type="file" accept=".xlsx" onChange={handleStockFileChange} style={{ display: 'none' }} />
+        <button
+          onClick={() => stockFileInputRef.current?.click()}
+          disabled={uploading}
+          style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
+          title="Impor stok dari Excel (kolom STOK AKHIR)"
+        >
+          <IconUpload size={15} />
+          Unggah Stok
         </button>
       </div>
 
       {error && <p style={{ color: colors.red, fontSize: 13, marginBottom: 12 }}>{error}</p>}
       {uploadMessage && (
-        <p style={{ color: uploadMessageType === 'error' ? colors.red : colors.green, fontSize: 13, marginBottom: 12 }}>
+        <p style={{ color: uploadMessageType === 'error' ? colors.red : uploadMessageType === 'info' ? colors.text : colors.green, fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
           {uploadMessage}
         </p>
       )}
