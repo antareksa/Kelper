@@ -621,6 +621,10 @@ function PackingStation() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ station_id: stationId }),
+          // Lets the request finish even when this is the browser closing
+          // the page — check-out also hands back any order still being
+          // scanned, which is exactly what must not be lost on a closed tab.
+          keepalive: true,
         });
       }
     };
@@ -1088,7 +1092,26 @@ function PackingStation() {
     }
 
     if (value === 'LOGOUT') return handleLogout();
-    if (value === 'PAUSE') { setPaused(true); return notify('Dijeda', 'info'); }
+    if (value === 'PAUSE') {
+      // An order still being scanned goes back to the queue so another
+      // station can take it while this one is paused (see sessionRelease.js);
+      // a package already labelled and waiting on its label scan stays here.
+      let released = [];
+      try {
+        const out = await post('/packing/release-station', { station_id: stationId });
+        released = out.released || [];
+      } catch {
+        // Pausing must still work if the server can't be reached — the 1h
+        // stale sweep is the fallback for an order left behind.
+      }
+      setPaused(true);
+      if (state && released.some((r) => r.session_id === state.session.id)) {
+        setState(null);
+        setLastSku(null);
+        return notify(`Dijeda — order ${state.order.order_sn} dikembalikan ke antrian.`, 'info');
+      }
+      return notify('Dijeda', 'info');
+    }
     if (value === 'RESUME') { setPaused(false); return notify('Dilanjutkan', 'info'); }
     // Mode toggle works regardless of pause/session state — switching to
     // check on pickups shouldn't require first resolving whatever the

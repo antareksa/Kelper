@@ -12,6 +12,7 @@ const { startOfDayWIB } = require('../wib');
 const { uploadPackingVideo } = require('../gcs');
 const { expandPackingItems } = require('../packingItems');
 const { isBookingInFlight } = require('../shopeeSync');
+const { releaseInProgress, releaseStationSessions } = require('../sessionRelease');
 
 const router = express.Router();
 const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -366,14 +367,18 @@ router.post('/release-order', (req, res) => {
     });
   }
 
-  const release = db.transaction(() => {
-    db.prepare('DELETE FROM scan_progress WHERE session_id = ?').run(session_id);
-    db.prepare('DELETE FROM packing_sessions WHERE id = ?').run(session_id);
-    db.prepare("UPDATE orders SET status = 'READY_TO_PACK' WHERE order_sn = ?").run(state.order.order_sn);
-  });
-  release();
+  releaseInProgress(state.session);
 
   res.json({ ok: true, order_sn: state.order.order_sn });
+});
+
+// PAUSE (and LOGOUT, via operators.js's check-out): hands back whatever this
+// station is still working on so it doesn't sit stuck on a paused/absent
+// operator — see sessionRelease.js for exactly which statuses are released.
+router.post('/release-station', (req, res) => {
+  const { station_id } = req.body;
+  if (!station_id) return res.status(400).json({ error: 'station_id is required' });
+  res.json({ ok: true, released: releaseStationSessions(station_id) });
 });
 
 // Auto-release sessions nobody has touched in over an hour, so an operator
@@ -389,14 +394,7 @@ function releaseStaleSessions() {
     .prepare("SELECT id, order_sn FROM packing_sessions WHERE status = 'IN_PROGRESS' AND last_activity_at < ?")
     .all(cutoff);
 
-  for (const s of stale) {
-    const release = db.transaction(() => {
-      db.prepare('DELETE FROM scan_progress WHERE session_id = ?').run(s.id);
-      db.prepare('DELETE FROM packing_sessions WHERE id = ?').run(s.id);
-      db.prepare("UPDATE orders SET status = 'READY_TO_PACK' WHERE order_sn = ?").run(s.order_sn);
-    });
-    release();
-  }
+  for (const s of stale) releaseInProgress(s);
 }
 function scheduleStaleCheck() {
   releaseStaleSessions();

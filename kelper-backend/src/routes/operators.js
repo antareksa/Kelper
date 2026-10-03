@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { startOfTodayWIB } = require('../wib');
 const { requireAdminAuth } = require('../adminSession');
+const { releaseStationSessions } = require('../sessionRelease');
 
 const router = express.Router();
 
@@ -41,6 +42,10 @@ router.post('/check-out', (req, res) => {
   const { station_id } = req.body;
   if (!station_id) return res.status(400).json({ error: 'station_id is required' });
   db.prepare('DELETE FROM station_sessions WHERE station_id = ?').run(station_id);
+  // Anything this station was still scanning goes back to the queue — an
+  // operator who logs out (or whose station times out) must not strand their
+  // order.
+  releaseStationSessions(station_id);
   // Closes out the most recent still-open shift for this station -- "open"
   // (checked_out_at IS NULL) rather than matching by operator name, since a
   // station can only have one operator checked in at a time anyway, and this
