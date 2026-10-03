@@ -578,9 +578,9 @@ function code39PdfOps(value, { x, y, width, height }) {
 
 // Builds a tiny valid PDF from scratch (no external deps) so debug-mode
 // "labels" flow through the same print/reprint/download paths as a real
-// Shopee label. Barcode encodes the order id, not the tracking number — a
-// real Shopee label's scannable barcode is the order id ("No. Pesanan"), and
-// /packing/confirm-pickup checks against order_sn accordingly.
+// Shopee label. Barcode encodes the order id ("No. Pesanan"); the live
+// labels' barcode gives the resi instead, so /packing/confirm-print and
+// /packing/confirm-pickup accept either one (see labelMatchesOrder there).
 function buildMockPdf(orderSn, trackingNo) {
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',

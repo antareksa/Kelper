@@ -455,26 +455,45 @@ router.post('/resume-besok', async (req, res) => {
   await finalizeLeftover(session, order, res);
 });
 
+// What a scanned label can be: the tracking number ("No. Resi", client-
+// requested 2026-10-03 -- the live labels' barcode gives the resi) or the
+// order number ("No. Pesanan"), which is what an earlier real printed label
+// was found to encode. Both are accepted for both label scans below (the
+// print check and Shipping Mode's pickup scan), compared case-insensitively
+// and ignoring surrounding whitespace, so a label that encodes either one
+// works and neither breaks the other.
+function scannedLabelValue(body) {
+  // `scanned` is the current name; `order_sn` is what older station pages
+  // (loaded before this change) still send.
+  return String(body.scanned ?? body.order_sn ?? '').trim();
+}
+
+function labelMatchesOrder(order, scanned) {
+  const v = scanned.toUpperCase();
+  if (!v) return false;
+  return v === String(order.order_sn).toUpperCase() || (!!order.tracking_no && v === String(order.tracking_no).toUpperCase());
+}
+
 // CONFIRM PRINT — the closed-loop check that a just-printed label actually
 // came out of the printer correctly: right after finalizeCompletedOrder /
 // finalizeLeftover print the label, the station blocks (AWAITING_LABEL_SCAN)
-// until the operator scans that same label back. The barcode on a real
-// Shopee label encodes the order id ("No. Pesanan" / order_sn), not the
-// tracking/shipping number — confirmed against a real printed label. A
-// mismatch (or the operator giving up and scanning RELEASE_ORDER-equivalent
-// elsewhere) is treated as "something's wrong with the printer" — there is
-// deliberately no separate print-failure detection beyond this scan.
+// until the operator scans that same label back (its resi or order number —
+// see labelMatchesOrder). A mismatch (or the operator giving up and scanning
+// RELEASE_ORDER-equivalent elsewhere) is treated as "something's wrong with
+// the printer" — there is deliberately no separate print-failure detection
+// beyond this scan.
 router.post('/confirm-print', (req, res) => {
-  const { session_id, order_sn: scannedOrderSn } = req.body;
+  const { session_id } = req.body;
+  const scanned = scannedLabelValue(req.body);
   const state = getSessionWithOrder(session_id);
   if (!state) return res.status(404).json({ error: 'session_not_found' });
   if (state.session.status !== 'AWAITING_LABEL_SCAN') {
     return res.status(400).json({ error: 'not_awaiting_label_scan', status: state.session.status });
   }
-  if (scannedOrderSn !== state.order.order_sn) {
+  if (!labelMatchesOrder(state.order, scanned)) {
     return res.status(400).json({
       error: 'label_mismatch',
-      message: `Scanned ${scannedOrderSn} doesn't match this order (${state.order.order_sn}) — printer may not have printed the right label. Scan REPRINT to try again.`,
+      message: `Hasil scan "${scanned}" tidak cocok dengan order ini (resi ${state.order.tracking_no || state.order.order_sn}) — printer mungkin salah mencetak label. Scan REPRINT untuk mencoba lagi.`,
     });
   }
 
@@ -492,9 +511,7 @@ router.post('/confirm-print', (req, res) => {
 // and may well happen from a different station (or a batch, when the
 // courier arrives) than the one that did the packing.
 //
-// The barcode actually printed on a real Shopee label encodes the order id
-// ("No. Pesanan" / order_sn), not the tracking/shipping number — confirmed
-// against a real printed label.
+// The scan can be the label's resi or order number (see labelMatchesOrder).
 // Shared by the route below and the "Force All Pickup" bulk action. Returns
 // the picked-up timestamp, or null if the order wasn't actually in
 // Ready to Pickup (caller decides how to report that).
@@ -533,17 +550,36 @@ function confirmOrderPickedUp(orderSn) {
 }
 
 router.post('/confirm-pickup', (req, res) => {
-  const { order_sn: scannedOrderSn } = req.body;
-  const pickedUpAt = confirmOrderPickedUp(scannedOrderSn);
+  const scanned = scannedLabelValue(req.body);
+
+  // Resolve the scan (resi or order number) to the order sitting in Ready to
+  // Pickup. A resi is unique per package in practice, but if two ready
+  // packages ever did share one, guessing would mark the wrong one picked up
+  // -- so that's refused instead.
+  const matches = scanned
+    ? db.prepare(`
+        SELECT o.order_sn FROM packing_sessions ps
+        JOIN orders o ON o.order_sn = ps.order_sn
+        WHERE ps.status = 'READY_FOR_PICKUP'
+          AND (UPPER(o.order_sn) = UPPER(?) OR (o.tracking_no IS NOT NULL AND UPPER(o.tracking_no) = UPPER(?)))
+      `).all(scanned, scanned)
+    : [];
+  if (matches.length > 1) {
+    return res.status(409).json({ error: 'ambiguous_label', message: `Resi/order "${scanned}" cocok dengan ${matches.length} paket — tidak bisa dipastikan yang mana.` });
+  }
+  const orderSn = matches.length === 1 ? matches[0].order_sn : null;
+  const pickedUpAt = orderSn ? confirmOrderPickedUp(orderSn) : null;
   if (pickedUpAt == null) {
-    return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scannedOrderSn} is not in the Ready to Pickup pool` });
+    return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scanned || '(kosong)'} tidak ada di daftar Siap Diambil` });
   }
 
   // created_at/picked_up_at let the Shipping Mode screen show the same
   // "ORDER ID / DITERIMA / DIPICKUP EKSPEDISI" confirmation as the wireframe,
-  // instead of just an ok flag.
-  const order = db.prepare('SELECT created_at FROM orders WHERE order_sn = ?').get(scannedOrderSn);
-  res.json({ ok: true, order_sn: scannedOrderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
+  // instead of just an ok flag. order_sn is the RESOLVED order number even
+  // when the scan was a resi -- the station uses it to drop the row from its
+  // on-screen queue.
+  const order = db.prepare('SELECT created_at FROM orders WHERE order_sn = ?').get(orderSn);
+  res.json({ ok: true, order_sn: orderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
 });
 
 // Shipping Mode's live pickup queue (client-requested 2026-09-30) -- station-

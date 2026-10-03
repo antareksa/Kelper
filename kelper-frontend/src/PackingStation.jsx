@@ -1097,7 +1097,9 @@ function PackingStation() {
     if (mode === 'shipping') {
       submittingRef.current = true;
       try {
-        const data = await post('/packing/confirm-pickup', { order_sn: value });
+        // What was scanned off the label -- its resi or order number; the
+        // server resolves which order that is (see routes/packing.js).
+        const data = await post('/packing/confirm-pickup', { scanned: value });
         // Optimistic — drops it from the on-screen queue immediately instead
         // of waiting up to 3s for the next poll to notice.
         setPickupList((list) => list.filter((o) => o.order_sn !== data.order_sn));
@@ -1163,7 +1165,7 @@ function PackingStation() {
           autoPrintLabel(state.session.id);
           return notify('Mencetak ulang label...', 'info');
         }
-        const data = await post('/packing/confirm-print', { session_id: state.session.id, order_sn: value });
+        const data = await post('/packing/confirm-print', { session_id: state.session.id, scanned: value });
         return applyState(data);
       }
 
