@@ -48,7 +48,7 @@ function getSessionWithOrder(sessionId) {
   const session = db.prepare('SELECT * FROM packing_sessions WHERE id = ?').get(sessionId);
   if (!session) return null;
   const order = db.prepare(`
-    SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
+    SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, is_dropoff, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
     FROM orders WHERE order_sn = ?
   `).get(session.order_sn);
   const items = db.prepare('SELECT * FROM order_items WHERE order_sn = ?').all(session.order_sn);
@@ -566,7 +566,7 @@ router.get('/pickup-list', (req, res) => {
 
   const orders = db
     .prepare(`
-      SELECT o.order_sn, o.shipping_carrier, o.is_instant
+      SELECT o.order_sn, o.shipping_carrier, o.is_instant, o.is_dropoff
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ? AND ps.station_id = ?
@@ -681,9 +681,12 @@ router.get('/session/:id', (req, res) => {
 // least one. `readyToCheckEnteredAt` is only passed for Ready to Check rows,
 // per the client's own definition of "stuck" (time in that bucket
 // specifically, not the order's total age).
-function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needsRetryShip }) {
+function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needsRetryShip, isDropoff }) {
   const tags = [];
   if (isInstant) tags.push('instant');
+  // Booked for drop-off (the courier offered no pickup) -- staff have to take
+  // this parcel to the courier's counter; nobody comes to collect it.
+  if (isDropoff) tags.push('dropoff');
   if (sessionStartedAt != null && sessionStartedAt < startOfDayWIB(0)) tags.push('from_yesterday');
   if (readyToCheckEnteredAt != null && now() - readyToCheckEnteredAt > getReadyToCheckStuckSeconds()) tags.push('stuck');
   if (needsRetryShip) tags.push('retry_ship');
@@ -733,7 +736,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const readyToCheck = db
     .prepare(`
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
         AND (o.label_ready = 1 OR ? = 0)
@@ -747,7 +750,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       -- A Pack Besok order that's now labeled: claimable, but only via its
       -- own barcode scan (resume-besok), not a generic NEXT_ORDER pick —
       -- internal_barcode is included so ops can see which code to look for.
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
@@ -759,33 +762,33 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       // fresh/unlabeled-outside-work-hour case, one that was never booked at
       // all) — entered the pool when it cleared its own delay.
       const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds();
-      return { ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
+      return { ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
     });
 
   const onProgressCheck = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.is_instant, o.label_ready, o.label_printed
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.is_instant, o.is_dropoff, o.label_ready, o.label_printed
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN') AND o.shop_id = ?
       ORDER BY ps.started_at ASC
     `)
     .all(shop_id)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.started_at }) }));
 
   // needs_retry_ship = 0 here on purpose — those orders show in the
   // dedicated "Late Pickup" bucket below instead, so an order needing
   // attention isn't just an icon buried in a list of otherwise-fine ones.
   const readyForPickup = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.pickup_time_label
+      SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.is_dropoff, o.pickup_time_label
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 0 AND o.shop_id = ?
       ORDER BY ps.last_activity_at ASC
     `)
     .all(shop_id)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.started_at }) }));
 
   // Client-requested (2026-09-29): Shopee moves an order to RETRY_SHIP when
   // the courier misses its scheduled pickup window (confirmed against a real

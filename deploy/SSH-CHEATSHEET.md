@@ -82,6 +82,20 @@ untouched. You must type the actual shop_id (e.g. `227886187`) — it refuses
 to run without one, on purpose, so it can never accidentally wipe a real
 shop by mistake.
 
+## Release an order stuck in Masalah because booking failed
+
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/release-exception.js <order_sn> [<order_sn> ...]
+```
+For an order that landed in Orderan Bermasalah only because booking with
+Shopee kept failing (the reason on the card reads like a Shopee error, and
+the station shows "SYSTEM / Auto (Booking Gagal)"). Run it **after** the cause
+is fixed; the order goes back to the queue and booking is retried on the next
+tick. It refuses on purpose if an operator already worked on the order
+(releasing could lose scan records), if it has scan records, or if the order
+is cancelled, and tells you why.
+
 ## Check service status / logs
 
 ```bash

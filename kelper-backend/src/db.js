@@ -344,6 +344,13 @@ const newOrderCols = {
   // anyone claimed it needs no follow-up and stays 0. Cleared by that
   // screen's own "Selesaikan" button.
   cancel_needs_resolve: 'INTEGER NOT NULL DEFAULT 0',
+  // Client-requested (2026-10-03): 1 when the courier offered no pickup for
+  // this order (confirmed for SiCepat REG on the live shop) and it was booked
+  // for drop-off instead -- a staff member has to take the parcel to the
+  // courier's counter, nobody comes to collect it. Set at booking
+  // (shopeeSync.js's bookOneOrder); left alone when the package already
+  // existed and this booking didn't choose. Drives the "Antar ke gerai" tag.
+  is_dropoff: 'INTEGER NOT NULL DEFAULT 0',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

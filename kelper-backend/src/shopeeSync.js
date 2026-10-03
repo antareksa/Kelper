@@ -246,15 +246,17 @@ function flagOrderAsException(orderSn, reason) {
 // forever.
 async function bookOneOrder(accessToken, shopId, orderSn) {
   try {
-    const { trackingNumber, packageNumber, documentType, pickupTimeLabel } = await bookShipment(accessToken, shopId, orderSn);
+    const { trackingNumber, packageNumber, documentType, pickupTimeLabel, isDropoff } = await bookShipment(accessToken, shopId, orderSn);
     const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
     if (!docResult.pdf) {
       throw new Error(`download_shipping_document failed: ${docResult.message || docResult.error || 'no pdf returned'}`);
     }
 
-    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number), pickup_time_label = COALESCE(?, pickup_time_label), booking_fail_count = 0, booking_first_failed_at = NULL, booking_last_error = NULL WHERE order_sn = ?')
-      .run(trackingNumber, docResult.pdf, now(), packageNumber, pickupTimeLabel, orderSn);
-    console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked, tracking ${trackingNumber})`);
+    // isDropoff is null when this booking didn't choose a method (the package
+    // already existed), so COALESCE keeps whatever is already stored.
+    db.prepare('UPDATE orders SET tracking_no = ?, label_pdf = ?, label_ready = 1, label_ready_at = ?, package_number = COALESCE(?, package_number), pickup_time_label = COALESCE(?, pickup_time_label), is_dropoff = COALESCE(?, is_dropoff), booking_fail_count = 0, booking_first_failed_at = NULL, booking_last_error = NULL WHERE order_sn = ?')
+      .run(trackingNumber, docResult.pdf, now(), packageNumber, pickupTimeLabel, isDropoff == null ? null : (isDropoff ? 1 : 0), orderSn);
+    console.log(`[server] bucket: ${orderSn} -> Ready to Check (booked${isDropoff ? ' for DROP-OFF' : ''}, tracking ${trackingNumber})`);
   } catch (err) {
     const prior = db.prepare('SELECT booking_fail_count, booking_first_failed_at FROM orders WHERE order_sn = ?').get(orderSn);
     const failCount = (prior?.booking_fail_count ?? 0) + 1;

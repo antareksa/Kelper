@@ -35,16 +35,27 @@ const TAG_META = {
   from_yesterday: { Icon: IconMoon, color: colors.orange, title: 'Order dari kemarin' },
   stuck: { Icon: IconAlertTriangle, color: colors.red, title: 'Belum dicek — sudah lama di Ready to Check' },
   retry_ship: { Icon: IconRotateCcw, color: colors.red, title: 'Kurir gagal ambil paket — perlu diatur ulang di Shopee' },
+  // A text chip, not just an icon (client-requested 2026-10-03): unlike the
+  // other tags this is something staff must physically act on -- nobody
+  // collects this parcel, it has to be taken to the courier's counter.
+  dropoff: { label: 'ANTAR KE GERAI', color: colors.orange, title: 'Kurir tidak menjemput — paket ini harus diantar ke gerai kurir' },
 };
 
 function OrderTags({ tags }) {
   if (!tags || tags.length === 0) return null;
   return (
-    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+    <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
       {tags.map((tag) => {
         const meta = TAG_META[tag];
         if (!meta) return null;
-        const { Icon, color, title } = meta;
+        const { Icon, label, color, title } = meta;
+        if (label) {
+          return (
+            <span key={tag} title={title} style={{ fontSize: 10, fontWeight: 700, color: colors.bg, background: color, padding: '1px 6px', borderRadius: 4 }}>
+              {label}
+            </span>
+          );
+        }
         return (
           <span key={tag} title={title} style={{ display: 'inline-flex', color }}>
             <Icon size={13} />

@@ -68,6 +68,46 @@ function pickPickupOption(pickup) {
   return { address_id: address.address_id, pickup_time_id: slot.pickup_time_id, pickupLabel: slot.time_text };
 }
 
+// Client-reported (2026-10-03), confirmed against two real SiCepat REG orders
+// on the live shop: for some couriers Shopee offers NO pickup at all
+// ({info_needed:{dropoff:[]}, dropoff:{branch_list:[]}}, no `pickup` key) --
+// the seller takes the parcel to the courier's counter instead of waiting for
+// a pickup. The shop does have a pickup address; that courier simply doesn't
+// do pickup, so this was previously misreported as "no pickup address".
+//
+// info_needed.dropoff lists what ship_order's `dropoff` object must carry.
+// Empty (as seen) means `dropoff: {}`. branch_id can be satisfied from the
+// listed branches; anything else (sender_real_name, tracking_no) needs a value
+// KELPER doesn't have, so it fails loudly with the field name instead of
+// guessing -- that lands the order in Masalah with a readable reason.
+function pickDropoffOption(response) {
+  const dropoff = {};
+  for (const field of response?.info_needed?.dropoff || []) {
+    if (field === 'branch_id') {
+      const branch = response.dropoff?.branch_list?.[0];
+      if (!branch) throw new Error('Drop-off needs a branch but Shopee listed none for this order');
+      dropoff.branch_id = branch.branch_id;
+    } else {
+      throw new Error(`Drop-off needs "${field}", which KELPER cannot supply yet`);
+    }
+  }
+  return dropoff;
+}
+
+// Pickup stays the first choice whenever Shopee offers it; drop-off is only
+// used when pickup isn't available. pickupLabel is null for drop-off (there is
+// no scheduled courier window).
+function pickShippingMethod(response) {
+  if (response?.pickup?.address_list?.length) {
+    const { pickupLabel, ...pickup } = pickPickupOption(response.pickup);
+    return { isDropoff: false, pickup, pickupLabel };
+  }
+  if (response?.dropoff !== undefined || response?.info_needed?.dropoff !== undefined) {
+    return { isDropoff: true, dropoff: pickDropoffOption(response), pickupLabel: null };
+  }
+  throw new Error('Shopee offers neither pickup nor drop-off for this order');
+}
+
 // Shared by both booking paths below: once ship_order/mass_ship_order has
 // booked the shipment, Shopee needs a moment before the tracking number and
 // the label document are actually ready — poll rather than assuming either is
@@ -168,6 +208,9 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
 
   let packageNumber = alreadyBookedMatch?.[1] ?? null;
   let pickupTimeLabel = null;
+  // null = not decided by this call (the package already existed, e.g. it was
+  // arranged in Seller Center), so whatever is already stored is left alone.
+  let isDropoff = null;
 
   if (!alreadyBookedMatch) {
     // pickupLabel can genuinely be undefined -- confirmed against a real
@@ -175,9 +218,13 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
     // (just date/pickup_time_id/flags, no label). Stored as plain NULL
     // (better-sqlite3 binds undefined as NULL), which the dashboard already
     // shows as "—" — not a bug, just an occasional gap in Shopee's own data.
-    const { pickupLabel, ...pickup } = pickPickupOption(shippingParam.response?.pickup);
-    pickupTimeLabel = pickupLabel;
-    const shipResult = await shipOrder(accessToken, shopId, { order_sn: orderSn, pickup });
+    const method = pickShippingMethod(shippingParam.response);
+    pickupTimeLabel = method.pickupLabel;
+    isDropoff = method.isDropoff;
+    const shipResult = await shipOrder(accessToken, shopId, {
+      order_sn: orderSn,
+      ...(method.isDropoff ? { dropoff: method.dropoff } : { pickup: method.pickup }),
+    });
 
     if (shipResult.error) {
       const alreadyShipped = ALREADY_SHIPPED_PATTERN.test(shipResult.message || '');
@@ -203,7 +250,7 @@ async function bookShipmentSingle(accessToken, shopId, orderSn, cfg) {
   }
 
   const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber, documentType, pickupTimeLabel };
+  return { trackingNumber, packageNumber, documentType, pickupTimeLabel, isDropoff };
 }
 
 // Mass-shipping path: get_mass_shipping_parameter -> mass_ship_order.
@@ -229,10 +276,13 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
 
   const body = { package_list: [{ package_number: packageNumber }] };
   let pickupTimeLabel = null;
-  if (massParam.response?.pickup?.address_list?.length) {
-    const { pickupLabel, ...pickup } = pickPickupOption(massParam.response.pickup);
-    pickupTimeLabel = pickupLabel;
-    body.pickup = pickup;
+  let isDropoff = null;
+  if (massParam.response?.pickup?.address_list?.length || massParam.response?.dropoff !== undefined) {
+    const method = pickShippingMethod(massParam.response);
+    pickupTimeLabel = method.pickupLabel;
+    isDropoff = method.isDropoff;
+    if (method.isDropoff) body.dropoff = method.dropoff;
+    else body.pickup = method.pickup;
   }
 
   const massResult = await massShipOrder(accessToken, shopId, body);
@@ -247,7 +297,7 @@ async function bookShipmentMass(accessToken, shopId, orderSn, cfg) {
   }
 
   const { trackingNumber, documentType } = await pollTrackingAndDocument(accessToken, shopId, orderSn, cfg);
-  return { trackingNumber, packageNumber, documentType, pickupTimeLabel };
+  return { trackingNumber, packageNumber, documentType, pickupTimeLabel, isDropoff };
 }
 
 // One-time backfill for orders that were already booked/labeled before
@@ -261,8 +311,11 @@ async function learnPackageNumber(accessToken, shopId, orderSn) {
 }
 
 // Books the real shipment on Shopee and generates the real label PDF.
-// Returns { trackingNumber, packageNumber, documentType, pickupTimeLabel }
-// once a document is confirmed READY — packageNumber is what shopeeSync.js
+// Returns { trackingNumber, packageNumber, documentType, pickupTimeLabel,
+// isDropoff } once a document is confirmed READY (isDropoff: true when the
+// courier offered no pickup and the order was booked for drop-off at the
+// courier's counter, false for a normal pickup, null when this call didn't
+// choose -- the package already existed) — packageNumber is what shopeeSync.js
 // uses to fetch item details via get_package_detail, working around
 // order/get_order_detail's failure on new orders. documentType is whichever
 // type actually succeeded (PREFERRED_SHIPPING_DOCUMENT_TYPE, or the

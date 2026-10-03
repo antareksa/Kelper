@@ -239,6 +239,11 @@ function PickupQueueCard({ orders }) {
                   INSTANT
                 </span>
               )}
+              {!!o.is_dropoff && (
+                <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.blue, padding: '2px 6px', borderRadius: 4, verticalAlign: 'middle' }}>
+                  ANTAR KE GERAI
+                </span>
+              )}
             </span>
             <span style={{ fontSize: 13, fontWeight: 600, color: colors.textDim, textTransform: 'uppercase', flexShrink: 0 }}>
               {o.shipping_carrier || '—'}
@@ -746,6 +751,13 @@ function PackingStation() {
       return { text: 'Semua Item sudah di scan, Segera bungkus semua item. Lalu tempel resi ekpedisi. Jika paket sudah siap scan kembali resi ekpedisi', type: 'info' };
     }
     if (session.status === 'READY_FOR_PICKUP') {
+      // A drop-off order (the courier offered no pickup) won't be collected --
+      // the operator has to know this parcel is theirs to take to the
+      // courier's counter, so it's said right here instead of relying on
+      // them to notice a tag elsewhere.
+      if (state.order.is_dropoff) {
+        return { text: `Terkonfirmasi — tempelkan pada paket. PAKET INI DIANTAR KE GERAI ${state.order.shipping_carrier || 'kurir'} (tidak dijemput). Mengambil order berikutnya...`, type: 'success' };
+      }
       return { text: `Terkonfirmasi — tempelkan pada paket. Mengambil order berikutnya...`, type: 'success' };
     }
     if (session.status === 'IN_PROGRESS') {
