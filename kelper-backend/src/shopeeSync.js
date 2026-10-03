@@ -244,7 +244,18 @@ function flagOrderAsException(orderSn, reason) {
 // config.shipping.maxBookingFailures consecutive failures, after which it's
 // flagged to Masalah (see flagOrderAsException above) instead of retried
 // forever.
+// Orders whose book-ship call is running RIGHT NOW (at most
+// maxConcurrentBookings of them). The Order Lists panel's "Processing" bucket
+// is exactly this set -- not every order that is merely eligible and waiting
+// for a free slot, which would make "Maks Proses Order = 2" look like it was
+// ignored whenever more than two orders were queued. In memory on purpose: the
+// sync loop and the routes run in the same server process, and nothing is
+// "in flight" after a restart anyway.
+const bookingInFlight = new Set();
+const isBookingInFlight = (orderSn) => bookingInFlight.has(orderSn);
+
 async function bookOneOrder(accessToken, shopId, orderSn) {
+  bookingInFlight.add(orderSn);
   try {
     const { trackingNumber, packageNumber, documentType, pickupTimeLabel, isDropoff } = await bookShipment(accessToken, shopId, orderSn);
     const docResult = await downloadShippingDocument(accessToken, shopId, orderSn, trackingNumber, documentType);
@@ -270,6 +281,8 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
     if (maxBookingFailures > 0 && failCount >= maxBookingFailures && failingLongEnough) {
       flagOrderAsException(orderSn, err.message);
     }
+  } finally {
+    bookingInFlight.delete(orderSn);
   }
 }
 
@@ -914,4 +927,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight };

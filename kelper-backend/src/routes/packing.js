@@ -11,6 +11,7 @@ const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWo
 const { startOfDayWIB } = require('../wib');
 const { uploadPackingVideo } = require('../gcs');
 const { expandPackingItems } = require('../packingItems');
+const { isBookingInFlight } = require('../shopeeSync');
 
 const router = express.Router();
 const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -737,21 +738,25 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   const cutoff = now() - getOrderDelaySeconds();
   const withinWorkHour = isWithinWorkHour();
 
-  const waitingList = db
+  const waitingDelay = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant
       FROM orders
       WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at > ?
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff)
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) }));
+    .all(shop_id, cutoff);
 
-  // "Processing" = any order whose book-ship call with Shopee is currently
-  // being attempted — true for a brand-new order the same way it's true for
-  // a Pack Besok order once work hour opens and bookDeferredOrders starts
-  // sweeping it. Same rule, same bucket, regardless of which one it is.
-  const processing = db
+  // "Processing" = an order whose book-ship call with Shopee is running right
+  // now — true for a brand-new order the same way it's true for a Pack Besok
+  // order once work hour opens and bookDeferredOrders starts sweeping it.
+  // Fixed 2026-10-03: this used to list EVERY eligible unlabeled order, so
+  // with "Maks Proses Order" = 2 and ten orders queued it showed ten under
+  // Diproses even though only two were ever being booked. The query below
+  // still selects all eligible orders; they are split afterwards — in flight
+  // stays here, the rest are queued behind the cap and wait in Waiting List
+  // (fresh orders) or Ready to Process Tomorrow (packed leftovers).
+  const eligibleUnlabeled = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
       WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
@@ -770,6 +775,15 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     `)
     .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at }) }));
+
+  const processing = eligibleUnlabeled.filter((row) => isBookingInFlight(row.order_sn));
+  // A fresh order (no session yet) waiting for a free booking slot is still
+  // just waiting, like one inside its cancellation delay.
+  const queuedFresh = eligibleUnlabeled.filter((row) => row.session_started_at == null && !isBookingInFlight(row.order_sn));
+  const waitingList = [
+    ...waitingDelay.map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) })),
+    ...queuedFresh,
+  ].sort((a, b) => a.created_at - b.created_at);
 
   const readyToCheck = db
     .prepare(`
@@ -845,19 +859,21 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .all(shop_id)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at, needsRetryShip: true }) }));
 
-  // Only genuinely still waiting — work hour hasn't opened yet, so
-  // bookDeferredOrders hasn't even started trying to book it. Once work
-  // hour opens it moves to "Processing" above (booking in flight), then
-  // "Ready to Check" once labeled — never back here.
+  // Packed leftovers that are still waiting for their real label: either work
+  // hour hasn't opened yet, or it has but this order hasn't got a booking slot
+  // yet (see "Maks Proses Order"). Only while its booking call is actually
+  // running is it shown under "Processing" above, then "Ready to Check" once
+  // labeled.
   const readyTomorrow = db
     .prepare(`
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.internal_barcode, ps.started_at, o.buyer_name, o.is_instant
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 0
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0
       ORDER BY ps.started_at ASC
     `)
-    .all(shop_id, withinWorkHour ? 1 : 0)
+    .all(shop_id)
+    .filter((row) => !isBookingInFlight(row.order_sn))
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.started_at }) }));
 
   // Client-requested (2026-09-29): dropped from here -- Problem Order
@@ -989,7 +1005,7 @@ function resolveOrderBucket(orderSn) {
   if (session) {
     if (session.status === 'DEFERRED_READY') {
       if (order.label_ready) return { order, session, bucket: 'Ready to Check', rank: 2 };
-      return { order, session, bucket: withinWorkHour ? 'Processing' : 'Ready to Process Tomorrow', rank: 1 };
+      return { order, session, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Ready to Process Tomorrow', rank: 1 };
     }
     if (['IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN'].includes(session.status)) {
       return { order, session, bucket: 'On Progress Check', rank: 3 };
@@ -1001,7 +1017,9 @@ function resolveOrderBucket(orderSn) {
   }
 
   if (order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
-  if (!order.label_ready && withinWorkHour) return { order, session: null, bucket: 'Processing', rank: 1 };
+  if (!order.label_ready && withinWorkHour) {
+    return { order, session: null, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Waiting List', rank: 1 };
+  }
   return { order, session: null, bucket: 'Ready to Check', rank: 2 };
 }
 
