@@ -589,11 +589,13 @@ router.post('/confirm-pickup', (req, res) => {
 // Shipping Mode's live pickup queue (client-requested 2026-09-30) -- station-
 // facing (no admin auth, same as the rest of this file's scan endpoints), so
 // the operator sees exactly what's still waiting for the courier instead of
-// a blank "scan a label" prompt with no context. Scoped to just this
-// station's own packed orders (client-requested 2026-09-30) -- a station
-// only physically holds what it packed itself, so showing every station's
-// queue here would list boxes this operator can't actually see or hand over.
-// Covers both on-time and Late Pickup (needs_retry_ship) sessions -- a
+// a blank "scan a label" prompt with no context. Originally scoped to just
+// the requesting station's own packed orders (2026-09-30); changed
+// 2026-10-04 so Shipping Mode lists EVERY order in Ready to Pickup whichever
+// station packed it, and anyone can hand it over -- confirm-pickup above
+// never checked the station anyway, so the list now matches what a scan can
+// actually do. station_id is optional and only counts as a sign of life for
+// the station asking. Covers both on-time and Late Pickup (needs_retry_ship) sessions -- a
 // courier grabbing the box doesn't care about that flag, it's still
 // physically sitting there. Sorted instant-first (courier picks those up
 // first, same convention as Order Lists' other buckets), then
@@ -602,7 +604,6 @@ router.get('/pickup-list', (req, res) => {
   const shopId = Number(req.query.shop_id);
   const { station_id: stationId } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
-  if (!stationId) return res.status(400).json({ error: 'station_id_required', message: 'station_id is required' });
   touchStation(stationId);
 
   const orders = db
@@ -610,10 +611,10 @@ router.get('/pickup-list', (req, res) => {
       SELECT o.order_sn, o.shipping_carrier, o.is_instant, o.is_dropoff
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ? AND ps.station_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
       ORDER BY o.is_instant DESC, ps.last_activity_at ASC
     `)
-    .all(shopId, stationId);
+    .all(shopId);
 
   res.json({ orders });
 });
