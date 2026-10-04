@@ -468,11 +468,11 @@ function PackingStation() {
   // setup); the scanner test below should work the moment the screen loads,
   // same as the real scan input does once logged in — no click needed.
   useEffect(() => {
-    if (!stationReady) testScanInputRef.current?.focus();
+    if (!stationReady) testScanInputRef.current?.focus({ preventScroll: true });
   }, [stationReady]);
 
   useEffect(() => {
-    if (stationReady && inputRef.current) inputRef.current.focus();
+    if (stationReady && inputRef.current) inputRef.current.focus({ preventScroll: true });
   }, [stationReady, operatorName, state]);
 
   // Kiosk-mode prints silently and instantly, with no OS dialog — but the
@@ -487,8 +487,8 @@ function PackingStation() {
   // .print() call, and the watchdog below keeps re-asserting it afterward.
   function focusScanInput() {
     window.focus();
-    if (stationReady) inputRef.current?.focus();
-    else testScanInputRef.current?.focus();
+    if (stationReady) inputRef.current?.focus({ preventScroll: true });
+    else testScanInputRef.current?.focus({ preventScroll: true });
   }
 
   // Self-healing backstop: whatever specifically stole focus — a button, the
@@ -509,7 +509,7 @@ function PackingStation() {
       const target = stationReady ? inputRef.current : testScanInputRef.current;
       if (!target) return;
       window.focus();
-      target.focus();
+      target.focus({ preventScroll: true });
     }, 400);
     return () => clearInterval(interval);
   }, [stationReady]);
@@ -1447,7 +1447,7 @@ function PackingStation() {
             value={testScanValue}
             onChange={(e) => setTestScanValue(e.target.value)}
             onKeyDown={handleTestScan}
-            onBlur={() => testScanInputRef.current && testScanInputRef.current.focus()}
+            onBlur={() => testScanInputRef.current && testScanInputRef.current.focus({ preventScroll: true })}
             placeholder="Scan atau ketik, lalu tekan Enter"
             style={setupInputStyle}
           />
@@ -1568,7 +1568,7 @@ function PackingStation() {
         value={scanValue}
         onChange={(e) => setScanValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') handleScanSubmit(e); }}
-        onBlur={() => inputRef.current && inputRef.current.focus()}
+        onBlur={() => inputRef.current && inputRef.current.focus({ preventScroll: true })}
         message={infoMessage}
         type={infoType}
       />
