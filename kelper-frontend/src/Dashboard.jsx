@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
+import StockList from './StockList';
 import BundleList from './BundleList';
 import OrderSearch from './OrderSearch';
 import OperatorPerformance from './OperatorPerformance';
@@ -287,13 +288,21 @@ function Dashboard() {
                     {DASHBOARD_TAB.label}
                   </button>
 
-                  <button
-                    onClick={() => navigate(ITEMS_TAB.path)}
-                    style={navItemStyle(location.pathname === ITEMS_TAB.path)}
-                  >
-                    <ItemsIcon size={16} />
-                    {ITEMS_TAB.label}
-                  </button>
+                </>
+              )}
+
+              {/* List Barang is for everyone: a Packing Station admin gets the
+                  stock-only version (StockList), a full admin the whole page. */}
+              <button
+                onClick={() => navigate(ITEMS_TAB.path)}
+                style={navItemStyle(location.pathname === ITEMS_TAB.path)}
+              >
+                <ItemsIcon size={16} />
+                {ITEMS_TAB.label}
+              </button>
+
+              {!isPacking && (
+                <>
 
                   <button
                     onClick={() => navigate(BUNDLE_TAB.path)}
@@ -427,7 +436,7 @@ function Dashboard() {
           <Routes>
             <Route path="/" element={<Navigate to={homePath} replace />} />
             <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
-            <Route path="/list-barang" element={isPacking ? <Navigate to={homePath} replace /> : <ListBarang />} />
+            <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
             <Route path="/bundle" element={isPacking ? <Navigate to={homePath} replace /> : <BundleList />} />
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />

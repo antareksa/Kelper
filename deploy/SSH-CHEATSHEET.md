@@ -62,10 +62,11 @@ whole Dashboard.
 cd /opt/kelper/kelper-backend
 NODE_ENV=production node scripts/manage-admin.js add <username> <password> packing
 ```
-Creates a **Packing Station admin**: after login they only see the Packing
-Station Dashboard and Order menus (no Dashboard, List Barang, List Bundle or
-Pengaturan, and no fetching on/off switch). Enforced on the server, not just
-hidden in the menu.
+Creates a **Packing Station admin**: after login they see the Packing Station
+Dashboard, Order, and List Barang with **stock only** (they can edit stock
+numbers and upload the stock sheet, but never see HPP, Harga, barcode, profit
+or sales). No Dashboard, List Bundle or Pengaturan, and no fetching on/off
+switch. Enforced on the server, not just hidden in the menu.
 
 ```bash
 cd /opt/kelper/kelper-backend

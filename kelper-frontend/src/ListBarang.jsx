@@ -68,7 +68,7 @@ function avgProfitPct(variants) {
 // initials — a variant has no short code worth abbreviating) when there's
 // no image at all, which the catalog endpoint already tries to avoid by
 // falling back to the item's own photo before this ever renders.
-function VariantThumb({ image }) {
+export function VariantThumb({ image }) {
   const ref = useRef(null);
   const [hovering, setHovering] = useState(false);
 
@@ -116,7 +116,7 @@ function ImageHoverPreview({ src, anchorRect }) {
 // db.js's migration comment for why the client wants these to be able to
 // disagree. Saves on blur/Enter rather than per-keystroke; an empty field
 // clears it back to null (unknown), not 0.
-function StockInput({ sku, value, onSaved }) {
+export function StockInput({ sku, value, onSaved }) {
   const [draft, setDraft] = useState(value == null ? '' : String(value));
   const [saving, setSaving] = useState(false);
 

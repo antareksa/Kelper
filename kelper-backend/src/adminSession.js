@@ -47,16 +47,23 @@ function getSession(token) {
 // pattern] pairs matched against the full request path. Everything else is
 // refused with 403, so hiding menu items in the page is only a convenience:
 // this is what actually keeps that account out of the rest of the dashboard
-// (Dashboard figures, List Barang, List Bundle, Shopee settings, the
+// (Dashboard figures, HPP/Harga/barcode, List Bundle, Shopee settings, the
 // fetching on/off switch). Packing Station Dashboard = every /packing/ and
 // /operators/ admin route plus the operator-performance report; Order =
-// order search and the read-only queue/sync status.
+// order search and the read-only queue/sync status; List Barang = stock only
+// (the products entries below).
 const PACKING_ROLE_ALLOWED = [
   [null, /^\/packing\//],
   [null, /^\/operators\//],
   ['GET', /^\/orders\/(search|sync-status|queue-counts)$/],
   ['GET', /^\/reports\/operator-performance$/],
   ['GET', /^\/shop\/info$/],
+  // List Barang, stock only: the stock-only list, editing one SKU's stock, and
+  // the stock sheet upload. Not /products/catalog (it carries HPP, Harga,
+  // profit and sales), and none of the other product writes.
+  ['GET', /^\/products\/stock-list$/],
+  ['PUT', /^\/products\/[^/]+\/stock$/],
+  ['POST', /^\/products\/import-stock$/],
   ['GET', /^\/admin\/me$/],
 ];
 

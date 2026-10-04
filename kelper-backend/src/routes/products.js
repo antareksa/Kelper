@@ -781,4 +781,48 @@ router.get('/catalog', (req, res) => {
   res.json(catalog);
 });
 
+// Client-requested (2026-10-04): the stock-only view for a Packing Station
+// admin (the 'packing' role sees List Barang with stock and nothing else --
+// see adminSession.js's PACKING_ROLE_ALLOWED). Deliberately its own endpoint
+// instead of a filtered /catalog: this response never contains HPP, Harga,
+// barcode, profit or sales figures at all, so that login cannot read them
+// however it asks. Same listing rules as /catalog (bundles left out, natural
+// SKU order, model-then-item image).
+router.get('/stock-list', (req, res) => {
+  const skuOf = (i) => i.item_sku || `ITEM-${i.item_id}`;
+  const items = db
+    .prepare('SELECT item_id, item_sku, name, item_status, image_url FROM shopee_items')
+    .all()
+    .filter((i) => !isBundleSku(i.item_sku))
+    .sort((a, b) => skuOf(a).localeCompare(skuOf(b), undefined, { numeric: true, sensitivity: 'base' }));
+  const stockBySku = new Map(db.prepare('SELECT sku, stock FROM products').all().map((p) => [p.sku, p.stock]));
+
+  const modelsByItem = new Map();
+  for (const m of db.prepare('SELECT item_id, model_id, model_sku, model_name, stock, image_url FROM shopee_item_models').all()) {
+    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+    modelsByItem.get(m.item_id).push(m);
+  }
+
+  res.json(
+    items.map((item) => ({
+      item_id: item.item_id,
+      sku: skuOf(item),
+      name: item.name,
+      status: item.item_status,
+      image: item.image_url,
+      variants: (modelsByItem.get(item.item_id) || []).map((m) => {
+        const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
+        return {
+          model_id: m.model_id,
+          sku,
+          name: m.model_name,
+          image: m.image_url || item.image_url || null,
+          shopeeStock: m.stock,
+          dashboardStock: stockBySku.get(sku) ?? null,
+        };
+      }),
+    }))
+  );
+});
+
 module.exports = router;
