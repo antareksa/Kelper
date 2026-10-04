@@ -885,7 +885,21 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   // Masalah screen, which already covers the same sessions plus
   // cancellations, rather than duplicating the same list in two places.
 
-  res.json({ waitingList, processing, readyToCheck, onProgressCheck, readyForPickup, latePickup, readyTomorrow });
+  // Client-requested (2026-10-04): instant orders go first in EVERY bucket,
+  // not just Ready to Check. Array.sort is stable, so within each group the
+  // order each query already chose (oldest first, or newest first where that
+  // is the point of the list) is kept.
+  const instantFirst = (rows) => [...rows].sort((a, b) => (b.is_instant ? 1 : 0) - (a.is_instant ? 1 : 0));
+
+  res.json({
+    waitingList: instantFirst(waitingList),
+    processing: instantFirst(processing),
+    readyToCheck: instantFirst(readyToCheck),
+    onProgressCheck: instantFirst(onProgressCheck),
+    readyForPickup: instantFirst(readyForPickup),
+    latePickup: instantFirst(latePickup),
+    readyTomorrow: instantFirst(readyTomorrow),
+  });
 });
 
 // Cancel & Masalah (client-requested 2026-09-27) — a dedicated admin view for

@@ -301,7 +301,8 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
 //     left alone entirely (shown as "Waiting List" — see routes/packing.js)
 //     so the buyer has a real window to cancel before a shipment is committed.
 //   - maxReadyToCheck: if the "Ready to Check" pool is already at/over this
-//     cap, only book enough of the oldest eligible orders to fill the
+//     cap, only book enough eligible orders — instant orders first, then the
+//     oldest (client-requested 2026-10-04) — to fill the
 //     remaining slots — the rest stay unlabeled until a station clears some
 //     of the backlog, rather than piling up more printed labels than
 //     stations can realistically work through.
@@ -318,7 +319,7 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0 AND o.created_at <= ?
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
-      ORDER BY o.created_at ASC
+      ORDER BY o.is_instant DESC, o.created_at ASC
     `)
     .all(shopId, cutoff);
 
@@ -360,7 +361,7 @@ async function bookDeferredOrders(accessToken, shopId) {
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0
-      ORDER BY ps.last_activity_at ASC
+      ORDER BY o.is_instant DESC, ps.last_activity_at ASC
     `)
     .all(shopId);
   if (pending.length === 0) return;
