@@ -192,7 +192,7 @@ function ActiveStation() {
           }}
         >
           <div>
-            <div style={{ fontWeight: 700, color: colors.text }}>{s.station_id} - {s.operator_name}</div>
+            <div style={{ fontWeight: 700, color: colors.text }}>{s.operator_name}</div>
             <div style={{ color: colors.textDim, fontSize: 13, marginTop: 2 }}>
               {s.current_order_sn ? `Sedang mengerjakan Order Id ${s.current_order_sn}` : 'Menunggu order packing masuk'}
             </div>
@@ -697,8 +697,7 @@ function OrderLists() {
                     <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
                     {(row.station_id || row.operator_name) && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
-                        {row.station_id}
-                        {row.operator_name && ` (${row.operator_name})`}
+                        {row.operator_name || row.station_id}
                       </div>
                     )}
                     {row.status === 'AWAITING_LABEL_SCAN' && (
@@ -811,8 +810,7 @@ function OrderListsViewOnly() {
                     <div style={{ fontWeight: 600, color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{row.order_sn}</div>
                     {(row.station_id || row.operator_name) && (
                       <div style={{ color: colors.textDim, marginTop: 2 }}>
-                        {row.station_id}
-                        {row.operator_name && ` (${row.operator_name})`}
+                        {row.operator_name || row.station_id}
                       </div>
                     )}
                     {row.status === 'AWAITING_LABEL_SCAN' && (
@@ -960,8 +958,7 @@ function CancelMasalahList() {
                         </div>
                         {(row.station_id || row.operator_name) && (
                           <div style={{ color: colors.textDim, marginTop: 2 }}>
-                            {row.station_id}
-                            {row.operator_name && ` (${row.operator_name})`}
+                            {row.operator_name || row.station_id}
                           </div>
                         )}
                         {row.exception_reason && (

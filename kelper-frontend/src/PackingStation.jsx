@@ -369,15 +369,15 @@ const VIDEO_CONSTRAINTS = { width: { ideal: 1920 }, height: { ideal: 1080 } };
 const IDLE_LOGOUT_MS = 10 * 60 * 1000;
 
 // Client-requested (2026-10-04): the quick launcher (start-packing-station-
-// quick.bat) opens the station with the PC's name in the address
-// (?station=<PC name>) and skips the setup screen. That name becomes the
-// station ID; null when the page was opened the normal way (setup screen).
-function stationFromUrl() {
+// quick.bat) opens the station with ?quick=1 in the address and skips the setup
+// screen. (Launchers installed before the station name was dropped sent
+// ?station=<PC name>; that still means "skip setup", the name is ignored.)
+function openedByQuickLauncher() {
   try {
-    const name = new URLSearchParams(window.location.search).get('station');
-    return name && name.trim() ? name.trim().slice(0, 40) : null;
+    const params = new URLSearchParams(window.location.search);
+    return params.has('quick') || params.has('station');
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -435,11 +435,15 @@ function PackingStation() {
   // the shop is fixed), then whichever operator is on shift identifies
   // themselves by scanning their own barcode — matching the tech doc's
   // LOGIN OPERATOR command.
-  // Opened with ?station=<PC name> (the quick launcher): that name is the
-  // station ID and the setup screen is skipped.
-  const [urlStation] = useState(stationFromUrl);
-  const [stationReady, setStationReady] = useState(() => urlStation != null);
-  const [stationId, setStationId] = useState(() => urlStation || 'STATION-A');
+  // Opened by the quick launcher: the setup screen is skipped.
+  const [skipSetup] = useState(openedByQuickLauncher);
+  const [stationReady, setStationReady] = useState(() => skipSetup);
+  // The station is identified by the operator who logs in (client-requested
+  // 2026-10-04): the server derives this from the login barcode's operator and
+  // hands it back at login (see routes/operators.js's /lookup) -- never typed in
+  // and never taken from the PC's name, so two machines cannot end up on the
+  // same ID and be handed the same order. Empty until someone has logged in.
+  const [stationId, setStationId] = useState('');
   const [operatorName, setOperatorName] = useState('');
   const [testScanValue, setTestScanValue] = useState('');
   const [lastTestScan, setLastTestScan] = useState(null);
@@ -756,7 +760,7 @@ function PackingStation() {
     let cancelled = false;
     async function loadPickupList() {
       try {
-        const res = await fetch(`${API_BASE}/packing/pickup-list?shop_id=${SHOP_ID}&station_id=${stationId}`);
+        const res = await fetch(`${API_BASE}/packing/pickup-list?shop_id=${SHOP_ID}`);
         if (res.ok && !cancelled) setPickupList((await res.json()).orders);
       } catch {
         // best-effort — a missed refresh just means a stale list until the next poll
@@ -765,7 +769,7 @@ function PackingStation() {
     loadPickupList();
     const interval = setInterval(loadPickupList, 3000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [mode, stationId]);
+  }, [mode]);
 
   // Detects the backend auto-releasing this session after 1h of inactivity
   // (operator walked away and never came back) and logs the operator out —
@@ -1065,7 +1069,6 @@ function PackingStation() {
         </head>
         <body>
           <h2>TEST PRINT OK</h2>
-          <p>Station: ${stationId}</p>
           <p>Paper: ${paperWidthMm}mm x ${paperHeightMm}mm</p>
           <p>Time: ${new Date().toLocaleString()}</p>
         </body>
@@ -1151,9 +1154,9 @@ function PackingStation() {
   // login (see handleOperatorBarcode) — setOperatorName() there hasn't been
   // applied to the `operatorName` state yet by the time this runs in the same
   // tick, so falling back to the closed-over state would send an empty name.
-  async function grabNextOrder(overrideOperatorName) {
+  async function grabNextOrder(overrideOperatorName, overrideStationId) {
     try {
-      const data = await post('/packing/next-order', { station_id: stationId, shop_id: SHOP_ID, operator_name: overrideOperatorName ?? operatorName });
+      const data = await post('/packing/next-order', { station_id: overrideStationId ?? stationId, shop_id: SHOP_ID, operator_name: overrideOperatorName ?? operatorName });
       setLastSku(null);
       // Otherwise a still-ticking flash from the order that just finished
       // (e.g. the permanent green "all complete" state) would visibly bleed
@@ -1175,6 +1178,7 @@ function PackingStation() {
   // passes its click event here, which must not be shown as text.
   function handleLogout(message) {
     setOperatorName('');
+    setStationId('');
     setState(null);
     setLastSku(null);
     // Whoever badges in next starts fresh, not paused or stuck in Shipping Mode.
@@ -1186,15 +1190,12 @@ function PackingStation() {
 
   async function handleOperatorBarcode(barcode) {
     try {
-      const res = await fetch(`${API_BASE}/operators/lookup?barcode=${encodeURIComponent(barcode)}&station_id=${encodeURIComponent(stationId)}&device_id=${encodeURIComponent(getDeviceId())}`);
+      const res = await fetch(`${API_BASE}/operators/lookup?barcode=${encodeURIComponent(barcode)}&device_id=${encodeURIComponent(getDeviceId())}`);
       const data = await res.json();
-      if (!res.ok) {
-        // Another machine already holds this station ID. With a typed ID go back
-        // to the setup screen so it can be changed (the message is shown there);
-        // with the quick launcher the ID is the PC name, so only the message.
-        if (data.error === 'station_in_use' && urlStation == null) setStationReady(false);
-        throw new Error(data.message || data.error);
-      }
+      // 409: this operator is already logged in on another computer -- the
+      // message says to log out there first.
+      if (!res.ok) throw new Error(data.message || data.error);
+      setStationId(data.station_id);
       setOperatorName(data.name);
       notify(`Selamat datang, ${data.name}.`, 'success');
       // No separate NEXT_ORDER scan needed to start a shift — go straight
@@ -1203,7 +1204,7 @@ function PackingStation() {
       setBusy(true);
       setBusyLabel('Mencari order berikutnya...');
       try {
-        await grabNextOrder(data.name);
+        await grabNextOrder(data.name, data.station_id);
       } finally {
         setBusy(false);
       }
@@ -1398,8 +1399,6 @@ function PackingStation() {
             <IconMonitor size={18} />
             <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Station</span>
           </div>
-          <label style={setupLabelStyle}>ID Station</label>
-          <input data-mouse-input="true" value={stationId} onChange={(e) => setStationId(e.target.value)} style={setupInputStyle} />
           <button data-mouse-input="true" type="submit" style={setupSubmitStyle}>Lanjutkan</button>
           {infoMessage && (
             <p style={{ marginTop: 12, fontSize: 13, color: infoType === 'error' ? colors.red : infoType === 'success' ? colors.green : colors.textDim }}>
@@ -1510,7 +1509,6 @@ function PackingStation() {
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
             {mode === 'shipping' ? 'Mode Pengiriman' : 'Packing Station'}
           </div>
-          <div style={{ fontSize: 12, color: colors.textDim }}>{stationId}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>

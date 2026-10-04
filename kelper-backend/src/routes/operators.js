@@ -13,8 +13,26 @@ function now() {
   return Math.floor(Date.now() / 1000);
 }
 
-// LOGIN OPERATOR — looks up the operator by barcode and, if a station_id is
-// given, checks them into that station (for the admin Active Station view).
+// LOGIN OPERATOR -- looks up the operator by login barcode and checks them in.
+//
+// The station is identified by THE OPERATOR, not by a name typed or taken from
+// the PC (client-requested 2026-10-04): station_id is derived here from the
+// operator's own id and the page just adopts what this returns. Before this,
+// the ID came from the machine, and machines that ended up with the same ID
+// (a typed default, or Windows cutting packing-station-1/-2/-3 to the same 15
+// characters) were merged into ONE station -- /next-order then handed every one
+// of them the order that "station" already held, so different operators worked
+// the same order (seen in production 2026-10-04). An operator's id can never
+// collide with another's, whatever the PCs are called or wherever they log in.
+// It is the operator's database id, not the login barcode itself, because the
+// barcode works as their login and this ID appears in unauthenticated
+// responses and the dashboards.
+//
+// What it still guards against is one operator logged in on TWO machines at
+// once (they would share one current order): a different machine holding this
+// operator and heard from within STATION_DEAD_AFTER_SECONDS is refused; logging
+// out, or three minutes of silence, frees the operator for another machine.
+// An older page that sends no device_id is not checked.
 router.get('/lookup', (req, res) => {
   const { barcode, station_id, device_id } = req.query;
   if (!barcode) return res.status(400).json({ error: 'barcode is required' });
@@ -22,20 +40,18 @@ router.get('/lookup', (req, res) => {
   const operator = db.prepare('SELECT id, name FROM operators WHERE login_barcode = ?').get(barcode);
   if (!operator) return res.status(404).json({ error: 'operator_not_found', message: 'Unknown operator barcode' });
 
-  if (station_id) {
-    // One station ID = one machine. If a DIFFERENT machine already holds this
-    // ID and has been heard from recently, refuse instead of silently merging
-    // the two: merged stations share a single "current order", so both
-    // operators get the same one. An older page that sends no device_id is
-    // not checked (nothing to compare), and a machine that has gone silent
-    // frees its ID after STATION_DEAD_AFTER_SECONDS (stationPresence.js).
+  const stationId = `OPR-${operator.id}`;
+
+  // A client that sends neither is only validating a barcode; checking in is
+  // for the Packing Station page (it sends a device_id, older ones a station_id).
+  if (station_id || device_id) {
     if (device_id) {
-      const held = db.prepare('SELECT operator_name, device_id, checked_in_at, last_seen_at FROM station_sessions WHERE station_id = ?').get(station_id);
+      const held = db.prepare('SELECT operator_name, device_id, checked_in_at, last_seen_at FROM station_sessions WHERE station_id = ?').get(stationId);
       const seen = held ? (held.last_seen_at ?? held.checked_in_at) : 0;
       if (held && held.device_id && held.device_id !== device_id && now() - seen < STATION_DEAD_AFTER_SECONDS) {
         return res.status(409).json({
-          error: 'station_in_use',
-          message: `ID station "${station_id}" sedang dipakai ${held.operator_name} di komputer lain. Setiap komputer harus punya ID station sendiri — ganti ID station, atau ganti nama PC jika memakai launcher cepat.`,
+          error: 'operator_in_use',
+          message: `${operator.name} sudah masuk di komputer lain. Keluar dulu di komputer itu; jika komputer itu mati, tunggu sekitar 3 menit lalu coba lagi.`,
         });
       }
     }
@@ -43,15 +59,15 @@ router.get('/lookup', (req, res) => {
       INSERT INTO station_sessions (station_id, operator_name, checked_in_at, last_seen_at, device_id)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at, last_seen_at = excluded.last_seen_at, device_id = excluded.device_id
-    `).run(station_id, operator.name, now(), now(), device_id || null);
+    `).run(stationId, operator.name, now(), now(), device_id || null);
     // Client-requested (2026-09-30): station_sessions above is a live-only
     // table (one row per station, overwritten/deleted on every check-in/out)
     // with no memory of past shifts -- this append-only log is what actually
     // powers the Kinerja Operator report's absensi columns.
-    db.prepare('INSERT INTO attendance_log (station_id, operator_name, checked_in_at) VALUES (?, ?, ?)').run(station_id, operator.name, now());
+    db.prepare('INSERT INTO attendance_log (station_id, operator_name, checked_in_at) VALUES (?, ?, ?)').run(stationId, operator.name, now());
   }
 
-  res.json(operator);
+  res.json({ ...operator, station_id: stationId });
 });
 
 // LOGOUT (or the 1h auto-timeout) — clears this station from the Active
