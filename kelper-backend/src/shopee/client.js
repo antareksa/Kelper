@@ -39,8 +39,16 @@ const MAIN_CREDENTIALS = {
   authBase: SHOPEE_AUTH_BASE,
   authType: 'seller',
 };
+// TEMPORARY (client-requested 2026-10-04): the Brand Portal app's Partner ID
+// is fixed here instead of read from SHOPEE_BRAND_PARTNER_ID, because the
+// Brand Portal login could not be completed with the configured one. Only the
+// ID is fixed -- the signing key still comes from SHOPEE_BRAND_PARTNER_KEY, so
+// that key must belong to this same Partner ID or every signed Brand call
+// (the token exchange included) will be refused as a bad signature. To go back
+// to the setting, replace this with SHOPEE_BRAND_PARTNER_ID.
+const BRAND_PARTNER_ID_FIXED = '1025507';
 const BRAND_CREDENTIALS = {
-  partnerId: SHOPEE_BRAND_PARTNER_ID,
+  partnerId: BRAND_PARTNER_ID_FIXED,
   partnerKey: SHOPEE_BRAND_PARTNER_KEY,
   redirectUri: SHOPEE_BRAND_REDIRECT_URI,
   authBase: SHOPEE_BRAND_AUTH_BASE || SHOPEE_AUTH_BASE,
