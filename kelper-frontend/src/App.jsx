@@ -50,6 +50,9 @@ function initialView() {
   if (isShopeeCallback()) return 'shopee-callback';
   const host = window.location.hostname;
   if (host.startsWith('packing')) return 'packing';
+  // The quick launcher names the station in the address (?station=<PC name>);
+  // that is a Packing Station on any host, including a local preview.
+  if (new URLSearchParams(window.location.search).has('station')) return 'packing';
   if (host.startsWith('dashboard')) return 'dashboard';
   return 'landing';
 }

@@ -368,6 +368,34 @@ const VIDEO_CONSTRAINTS = { width: { ideal: 1920 }, height: { ideal: 1080 } };
 // (see the idle-logout effect in PackingStation).
 const IDLE_LOGOUT_MS = 10 * 60 * 1000;
 
+// Client-requested (2026-10-04): the quick launcher (start-packing-station-
+// quick.bat) opens the station with the PC's name in the address
+// (?station=<PC name>) and skips the setup screen. That name becomes the
+// station ID; null when the page was opened the normal way (setup screen).
+function stationFromUrl() {
+  try {
+    const name = new URLSearchParams(window.location.search).get('station');
+    return name && name.trim() ? name.trim().slice(0, 40) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The label paper size is chosen once on the setup screen and was only held in
+// memory, so a launch that skips setup would always fall back to the default.
+// The dedicated Chrome profile keeps localStorage between launches, so the
+// size set during the initial setup carries over.
+const PAPER_SIZE_KEY = 'kelper_paper_size_mm';
+function loadPaperSize() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PAPER_SIZE_KEY));
+    if (saved && saved.w > 0 && saved.h > 0) return saved;
+  } catch {
+    // no saved size, or storage unavailable — use the default
+  }
+  return { w: 100, h: 120 };
+}
+
 function downloadPackingVideo(orderSn, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -384,13 +412,25 @@ function PackingStation() {
   // the shop is fixed), then whichever operator is on shift identifies
   // themselves by scanning their own barcode — matching the tech doc's
   // LOGIN OPERATOR command.
-  const [stationReady, setStationReady] = useState(false);
-  const [stationId, setStationId] = useState('STATION-A');
+  // Opened with ?station=<PC name> (the quick launcher): that name is the
+  // station ID and the setup screen is skipped.
+  const [urlStation] = useState(stationFromUrl);
+  const [stationReady, setStationReady] = useState(() => urlStation != null);
+  const [stationId, setStationId] = useState(() => urlStation || 'STATION-A');
   const [operatorName, setOperatorName] = useState('');
   const [testScanValue, setTestScanValue] = useState('');
   const [lastTestScan, setLastTestScan] = useState(null);
-  const [paperWidthMm, setPaperWidthMm] = useState(100);
-  const [paperHeightMm, setPaperHeightMm] = useState(120);
+  const [paperWidthMm, setPaperWidthMm] = useState(() => loadPaperSize().w);
+  const [paperHeightMm, setPaperHeightMm] = useState(() => loadPaperSize().h);
+  useEffect(() => {
+    try {
+      if (paperWidthMm > 0 && paperHeightMm > 0) {
+        localStorage.setItem(PAPER_SIZE_KEY, JSON.stringify({ w: paperWidthMm, h: paperHeightMm }));
+      }
+    } catch {
+      // storage unavailable — the size just won't carry over to the next launch
+    }
+  }, [paperWidthMm, paperHeightMm]);
   const [hwCheckCode, setHwCheckCode] = useState(null);
   const [hwCheckStatus, setHwCheckStatus] = useState('idle'); // idle | awaiting_scan | pass | fail
 

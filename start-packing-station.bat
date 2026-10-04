@@ -64,7 +64,11 @@ if errorlevel 1 (
   pause
 )
 
-start chrome --app=%SERVER_URL% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
+REM LAUNCH_QUERY is empty for this normal launcher (the page opens on the
+REM station setup screen). start-packing-station-quick.bat sets it to a
+REM station name for the page and then runs THIS file, so both launchers
+REM always use the same SERVER_URL, profile and video setup from one place.
+start chrome --app=%SERVER_URL%%LAUNCH_QUERY% --start-fullscreen --kiosk-printing --user-data-dir="%~dp0.kiosk-chrome-profile"
 
 REM Old recordings older than 7 days are deleted here, once per launch,
 REM rather than via a separate Windows Scheduled Task — the station already
