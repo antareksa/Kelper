@@ -439,6 +439,16 @@ const stationSessionCols = db.prepare("PRAGMA table_info(station_sessions)").all
 if (!stationSessionCols.includes('last_seen_at')) {
   db.exec('ALTER TABLE station_sessions ADD COLUMN last_seen_at INTEGER');
 }
+// Which physical machine (browser profile) holds this station ID right now. A
+// station is identified only by the ID typed at setup, so two machines left on
+// the same ID were treated as ONE station: each new login overwrote the last
+// and /next-order handed every one of them the order that "station" already
+// held -- different operators ended up on the same order (seen in production
+// 2026-10-04, three operators on one ID). The login now refuses a second
+// machine on an ID that is in use; see routes/operators.js's /lookup.
+if (!stationSessionCols.includes('device_id')) {
+  db.exec('ALTER TABLE station_sessions ADD COLUMN device_id TEXT');
+}
 
 // Client-requested (2026-10-04): roles for dashboard logins. 'admin' is the
 // full dashboard (everything, as before); 'packing' is a Packing Station admin

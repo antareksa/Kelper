@@ -381,6 +381,29 @@ function stationFromUrl() {
   }
 }
 
+// An ID for THIS machine (its Chrome profile), made once and kept in
+// localStorage. The server uses it to tell two machines apart when both are
+// set to the same station ID: before, they were silently treated as one
+// station and every operator was handed the same order (seen in production
+// 2026-10-04). A fresh random value per page load is the fallback when
+// storage is unavailable -- then the check just can't recognise a re-login
+// from the same machine, which only means a harmless refusal until it times out.
+const DEVICE_ID_KEY = 'kelper_device_id';
+let memoryDeviceId = null;
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    if (!memoryDeviceId) memoryDeviceId = `mem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return memoryDeviceId;
+  }
+}
+
 // The label paper size is chosen once on the setup screen and was only held in
 // memory, so a launch that skips setup would always fall back to the default.
 // The dedicated Chrome profile keeps localStorage between launches, so the
@@ -1163,9 +1186,15 @@ function PackingStation() {
 
   async function handleOperatorBarcode(barcode) {
     try {
-      const res = await fetch(`${API_BASE}/operators/lookup?barcode=${encodeURIComponent(barcode)}&station_id=${encodeURIComponent(stationId)}`);
+      const res = await fetch(`${API_BASE}/operators/lookup?barcode=${encodeURIComponent(barcode)}&station_id=${encodeURIComponent(stationId)}&device_id=${encodeURIComponent(getDeviceId())}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error);
+      if (!res.ok) {
+        // Another machine already holds this station ID. With a typed ID go back
+        // to the setup screen so it can be changed (the message is shown there);
+        // with the quick launcher the ID is the PC name, so only the message.
+        if (data.error === 'station_in_use' && urlStation == null) setStationReady(false);
+        throw new Error(data.message || data.error);
+      }
       setOperatorName(data.name);
       notify(`Selamat datang, ${data.name}.`, 'success');
       // No separate NEXT_ORDER scan needed to start a shift — go straight

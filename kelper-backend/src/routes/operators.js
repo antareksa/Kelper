@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { startOfTodayWIB } = require('../wib');
 const { requireAdminAuth } = require('../adminSession');
-const { touchStation, checkOutStation, startPresenceSweep } = require('../stationPresence');
+const { touchStation, checkOutStation, startPresenceSweep, STATION_DEAD_AFTER_SECONDS } = require('../stationPresence');
 
 startPresenceSweep();
 
@@ -16,18 +16,34 @@ function now() {
 // LOGIN OPERATOR — looks up the operator by barcode and, if a station_id is
 // given, checks them into that station (for the admin Active Station view).
 router.get('/lookup', (req, res) => {
-  const { barcode, station_id } = req.query;
+  const { barcode, station_id, device_id } = req.query;
   if (!barcode) return res.status(400).json({ error: 'barcode is required' });
 
   const operator = db.prepare('SELECT id, name FROM operators WHERE login_barcode = ?').get(barcode);
   if (!operator) return res.status(404).json({ error: 'operator_not_found', message: 'Unknown operator barcode' });
 
   if (station_id) {
+    // One station ID = one machine. If a DIFFERENT machine already holds this
+    // ID and has been heard from recently, refuse instead of silently merging
+    // the two: merged stations share a single "current order", so both
+    // operators get the same one. An older page that sends no device_id is
+    // not checked (nothing to compare), and a machine that has gone silent
+    // frees its ID after STATION_DEAD_AFTER_SECONDS (stationPresence.js).
+    if (device_id) {
+      const held = db.prepare('SELECT operator_name, device_id, checked_in_at, last_seen_at FROM station_sessions WHERE station_id = ?').get(station_id);
+      const seen = held ? (held.last_seen_at ?? held.checked_in_at) : 0;
+      if (held && held.device_id && held.device_id !== device_id && now() - seen < STATION_DEAD_AFTER_SECONDS) {
+        return res.status(409).json({
+          error: 'station_in_use',
+          message: `ID station "${station_id}" sedang dipakai ${held.operator_name} di komputer lain. Setiap komputer harus punya ID station sendiri — ganti ID station, atau ganti nama PC jika memakai launcher cepat.`,
+        });
+      }
+    }
     db.prepare(`
-      INSERT INTO station_sessions (station_id, operator_name, checked_in_at, last_seen_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at, last_seen_at = excluded.last_seen_at
-    `).run(station_id, operator.name, now(), now());
+      INSERT INTO station_sessions (station_id, operator_name, checked_in_at, last_seen_at, device_id)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(station_id) DO UPDATE SET operator_name = excluded.operator_name, checked_in_at = excluded.checked_in_at, last_seen_at = excluded.last_seen_at, device_id = excluded.device_id
+    `).run(station_id, operator.name, now(), now(), device_id || null);
     // Client-requested (2026-09-30): station_sessions above is a live-only
     // table (one row per station, overwritten/deleted on every check-in/out)
     // with no memory of past shifts -- this append-only log is what actually

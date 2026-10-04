@@ -31,6 +31,14 @@ The PC name becomes the station name (shown capitalised, e.g. `PACK-01`) in
 Active Station, the attendance and the reports. Give every station PC its own
 short name; two PCs with the same name count as one station.
 
+**Every PC needs its own station ID.** The server treats a station ID as ONE
+machine. Two machines on the same ID are merged into one station, and both
+operators are handed the *same order*. The login now refuses a second machine
+on an ID that is in use ("ID station ... sedang dipakai ... di komputer lain"):
+on the normal launcher the screen returns to setup so you can type another ID;
+with the quick launcher the ID is the PC name, so rename the PC. An ID frees
+up at once on logout, or about 3 minutes after a machine goes silent.
+
 ## 2. Initial setup (once per PC)
 
 Run `start-packing-station.bat`, then on the setup screen:
@@ -91,5 +99,8 @@ No full setup again — but run the **normal** launcher once to check:
   (and the `.ps1`) in the same folder and start it from a shortcut.
 - **Does not open right after Windows starts** — the network may not be ready
   yet at login. Start it again, or ask for the launcher to wait for the server.
+- **Two operators got the same order** — two machines were using the same
+  station ID. Give each PC its own ID (normal launcher: type it at setup;
+  quick launcher: rename the PC).
 - **Setup screen: can't reach Lanjutkan on a short screen** — fixed in the
   current version; reopen the Packing Station after the server was updated.
