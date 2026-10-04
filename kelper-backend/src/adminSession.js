@@ -12,11 +12,14 @@ function now() {
   return Date.now();
 }
 
-function createSession() {
+// role: 'admin' (the whole dashboard, the default -- also what every caller
+// that predates roles gets) or 'packing' (Packing Station admin, see
+// PACKING_ROLE_ALLOWED below). username only labels whose session this is.
+function createSession(role = 'admin', username = null) {
   const token = crypto.randomBytes(32).toString('hex');
   const createdAt = now();
-  db.prepare('INSERT INTO admin_sessions (token, created_at, expires_at) VALUES (?, ?, ?)')
-    .run(token, createdAt, createdAt + SESSION_TTL_MS);
+  db.prepare('INSERT INTO admin_sessions (token, created_at, expires_at, role, username) VALUES (?, ?, ?, ?, ?)')
+    .run(token, createdAt, createdAt + SESSION_TTL_MS, role, username);
   return token;
 }
 
@@ -29,10 +32,37 @@ function destroySession(token) {
 // this table is small and only ever touched at login-time request volume,
 // so there's no need for a dedicated cleanup job.
 function isValidSession(token) {
-  if (!token) return false;
+  return getSession(token) !== null;
+}
+
+// { role, username } for a live session, null otherwise.
+function getSession(token) {
+  if (!token) return null;
   db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').run(now());
-  const row = db.prepare('SELECT 1 FROM admin_sessions WHERE token = ?').get(token);
-  return !!row;
+  const row = db.prepare('SELECT role, username FROM admin_sessions WHERE token = ?').get(token);
+  return row || null;
+}
+
+// What a 'packing' (Packing Station admin) login may call -- [method, path
+// pattern] pairs matched against the full request path. Everything else is
+// refused with 403, so hiding menu items in the page is only a convenience:
+// this is what actually keeps that account out of the rest of the dashboard
+// (Dashboard figures, List Barang, List Bundle, Shopee settings, the
+// fetching on/off switch). Packing Station Dashboard = every /packing/ and
+// /operators/ admin route plus the operator-performance report; Order =
+// order search and the read-only queue/sync status.
+const PACKING_ROLE_ALLOWED = [
+  [null, /^\/packing\//],
+  [null, /^\/operators\//],
+  ['GET', /^\/orders\/(search|sync-status|queue-counts)$/],
+  ['GET', /^\/reports\/operator-performance$/],
+  ['GET', /^\/shop\/info$/],
+  ['GET', /^\/admin\/me$/],
+];
+
+function roleMayCall(role, method, fullPath) {
+  if (role !== 'packing') return true; // 'admin' (and any older session): unrestricted, as before
+  return PACKING_ROLE_ALLOWED.some(([m, re]) => (m === null || m === method) && re.test(fullPath));
 }
 
 // Applied per-route (not router-wide) in packing.js/operators.js, since both
@@ -44,10 +74,18 @@ function isValidSession(token) {
 function requireAdminAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
-  if (!isValidSession(token)) {
+  const session = getSession(token);
+  if (!session) {
     return res.status(401).json({ error: 'unauthorized', message: 'Admin login required.' });
   }
+  // baseUrl + path = the full path whether this runs as router-level
+  // middleware (app.use('/shop', requireAdminAuth, ...)) or per route.
+  if (!roleMayCall(session.role, req.method, (req.baseUrl || '') + req.path)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Akun ini tidak punya akses ke fitur ini.' });
+  }
+  req.adminRole = session.role;
+  req.adminUsername = session.username;
   next();
 }
 
-module.exports = { createSession, destroySession, isValidSession, requireAdminAuth };
+module.exports = { createSession, destroySession, isValidSession, getSession, requireAdminAuth };

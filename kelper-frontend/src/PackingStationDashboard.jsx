@@ -4,7 +4,7 @@ import { renderCode39Svg } from './Barcode';
 import { COMMANDS } from './PackingStation';
 import { IconBolt, IconMoon, IconAlertTriangle, IconRotateCcw } from './Icons';
 import { SHOP_ID } from './shopConfig';
-import { API_BASE, apiFetch } from './apiBase';
+import { API_BASE, apiFetch, getAdminRole } from './apiBase';
 // Only ever hits our own backend (active-stations, order-lists), never
 // Shopee directly, so there's no rate-limit or cost concern with polling
 // this often — matches PackingStation.jsx's own idle-retry cadence.
@@ -503,7 +503,7 @@ function OrderLists() {
             to undo it, so a lock made for a reason (e.g. testing before a
             new shop should start receiving real orders) can't be casually
             clicked away from the Dashboard itself. */}
-        {syncEnabled && (
+        {syncEnabled && getAdminRole() !== 'packing' && (
           <button
             onClick={toggleSync}
             disabled={toggling}

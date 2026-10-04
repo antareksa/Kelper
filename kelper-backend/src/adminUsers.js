@@ -20,21 +20,40 @@ function verifyPassword(password, stored) {
   return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
 }
 
+// 'admin' = the whole dashboard; 'packing' = Packing Station Dashboard + Order
+// menus only (enforced server-side, see adminSession.js).
+const ROLES = ['admin', 'packing'];
+
 function findAdmin(username) {
-  return db.prepare('SELECT id, username, password_hash FROM admin_users WHERE username = ?').get(username);
+  return db.prepare('SELECT id, username, password_hash, role FROM admin_users WHERE username = ?').get(username);
 }
 
-function createAdmin(username, password) {
-  db.prepare('INSERT INTO admin_users (username, password_hash, created_at) VALUES (?, ?, ?)')
-    .run(username, hashPassword(password), Math.floor(Date.now() / 1000));
+function createAdmin(username, password, role = 'admin') {
+  if (!ROLES.includes(role)) throw new Error(`Unknown role "${role}" -- use one of: ${ROLES.join(', ')}.`);
+  db.prepare('INSERT INTO admin_users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)')
+    .run(username, hashPassword(password), role, Math.floor(Date.now() / 1000));
 }
 
+// Changes an existing account's role. Sessions already issued keep the role
+// they were created with until they expire or the person logs in again, so an
+// account being demoted is also signed out of every open session.
+function setAdminRole(username, role) {
+  if (!ROLES.includes(role)) throw new Error(`Unknown role "${role}" -- use one of: ${ROLES.join(', ')}.`);
+  const changed = db.prepare('UPDATE admin_users SET role = ? WHERE username = ?').run(role, username).changes > 0;
+  if (changed) db.prepare('DELETE FROM admin_sessions WHERE username = ?').run(username);
+  return changed;
+}
+
+// Also ends the account's open sessions -- before this, a removed admin's
+// token kept working until it expired on its own (up to 24h).
 function deleteAdmin(username) {
-  return db.prepare('DELETE FROM admin_users WHERE username = ?').run(username).changes > 0;
+  const removed = db.prepare('DELETE FROM admin_users WHERE username = ?').run(username).changes > 0;
+  if (removed) db.prepare('DELETE FROM admin_sessions WHERE username = ?').run(username);
+  return removed;
 }
 
 function listAdmins() {
-  return db.prepare('SELECT username, created_at FROM admin_users ORDER BY created_at ASC').all();
+  return db.prepare('SELECT username, role, created_at FROM admin_users ORDER BY created_at ASC').all();
 }
 
 // Client-requested (2026-10-01): replaces the old single ADMIN_USERNAME/
@@ -53,4 +72,4 @@ function seedFromEnvIfEmpty() {
   console.log(`[server] seeded admin_users from ADMIN_USERNAME env var (${ADMIN_USERNAME}) -- safe to remove ADMIN_USERNAME/ADMIN_PASSWORD from .env now`);
 }
 
-module.exports = { hashPassword, verifyPassword, findAdmin, createAdmin, deleteAdmin, listAdmins, seedFromEnvIfEmpty };
+module.exports = { ROLES, hashPassword, verifyPassword, findAdmin, createAdmin, setAdminRole, deleteAdmin, listAdmins, seedFromEnvIfEmpty };

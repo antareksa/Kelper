@@ -1,6 +1,6 @@
 const express = require('express');
 const { checkLocked, recordFailure, recordSuccess } = require('../loginGuard');
-const { createSession, destroySession } = require('../adminSession');
+const { createSession, destroySession, requireAdminAuth } = require('../adminSession');
 const { findAdmin, verifyPassword } = require('../adminUsers');
 
 const router = express.Router();
@@ -30,8 +30,17 @@ router.post('/login', (req, res) => {
   }
 
   recordSuccess(ip);
-  const token = createSession();
-  res.json({ ok: true, token });
+  const role = admin.role || 'admin';
+  const token = createSession(role, admin.username);
+  res.json({ ok: true, token, role });
+});
+
+// Who the current session belongs to and what role it has. The page asks this
+// on load instead of trusting a role it saved in the browser, so a packing
+// account can't turn itself into a full admin by editing local storage (the
+// server enforces the role on every request regardless, see adminSession.js).
+router.get('/me', requireAdminAuth, (req, res) => {
+  res.json({ role: req.adminRole, username: req.adminUsername });
 });
 
 router.post('/logout', (req, res) => {

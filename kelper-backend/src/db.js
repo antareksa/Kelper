@@ -440,6 +440,27 @@ if (!stationSessionCols.includes('last_seen_at')) {
   db.exec('ALTER TABLE station_sessions ADD COLUMN last_seen_at INTEGER');
 }
 
+// Client-requested (2026-10-04): roles for dashboard logins. 'admin' is the
+// full dashboard (everything, as before); 'packing' is a Packing Station admin
+// who only gets the Packing Station Dashboard and Order menus. Every existing
+// account and live session defaults to 'admin', so nothing changes for anyone
+// until a packing account is created (scripts/manage-admin.js). The role is
+// stored on the SESSION too, so a request is judged by the role the person
+// logged in with -- see adminSession.js's requireAdminAuth.
+const adminUserCols = db.prepare("PRAGMA table_info(admin_users)").all().map((c) => c.name);
+if (!adminUserCols.includes('role')) {
+  db.exec("ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
+}
+const adminSessionCols = db.prepare("PRAGMA table_info(admin_sessions)").all().map((c) => c.name);
+if (!adminSessionCols.includes('role')) {
+  db.exec("ALTER TABLE admin_sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
+}
+// Whose session it is (NULL for sessions issued before this existed). Lets a
+// role change or a removed account end that person's open sessions at once.
+if (!adminSessionCols.includes('username')) {
+  db.exec('ALTER TABLE admin_sessions ADD COLUMN username TEXT');
+}
+
 // Client-requested (2026-10-03): which single products make up each bundle
 // listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
 // bundle_sku is a Shopee listing, component_sku a single product -- so the

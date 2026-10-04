@@ -11,7 +11,7 @@ import { useShopeeConnection } from './useShopeeConnection';
 import { SHOP_ID } from './shopConfig';
 import { colors } from './theme';
 import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory } from './Icons';
-import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken } from './apiBase';
+import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken, getAdminRole, setAdminRole } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
@@ -41,6 +41,12 @@ function Dashboard() {
   // session (see adminSession.js), there's a token worth trusting across
   // reloads instead of forcing a fresh login every time.
   const [authenticated, setAuthenticated] = useState(() => !!getAdminToken());
+  // 'packing' = Packing Station admin: only the Packing Station Dashboard and
+  // Order menus (client-requested 2026-10-04). The server refuses everything
+  // else for that login anyway (adminSession.js); this decides what is drawn.
+  const [role, setRole] = useState(getAdminRole);
+  const isPacking = role === 'packing';
+  const homePath = isPacking ? '/packing-station/order-lists' : '/home';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -50,7 +56,35 @@ function Dashboard() {
   // check every login, since local dismissal state resets on reload, so
   // this can't go permanently silent while still disconnected.
   const shopee = useShopeeConnection(authenticated);
-  const showShopeeModal = authenticated && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
+  const showShopeeModal = authenticated && !isPacking && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
+
+  // The role saved in the browser is only a cache for drawing the menu at once
+  // on reload -- ask the server who this session really is. A 401 means the
+  // session no longer exists (expired, or its account was removed or had its
+  // role changed), so go back to the login screen instead of showing a
+  // dashboard where every request would fail.
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    apiFetch(`${API_BASE}/admin/me`)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res.status === 401) {
+          clearAdminToken();
+          setRole('admin');
+          setAuthenticated(false);
+          return;
+        }
+        if (!res.ok) return;
+        const me = await res.json();
+        setAdminRole(me.role);
+        setRole(me.role === 'packing' ? 'packing' : 'admin');
+      })
+      .catch(() => {
+        // offline for a moment: keep whatever role is cached
+      });
+    return () => { cancelled = true; };
+  }, [authenticated]);
 
   // Client-requested (2026-09-29): a red badge on "Batal & Masalah" so an
   // unresolved cancellation/problem order isn't only visible to someone who
@@ -84,9 +118,9 @@ function Dashboard() {
       navigate('/admin-login', { replace: true });
     }
     if (authenticated && location.pathname === '/admin-login') {
-      navigate('/home', { replace: true });
+      navigate(homePath, { replace: true });
     }
-  }, [authenticated, location.pathname, navigate]);
+  }, [authenticated, location.pathname, navigate, homePath]);
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -100,6 +134,8 @@ function Dashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setAdminToken(data.token);
+      setAdminRole(data.role);
+      setRole(data.role === 'packing' ? 'packing' : 'admin');
       setAuthenticated(true);
     } catch (err) {
       setError(err.message);
@@ -111,6 +147,7 @@ function Dashboard() {
       // best-effort — the token gets forgotten client-side regardless
     });
     clearAdminToken();
+    setRole('admin');
     setAuthenticated(false);
   }
 
@@ -157,9 +194,13 @@ function Dashboard() {
               immediately firing the OAuth login itself -- lets the admin
               see/choose which app (main vs Brand Portal) to connect, rather
               than this button always kicking off the main app's login. */}
-          <button onClick={() => navigate('/config/shopee')} style={submitStyle}>
-            Hubungkan
-          </button>
+          {isPacking ? (
+            <p style={{ fontSize: 13, color: colors.textDim, margin: 0 }}>Hubungi admin utama untuk menghubungkan toko.</p>
+          ) : (
+            <button onClick={() => navigate('/config/shopee')} style={submitStyle}>
+              Hubungkan
+            </button>
+          )}
         </div>
       </div>
     );
@@ -236,29 +277,33 @@ function Dashboard() {
               Utama
             </div>
             <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <button
-                onClick={() => navigate(DASHBOARD_TAB.path)}
-                style={navItemStyle(location.pathname === DASHBOARD_TAB.path)}
-              >
-                <DashboardIcon size={16} />
-                {DASHBOARD_TAB.label}
-              </button>
+              {!isPacking && (
+                <>
+                  <button
+                    onClick={() => navigate(DASHBOARD_TAB.path)}
+                    style={navItemStyle(location.pathname === DASHBOARD_TAB.path)}
+                  >
+                    <DashboardIcon size={16} />
+                    {DASHBOARD_TAB.label}
+                  </button>
 
-              <button
-                onClick={() => navigate(ITEMS_TAB.path)}
-                style={navItemStyle(location.pathname === ITEMS_TAB.path)}
-              >
-                <ItemsIcon size={16} />
-                {ITEMS_TAB.label}
-              </button>
+                  <button
+                    onClick={() => navigate(ITEMS_TAB.path)}
+                    style={navItemStyle(location.pathname === ITEMS_TAB.path)}
+                  >
+                    <ItemsIcon size={16} />
+                    {ITEMS_TAB.label}
+                  </button>
 
-              <button
-                onClick={() => navigate(BUNDLE_TAB.path)}
-                style={navItemStyle(location.pathname === BUNDLE_TAB.path)}
-              >
-                <BundleIcon size={16} />
-                {BUNDLE_TAB.label}
-              </button>
+                  <button
+                    onClick={() => navigate(BUNDLE_TAB.path)}
+                    style={navItemStyle(location.pathname === BUNDLE_TAB.path)}
+                  >
+                    <BundleIcon size={16} />
+                    {BUNDLE_TAB.label}
+                  </button>
+                </>
+              )}
 
               <button
                 onClick={() => navigate(ORDER_TAB.path)}
@@ -338,13 +383,15 @@ function Dashboard() {
                   moved to its own /config/shopee page instead of taking up
                   permanent sidebar space, since it's a status page you check
                   occasionally, not something needed on every screen. */}
-              <button
-                onClick={() => navigate('/config/shopee')}
-                style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
-              >
-                <IconSettings size={16} />
-                Pengaturan
-              </button>
+              {!isPacking && (
+                <button
+                  onClick={() => navigate('/config/shopee')}
+                  style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
+                >
+                  <IconSettings size={16} />
+                  Pengaturan
+                </button>
+              )}
               <button
                 onClick={handleLogout}
                 style={{ ...sideItemStyle, background: 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)' }}
@@ -370,7 +417,7 @@ function Dashboard() {
               >
                 A
               </div>
-              <span style={{ fontSize: 13, color: colors.text, fontWeight: 600 }}>Admin</span>
+              <span style={{ fontSize: 13, color: colors.text, fontWeight: 600 }}>{isPacking ? 'Admin Packing' : 'Admin'}</span>
             </div>
           </div>
         </div>
@@ -378,10 +425,10 @@ function Dashboard() {
         {/* Main content */}
         <div style={{ flex: 1, height: '100vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
           <Routes>
-            <Route path="/" element={<Navigate to="/home" replace />} />
-            <Route path="/home" element={<MainDashboard />} />
-            <Route path="/list-barang" element={<ListBarang />} />
-            <Route path="/bundle" element={<BundleList />} />
+            <Route path="/" element={<Navigate to={homePath} replace />} />
+            <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
+            <Route path="/list-barang" element={isPacking ? <Navigate to={homePath} replace /> : <ListBarang />} />
+            <Route path="/bundle" element={isPacking ? <Navigate to={homePath} replace /> : <BundleList />} />
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
@@ -389,8 +436,8 @@ function Dashboard() {
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
             <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
             <Route path="/packing-station/kinerja-operator" element={<OperatorPerformance />} />
-            <Route path="/config/shopee" element={<ShopeeConfigPage />} />
-            <Route path="*" element={<Navigate to="/home" replace />} />
+            <Route path="/config/shopee" element={isPacking ? <Navigate to={homePath} replace /> : <ShopeeConfigPage />} />
+            <Route path="*" element={<Navigate to={homePath} replace />} />
           </Routes>
         </div>
       </>

@@ -48,6 +48,32 @@ export function setAdminToken(token) {
 export function clearAdminToken() {
   try {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(ROLE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+// Which kind of dashboard login this is: 'admin' (everything) or 'packing'
+// (Packing Station Dashboard + Order only). Kept next to the token so the
+// sidebar can render the right menu instantly on reload; it is only a cache
+// of what the server said at login -- the page re-asks /admin/me, and the
+// server enforces the role on every request regardless, so editing this in
+// the browser changes nothing but which buttons are drawn. Anything unknown
+// reads as 'admin': a login from before roles existed was always a full admin.
+const ROLE_KEY = 'kelper_admin_role';
+
+export function getAdminRole() {
+  try {
+    return localStorage.getItem(ROLE_KEY) === 'packing' ? 'packing' : 'admin';
+  } catch {
+    return 'admin';
+  }
+}
+
+export function setAdminRole(role) {
+  try {
+    localStorage.setItem(ROLE_KEY, role === 'packing' ? 'packing' : 'admin');
   } catch {
     // ignore
   }

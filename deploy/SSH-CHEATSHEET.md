@@ -55,19 +55,36 @@ cd /opt/kelper/kelper-backend
 NODE_ENV=production node scripts/manage-admin.js add <username> <password>
 ```
 Creates a new admin login — e.g. a separate one to give a Shopee reviewer
-during Go Live, without sharing your own real password.
+during Go Live, without sharing your own real password. Full access to the
+whole Dashboard.
+
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/manage-admin.js add <username> <password> packing
+```
+Creates a **Packing Station admin**: after login they only see the Packing
+Station Dashboard and Order menus (no Dashboard, List Barang, List Bundle or
+Pengaturan, and no fetching on/off switch). Enforced on the server, not just
+hidden in the menu.
+
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/manage-admin.js set-role <username> <admin|packing>
+```
+Changes an existing login's role. That login is signed out of its open
+sessions, so the new role applies from its next login.
 
 ```bash
 cd /opt/kelper/kelper-backend
 NODE_ENV=production node scripts/manage-admin.js remove <username>
 ```
-Deletes that login — instantly revokes access.
+Deletes that login — instantly revokes access (its open sessions end too).
 
 ```bash
 cd /opt/kelper/kelper-backend
 NODE_ENV=production node scripts/manage-admin.js list
 ```
-Shows every admin account that currently exists.
+Shows every account that currently exists, with its role.
 
 ## Reset test/sandbox order data
 
