@@ -26,11 +26,19 @@ function touch(sessionId) {
   db.prepare('UPDATE packing_sessions SET last_activity_at = ? WHERE id = ?').run(now(), sessionId);
 }
 
-// Client-requested (2026-09-25): the manual dashboard stock (products.stock,
-// see db.js) is consumed as items get physically scanned for shipping, and
-// restored if a scan is undone. A SKU with no dashboard stock entered yet
-// (NULL) stays NULL either way — nothing to consume, per the "unknown is
-// never treated as zero" rule — and consumption never goes below zero.
+// The manual dashboard stock (products.stock, see db.js). Client-requested
+// 2026-10-07: it now goes down when an order is confirmed PICKED UP in Shipping
+// Mode (confirmOrderPickedUp below), by each item's ordered quantity -- for a
+// bundle, by its parts. Before that (2026-09-25) it went down per item scan
+// while packing; sessions created before the change keep that old per-scan
+// behaviour (packing_sessions.stock_consumed_at_scan = 1, see db.js) so an
+// order in progress at deploy time is not counted twice. A SKU with no
+// dashboard stock entered yet (NULL) stays NULL either way — nothing to
+// consume, per the "unknown is never treated as zero" rule — and consumption
+// never goes below zero.
+const consumeStockQty = db.prepare(`
+  UPDATE products SET stock = MAX(stock - ?, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
+`);
 const consumeStock = db.prepare(`
   UPDATE products SET stock = MAX(stock - 1, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
 `);
@@ -223,6 +231,12 @@ router.post('/next-order', async (req, res) => {
   // only gate — that's the whole point of letting an order be packed with
   // just a temp barcode.
   const cutoff = now() - getOrderDelaySeconds();
+  // Client-requested (2026-10-07): INSTANT orders ignore the work-hour window --
+  // they are booked at any hour (shopeeSync.js), so after the window closes an
+  // instant order must still wait for its real label here instead of being packed
+  // with a temp barcode and shipping tomorrow (seen in production: instant order
+  // 261004Q27D8NBX, packed after 16:00, went to "ship tomorrow"). Other orders
+  // keep the old after-hours behaviour.
   const withinWorkHour = isWithinWorkHour();
   const pick = db.prepare(`
     SELECT * FROM (
@@ -234,7 +248,7 @@ router.post('/next-order', async (req, res) => {
       SELECT NULL AS session_id, o.order_sn AS order_sn, o.created_at AS age, o.is_instant AS is_instant, 'fresh' AS pool
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
-        AND (o.label_ready = 1 OR ? = 0)
+        AND (o.label_ready = 1 OR (? = 0 AND COALESCE(o.is_instant, 0) = 0))
     )
     ORDER BY is_instant DESC, CASE pool WHEN 'leftover' THEN 0 ELSE 1 END ASC, age ASC
     LIMIT 1
@@ -301,7 +315,7 @@ router.post('/scan-item', (req, res) => {
     INSERT INTO scan_progress (session_id, sku, scanned_qty) VALUES (?, ?, 1)
     ON CONFLICT(session_id, sku) DO UPDATE SET scanned_qty = scanned_qty + 1
   `).run(session_id, sku);
-  consumeStock.run(now(), sku);
+  if (state.session.stock_consumed_at_scan) consumeStock.run(now(), sku); // old-rule session only
   touch(session_id);
 
   const updated = getSessionWithOrder(session_id);
@@ -318,7 +332,8 @@ router.post('/undo-last-scan', (req, res) => {
     return res.status(400).json({ error: 'nothing_to_undo' });
   }
   db.prepare('UPDATE scan_progress SET scanned_qty = scanned_qty - 1 WHERE session_id = ? AND sku = ?').run(session_id, sku);
-  restoreStock.run(now(), sku);
+  // Only a session that took stock per scan has anything to give back.
+  if (db.prepare('SELECT stock_consumed_at_scan AS f FROM packing_sessions WHERE id = ?').get(session_id)?.f) restoreStock.run(now(), sku);
   touch(session_id);
   res.json(getSessionWithOrder(session_id));
 });
@@ -404,6 +419,32 @@ function scheduleStaleCheck() {
   setTimeout(scheduleStaleCheck, getConfig().session.staleCheckIntervalMs);
 }
 scheduleStaleCheck();
+
+// Pack Besok, today's half (client-requested 2026-10-07): items are all scanned
+// and the temp barcode (BESOK-XXXX) has printed. The station now WAITS -- the
+// same as for a real label -- until the operator has packed the box, stuck the
+// temp barcode on it and scans it back; only then does it move on to the next
+// order. Before, it moved on by itself after 3 seconds, leaving the operator
+// unsure whether the box was finished. The scan must be this session's own
+// temp barcode, which also proves the right sticker went on the right box.
+router.post('/confirm-besok', (req, res) => {
+  const { session_id } = req.body;
+  const scanned = String(req.body.scanned ?? '').trim().toUpperCase();
+  const state = getSessionWithOrder(session_id);
+  if (!state) return res.status(404).json({ error: 'session_not_found' });
+  touchStation(state.session.station_id);
+  if (state.session.status !== 'DEFERRED_READY' || !state.session.internal_barcode) {
+    return res.status(400).json({ error: 'not_awaiting_besok_scan', status: state.session.status });
+  }
+  if (scanned !== String(state.session.internal_barcode).toUpperCase()) {
+    return res.status(400).json({
+      error: 'besok_mismatch',
+      message: `Barcode sementara tidak cocok — scan ${state.session.internal_barcode} yang ditempel pada paket ini${scanned ? ` (terbaca: ${scanned})` : ''}.`,
+    });
+  }
+  db.prepare('UPDATE packing_sessions SET besok_confirmed_at = COALESCE(besok_confirmed_at, ?), last_activity_at = ? WHERE id = ?').run(now(), now(), session_id);
+  res.json(getSessionWithOrder(session_id));
+});
 
 // Pack Besok step D — next-day scan of the specific internal barcode on a
 // physical package (the operator has a known package in hand). Distinct from
@@ -527,6 +568,13 @@ function confirmOrderPickedUp(orderSn) {
   db.prepare("UPDATE packing_sessions SET status = 'DONE', completed_at = ? WHERE id = ?").run(pickedUpAt, session.id);
   db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(orderSn);
 
+  // Dashboard stock goes down NOW, at pickup (client-requested 2026-10-07), by
+  // what was ordered: a bundle's parts, not the bundle itself (see
+  // packingItems.js). Skipped for a session that already took it per scan.
+  if (!session.stock_consumed_at_scan) {
+    for (const it of expandPackingItems(orderSn)) consumeStockQty.run(it.qty, pickedUpAt, it.sku);
+  }
+
   // Client-requested (2026-09-28): freeze this order's per-item price/hpp
   // at whatever's currently set in List Barang (products.price/hpp) right
   // now — this is the exact moment the order starts counting toward a
@@ -553,6 +601,57 @@ function confirmOrderPickedUp(orderSn) {
   return pickedUpAt;
 }
 
+// Why a Shipping Mode scan could not be confirmed, in words the operator can
+// act on (client-requested 2026-10-07: "Resi sudah di-scan / sudah dipickup",
+// so the same parcel is never handed to the courier twice). The scan is matched
+// against order number or resi, like the pickup itself, but across ALL orders
+// -- so a package that was already picked up is recognised as such instead of
+// getting the same "not in the list" message as a typo.
+function formatWib(unixSeconds) {
+  const d = new Date((unixSeconds + 7 * 3600) * 1000);
+  const two = (n) => String(n).padStart(2, '0');
+  return `${two(d.getUTCDate())}-${two(d.getUTCMonth() + 1)} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} WIB`;
+}
+
+function pickupRefusal(scanned) {
+  const found = scanned
+    ? db.prepare(`
+        SELECT o.order_sn, o.status AS order_status, ps.status AS session_status, ps.completed_at
+        FROM orders o
+        LEFT JOIN packing_sessions ps ON ps.order_sn = o.order_sn
+        WHERE UPPER(o.order_sn) = UPPER(?) OR (o.tracking_no IS NOT NULL AND UPPER(o.tracking_no) = UPPER(?))
+        ORDER BY (ps.status = 'DONE') DESC, ps.id DESC
+        LIMIT 1
+      `).get(scanned, scanned)
+    : null;
+
+  if (found && (found.session_status === 'DONE' || found.order_status === 'DONE')) {
+    const when = found.completed_at ? ` pada ${formatWib(found.completed_at)}` : '';
+    return {
+      status: 409,
+      body: {
+        error: 'already_picked_up',
+        order_sn: found.order_sn,
+        message: `SUDAH DI-SCAN / SUDAH DIPICKUP: ${scanned} (order ${found.order_sn})${when}. Jangan dikirim lagi.`,
+      },
+    };
+  }
+  if (found) {
+    return {
+      status: 400,
+      body: {
+        error: 'not_ready_for_pickup',
+        order_sn: found.order_sn,
+        message: `Order ${found.order_sn} belum siap diambil (masih dalam proses packing).`,
+      },
+    };
+  }
+  return {
+    status: 400,
+    body: { error: 'not_ready_for_pickup', message: `${scanned || '(kosong)'} tidak ditemukan di daftar Siap Diambil` },
+  };
+}
+
 router.post('/confirm-pickup', (req, res) => {
   const scanned = scannedLabelValue(req.body);
 
@@ -574,7 +673,7 @@ router.post('/confirm-pickup', (req, res) => {
   const orderSn = matches.length === 1 ? matches[0].order_sn : null;
   const pickedUpAt = orderSn ? confirmOrderPickedUp(orderSn) : null;
   if (pickedUpAt == null) {
-    return res.status(400).json({ error: 'not_ready_for_pickup', message: `${scanned || '(kosong)'} tidak ada di daftar Siap Diambil` });
+    return res.status(pickupRefusal(scanned).status).json(pickupRefusal(scanned).body);
   }
 
   // created_at/picked_up_at let the Shipping Mode screen show the same
@@ -763,7 +862,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   const eligibleUnlabeled = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
-      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
+      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND (? = 1 OR is_instant = 1)
         -- Without this, a Pack Besok order (packing_sessions.status =
         -- DEFERRED_READY) would match here too — orders.status stays
         -- READY_TO_PACK for the whole Pack Besok flow, only the session's
@@ -774,7 +873,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at, o.is_instant, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND (? = 1 OR o.is_instant = 1)
       ORDER BY created_at ASC
     `)
     .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
@@ -794,7 +893,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
-        AND (o.label_ready = 1 OR ? = 0)
+        AND (o.label_ready = 1 OR (? = 0 AND COALESCE(o.is_instant, 0) = 0))
         -- Any existing packing_sessions row (not just an active one) means
         -- this order is already represented by a different bucket/branch —
         -- a DEFERRED_READY one by the leftover branch below (once labeled)
@@ -1035,7 +1134,7 @@ function resolveOrderBucket(orderSn) {
   }
 
   if (order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
-  if (!order.label_ready && withinWorkHour) {
+  if (!order.label_ready && (withinWorkHour || order.is_instant)) {
     return { order, session: null, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Waiting List', rank: 1 };
   }
   return { order, session: null, bucket: 'Ready to Check', rank: 2 };

@@ -698,15 +698,15 @@ function skuQtyInRange(startTs, endTs) {
 // products.price (editable — see PUT /:sku/price above), never
 // shopee_item_models.price, same as buildSkuPriceMap in routes/dashboard.js.
 router.get('/catalog', (req, res) => {
-  // Bundles are managed on the List Bundle page (client-requested 2026-10-03),
-  // so they are left out of List Barang.
+  // Bundles ARE listed here (the 2026-10-03 "leave them out" was reverted
+  // 2026-10-07): each carries isBundle so the page can tag it as a bundle; what
+  // is inside a bundle is managed on the List Bundle page.
   // Sorted by SKU in natural order (KEL-2 before KEL-10, not after it), the
   // way the client numbers its products (client-requested 2026-10-03).
   const skuOf = (i) => i.item_sku || `ITEM-${i.item_id}`;
   const items = db
     .prepare('SELECT * FROM shopee_items')
     .all()
-    .filter((i) => !isBundleSku(i.item_sku))
     .sort((a, b) => skuOf(a).localeCompare(skuOf(b), undefined, { numeric: true, sensitivity: 'base' }));
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
@@ -768,6 +768,7 @@ router.get('/catalog', (req, res) => {
       sku: item.item_sku || `ITEM-${item.item_id}`,
       name: item.name,
       status: item.item_status,
+      isBundle: isBundleSku(item.item_sku),
       trendPct,
       omsetIni: omsetIniTotal,
       omsetLalu: omsetLaluTotal,
@@ -786,14 +787,13 @@ router.get('/catalog', (req, res) => {
 // see adminSession.js's PACKING_ROLE_ALLOWED). Deliberately its own endpoint
 // instead of a filtered /catalog: this response never contains HPP, Harga,
 // barcode, profit or sales figures at all, so that login cannot read them
-// however it asks. Same listing rules as /catalog (bundles left out, natural
-// SKU order, model-then-item image).
+// however it asks. Same listing rules as /catalog (bundles included and
+// flagged isBundle, natural SKU order, model-then-item image).
 router.get('/stock-list', (req, res) => {
   const skuOf = (i) => i.item_sku || `ITEM-${i.item_id}`;
   const items = db
     .prepare('SELECT item_id, item_sku, name, item_status, image_url FROM shopee_items')
     .all()
-    .filter((i) => !isBundleSku(i.item_sku))
     .sort((a, b) => skuOf(a).localeCompare(skuOf(b), undefined, { numeric: true, sensitivity: 'base' }));
   const stockBySku = new Map(db.prepare('SELECT sku, stock FROM products').all().map((p) => [p.sku, p.stock]));
 
@@ -809,6 +809,7 @@ router.get('/stock-list', (req, res) => {
       sku: skuOf(item),
       name: item.name,
       status: item.item_status,
+      isBundle: isBundleSku(item.item_sku),
       image: item.image_url,
       variants: (modelsByItem.get(item.item_id) || []).map((m) => {
         const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;

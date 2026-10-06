@@ -76,7 +76,7 @@ export default function StockList() {
     const q = search.trim().toLowerCase();
     return items
       .filter((p) => (statusFilter === 'all' ? true : statusFilter === 'archived' ? p.status !== 'NORMAL' : p.status === 'NORMAL'))
-      .flatMap((p) => p.variants.map((v) => ({ ...v, productName: p.name, status: p.status })))
+      .flatMap((p) => p.variants.map((v) => ({ ...v, productName: p.name, status: p.status, isBundle: p.isBundle })))
       .filter((v) => !q || v.sku.toLowerCase().includes(q) || (v.productName || '').toLowerCase().includes(q) || (v.name || '').toLowerCase().includes(q));
   }, [items, search, statusFilter]);
 
@@ -192,7 +192,12 @@ export default function StockList() {
                   <VariantThumb image={v.image} />
                   <div style={{ fontFamily: 'ui-monospace, monospace', color: colors.blue }}>{v.sku}</div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.productName}</div>
+                    <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {v.isBundle && (
+                        <span title="Produk bundle" style={{ fontSize: 10, fontWeight: 600, color: colors.blue, background: 'rgba(59, 130, 246, 0.14)', padding: '2px 7px', borderRadius: 999, marginRight: 8 }}>BUNDLE</span>
+                      )}
+                      {v.productName}
+                    </div>
                     {v.name && v.name !== v.productName && <div style={{ fontSize: 11.5, color: colors.textDim }}>{v.name}</div>}
                   </div>
                   <div style={{ fontFamily: 'var(--num)', color: colors.textDim }}>{v.shopeeStock ?? '—'}</div>

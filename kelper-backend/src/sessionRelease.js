@@ -11,13 +11,20 @@ const restoreStock = db.prepare(`
 // Hands an order that is still being scanned (IN_PROGRESS) back to the pool as
 // if nobody had touched it: the session and its scan progress are deleted, the
 // order returns to READY_TO_PACK (so it is claimable again — "Ready to Check"),
-// and the dashboard stock already deducted for the items scanned so far is
-// put back, since those scans no longer stand. Shared by the manual
+// and -- for a session that took stock per scan (older ones only) -- the
+// dashboard stock deducted for the items scanned so far is put back. Shared by the manual
 // RELEASE_ORDER command, the 1h stale sweep, and the pause/logout release
 // below, so all three behave identically.
 const releaseInProgress = db.transaction((session) => {
-  for (const row of db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(session.id)) {
-    if (row.scanned_qty > 0) restoreStock.run(row.scanned_qty, now(), row.sku);
+  // Stock is taken at pickup now (2026-10-07), so a session released before
+  // that has taken nothing and has nothing to give back. Only a session that
+  // began under the old per-scan rule (stock_consumed_at_scan = 1, see db.js)
+  // still has scanned items' stock to restore.
+  const tookStockPerScan = db.prepare('SELECT stock_consumed_at_scan AS f FROM packing_sessions WHERE id = ?').get(session.id)?.f;
+  if (tookStockPerScan) {
+    for (const row of db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(session.id)) {
+      if (row.scanned_qty > 0) restoreStock.run(row.scanned_qty, now(), row.sku);
+    }
   }
   db.prepare('DELETE FROM scan_progress WHERE session_id = ?').run(session.id);
   db.prepare('DELETE FROM packing_sessions WHERE id = ?').run(session.id);

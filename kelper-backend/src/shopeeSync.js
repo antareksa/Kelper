@@ -307,7 +307,10 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
 //     of the backlog, rather than piling up more printed labels than
 //     stations can realistically work through.
 async function bookAndLabelPendingOrders(accessToken, shopId) {
-  if (!isWithinWorkHour()) return;
+  // Outside the work-hour window only INSTANT orders are still booked
+  // (client-requested 2026-10-07): an instant order has to ship the same day,
+  // so it cannot wait for the window to reopen like a normal order can.
+  const afterHours = !isWithinWorkHour() ? 1 : 0;
 
   const cutoff = now() - getOrderDelaySeconds();
   // Excludes orders that already have a packing_sessions row (in particular
@@ -318,10 +321,11 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
     .prepare(`
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0 AND o.created_at <= ?
+        AND (? = 0 OR o.is_instant = 1)
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ORDER BY o.is_instant DESC, o.created_at ASC
     `)
-    .all(shopId, cutoff);
+    .all(shopId, cutoff, afterHours);
 
   const maxReadyToCheck = getMaxReadyToCheck();
   if (maxReadyToCheck > 0) {
@@ -353,7 +357,7 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
 // resume-besok (both gated on label_ready = 1) find it ready to hand to a
 // station for the temp-barcode-scan -> real-label-print -> confirm-scan flow.
 async function bookDeferredOrders(accessToken, shopId) {
-  if (!isWithinWorkHour()) return;
+  const afterHours = !isWithinWorkHour() ? 1 : 0; // after hours: instant orders only, as above
 
   const pending = db
     .prepare(`
@@ -361,9 +365,10 @@ async function bookDeferredOrders(accessToken, shopId) {
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0
+        AND (? = 0 OR o.is_instant = 1)
       ORDER BY o.is_instant DESC, ps.last_activity_at ASC
     `)
-    .all(shopId);
+    .all(shopId, afterHours);
   if (pending.length === 0) return;
 
   await mapWithConcurrency(pending, getMaxConcurrentBookings(), ({ order_sn: orderSn }) => bookOneOrder(accessToken, shopId, orderSn));

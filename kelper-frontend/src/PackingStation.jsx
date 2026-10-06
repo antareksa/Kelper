@@ -568,7 +568,10 @@ function PackingStation() {
     const sessionId = state?.session?.id ?? null;
     const status = state?.session?.status;
     const orderSn = state?.order?.order_sn;
-    const shouldRecord = RECORDING_ACTIVE_STATUSES.includes(status);
+    // Also while a "ship tomorrow" box waits for its temp barcode to be scanned
+    // back -- the same proof-of-the-right-sticker the real label gets.
+    const waitingBesokScan = status === 'DEFERRED_READY' && !state?.session?.besok_confirmed_at;
+    const shouldRecord = RECORDING_ACTIVE_STATUSES.includes(status) || waitingBesokScan;
 
     if (shouldRecord && sessionId !== recordingSessionIdRef.current) {
       startPackingVideo(sessionId, orderSn);
@@ -576,7 +579,7 @@ function PackingStation() {
       stopPackingVideo();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.session?.id, state?.session?.status]);
+  }, [state?.session?.id, state?.session?.status, state?.session?.besok_confirmed_at]);
 
   // Covers the operator hitting "← Back"/logging out mid-scan — same
   // reasoning as the check-out effect below, just for an in-progress
@@ -876,9 +879,7 @@ function PackingStation() {
       // Normally shown inside ItemScanCard instead (see `waitingMessage` in
       // the main render) — this is only a fallback for the rare case where
       // item data isn't available and ItemScanCard can't render.
-      return state.withinWorkHour
-        ? { text: 'Mohon tunggu label resi. Scan label resi jika sudah di tempel', type: 'success' }
-        : { text: 'Mohon tunggu label barcode sementara. Scan label resi sementara jika sudah di tempel', type: 'success' };
+      return { text: 'Semua Item sudah di scan, Segera bungkus semua item. Lalu tempel barcode sementara. Jika paket sudah siap scan kembali barcode sementara', type: 'info' };
     }
     if (session.status === 'EXCEPTION') {
       return { text: 'Order ditandai sebagai masalah (MASALAH) — perlu penyelesaian manual.', type: 'error' };
@@ -927,8 +928,16 @@ function PackingStation() {
       // "wait for the label, scan it once attached" message (see
       // ItemScanCard's waitingMessage) and see the temp barcode print
       // before the station moves on to the next order.
-      printBesokLabel(data.session, data.order);
-      setTimeout(() => grabNextOrder(), 3000);
+      //
+      // Client-requested (2026-10-07): it no longer moves on by itself. It
+      // prints, then WAITS for the operator to pack the box and scan the temp
+      // barcode back (see /confirm-besok), exactly like a real label; only
+      // that confirmed state (besok_confirmed_at) advances to the next order.
+      if (data.session.besok_confirmed_at) {
+        setTimeout(() => grabNextOrder(), 800);
+      } else {
+        printBesokLabel(data.session, data.order);
+      }
     } else if (data.session?.status === 'AWAITING_LABEL_SCAN') {
       // Print, then stop and wait — the operator must scan the label back to
       // confirm it actually came out before this station moves on. That
@@ -1285,6 +1294,9 @@ function PackingStation() {
     submittingRef.current = true;
     try {
       if (value === 'NEXT_ORDER') {
+        if (state?.session?.status === 'DEFERRED_READY' && !state.session.besok_confirmed_at) {
+          return notify('Bungkus paket, tempel barcode sementara, lalu scan barcode sementara itu dulu — baru lanjut ke order berikutnya.', 'error');
+        }
         const doneStatuses = ['DONE', 'DEFERRED_READY', 'READY_FOR_PICKUP'];
         if (state && !doneStatuses.includes(state.session.status)) {
           return notify('Selesaikan atau tunda order saat ini terlebih dahulu.', 'error');
@@ -1323,6 +1335,17 @@ function PackingStation() {
       // uses; it now accepts an already-assigned RESUMING session too.
       if (state.session.status === 'RESUMING') {
         const data = await post('/packing/resume-besok', { internal_barcode: value });
+        return applyState(data);
+      }
+
+      // "Ship tomorrow" order, temp barcode printed: wait for the operator to
+      // scan it back from the packed box (REPRINT prints it again).
+      if (state.session.status === 'DEFERRED_READY' && !state.session.besok_confirmed_at) {
+        if (value === 'REPRINT') {
+          printBesokLabel(state.session, state.order);
+          return notify('Mencetak ulang barcode sementara...', 'info');
+        }
+        const data = await post('/packing/confirm-besok', { session_id: state.session.id, scanned: value });
         return applyState(data);
       }
 
@@ -1558,9 +1581,7 @@ function PackingStation() {
             allComplete={state.allComplete}
             waitingMessage={
               state.session.status === 'DEFERRED_READY'
-                ? state.withinWorkHour
-                  ? 'Mohon tunggu label resi. Scan label resi jika sudah di tempel'
-                  : 'Mohon tunggu label barcode sementara. Scan label resi sementara jika sudah di tempel'
+                ? 'Semua Item sudah di scan, Segera bungkus semua item. Lalu tempel barcode sementara. Jika paket sudah siap scan kembali barcode sementara'
                 : null
             }
           />

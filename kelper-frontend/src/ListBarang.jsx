@@ -361,7 +361,12 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {product.isBundle && (
+            <span title="Produk bundle — isinya diatur di List Bundle" style={{ fontSize: 10.5, fontWeight: 600, color: colors.blue, background: 'rgba(59, 130, 246, 0.14)', padding: '3px 8px', borderRadius: 999 }}>
+              BUNDLE
+            </span>
+          )}
           {product.status !== 'NORMAL' && (
             <span style={{ fontSize: 10.5, fontWeight: 600, color: colors.textDim, background: colors.cardAlt, padding: '3px 8px', borderRadius: 999 }}>
               {product.status === 'BANNED' ? 'DIBANNED' : 'DIARSIPKAN'}

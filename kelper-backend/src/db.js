@@ -471,6 +471,28 @@ if (!adminSessionCols.includes('username')) {
   db.exec('ALTER TABLE admin_sessions ADD COLUMN username TEXT');
 }
 
+// Client-requested (2026-10-07): a "ship tomorrow" (Pack Besok) order now waits
+// for the operator to pack the box and scan the temp barcode back, like a real
+// label does, instead of the station moving on by itself. This records when
+// that scan happened (NULL = still waiting, or a session from before this).
+const packingSessionColsForBesok = db.prepare("PRAGMA table_info(packing_sessions)").all().map((c) => c.name);
+if (!packingSessionColsForBesok.includes('besok_confirmed_at')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN besok_confirmed_at INTEGER');
+}
+
+// Client-requested (2026-10-07): dashboard stock (products.stock) now goes down
+// when an order is confirmed PICKED UP in Shipping Mode, not as each item is
+// scanned while packing. 1 = a session that began under the old rule (stock
+// already taken per scan, so it must keep being taken/restored per scan and
+// must NOT be taken again at pickup); 0 = new sessions (stock taken at
+// pickup). Every session that exists when this column is added is marked 1, so
+// an order half-packed at deploy time is neither lost nor counted twice.
+const packingSessionColsForStock = db.prepare("PRAGMA table_info(packing_sessions)").all().map((c) => c.name);
+if (!packingSessionColsForStock.includes('stock_consumed_at_scan')) {
+  db.exec('ALTER TABLE packing_sessions ADD COLUMN stock_consumed_at_scan INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE packing_sessions SET stock_consumed_at_scan = 1');
+}
+
 // Client-requested (2026-10-03): which single products make up each bundle
 // listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
 // bundle_sku is a Shopee listing, component_sku a single product -- so the
