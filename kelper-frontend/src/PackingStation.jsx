@@ -258,6 +258,76 @@ function PickupQueueCard({ orders }) {
   );
 }
 
+// Print Resi Mode's list (client-requested 2026-10-07): every order still in
+// "pack besok". Same look as the Shipping Mode list; each row says where the
+// order stands -- ready to print (its real resi is booked), waiting for the
+// label to be booked, or already printed and waiting for the resi to be
+// scanned back. Sorting is done server-side (see /packing/besok-list).
+const BESOK_STATE_META = {
+  printed: { text: 'SUDAH DICETAK — SCAN RESI', color: colors.blue },
+  ready: { text: 'SIAP CETAK', color: colors.green },
+  waiting: { text: 'MENUNGGU LABEL', color: colors.orange },
+};
+
+function BesokQueueCard({ orders }) {
+  if (orders.length === 0) {
+    return (
+      <div style={card({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 })}>
+        <div style={{ textAlign: 'center', fontSize: 16, fontWeight: 600, color: colors.textDim, padding: '28px 12px' }}>
+          Tidak ada order Pack Besok yang menunggu resi
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 })}>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {orders.map((o) => {
+          const meta = BESOK_STATE_META[o.state] || BESOK_STATE_META.waiting;
+          return (
+            <div
+              key={o.session_id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '14px 16px',
+                borderRadius: 8,
+                border: `1px solid ${colors.border}`,
+                borderLeft: `4px solid ${meta.color}`,
+                background: colors.cardAlt,
+              }}
+            >
+              <span style={{ minWidth: 0 }}>
+                <span style={{ fontSize: 20, fontWeight: 700, color: colors.text, fontFamily: 'monospace' }}>
+                  {o.order_sn}
+                  {!!o.is_instant && (
+                    <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.orange, padding: '2px 6px', borderRadius: 4, verticalAlign: 'middle' }}>
+                      INSTANT
+                    </span>
+                  )}
+                  {!!o.is_dropoff && (
+                    <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, color: colors.bg, background: colors.blue, padding: '2px 6px', borderRadius: 4, verticalAlign: 'middle' }}>
+                      ANTAR KE GERAI
+                    </span>
+                  )}
+                </span>
+                <span style={{ display: 'block', fontSize: 12.5, color: colors.textDim, fontFamily: 'monospace', marginTop: 2 }}>{o.internal_barcode}</span>
+              </span>
+              <span style={{ textAlign: 'right', flexShrink: 0 }}>
+                <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: meta.color }}>{meta.text}</span>
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: colors.textDim, textTransform: 'uppercase', marginTop: 2 }}>{o.shipping_carrier || '—'}</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // The bottom bar doubles as both the scan-capture point and the feedback
 // channel: "Barcode Scanner Active..." when idle, or the latest scan result
 // (colored per type) right after one — one place to look, instead of a
@@ -302,7 +372,7 @@ function ScanFeedbackBar({ inputRef, value, onChange, onKeyDown, onBlur, message
 // barcode cards for these — previously only referenced here, never actually
 // rendered anywhere despite being fully defined.
 export const COMMANDS = [
-  { cmd: 'NEXT_ORDER', desc: 'Mulai proses order baru berikutnya yang tersedia — otomatis memilih yang prioritasnya tertinggi (Instant lebih dulu). Tidak melanjutkan sisa Pack Besok; scan barcode BESOK- milik order tersebut untuk itu.' },
+  { cmd: 'NEXT_ORDER', desc: 'Mulai proses order baru berikutnya yang tersedia — otomatis memilih yang prioritasnya tertinggi (Instant lebih dulu). Tidak mengambil sisa Pack Besok; untuk itu pakai Mode Cetak Resi (PRINT_RESI_MODE).' },
   { cmd: 'PAUSE', desc: 'Jeda station (menghentikan sementara proses scan) saat Anda meninggalkan tempat.' },
   { cmd: 'RESUME', desc: 'Lanjutkan station setelah dijeda.' },
   { cmd: 'UNDO', desc: 'Batalkan scan item terakhir Anda.' },
@@ -310,7 +380,8 @@ export const COMMANDS = [
   { cmd: 'RELEASE_ORDER', desc: 'Lepaskan order ini dan kembalikan ke antrian untuk station manapun (misalnya Anda tidak akan menyelesaikannya).' },
   { cmd: 'REPRINT', desc: 'Setelah semua item discan: jika label gagal terscan kembali (masalah printer), cetak ulang tanpa membuat pengiriman baru.' },
   { cmd: 'SHIPPING_MODE', desc: 'Alihkan station ini ke Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan kurir, terpisah dari proses packing.' },
-  { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman.' },
+  { cmd: 'PRINT_RESI_MODE', desc: 'Alihkan station ini ke Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket Pack Besok untuk mencetak resi aslinya, lalu scan resi yang tercetak untuk konfirmasi.' },
+  { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman atau Mode Cetak Resi.' },
   { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
 ];
 
@@ -319,13 +390,14 @@ export const COMMANDS = [
 // printed barcode for e.g. SHIPPING_MODE actually encodes the hyphenated
 // form instead. Mapping it back here keeps the real command constants above
 // byte-exact everywhere else in this file, while still accepting what
-// actually comes off the printed barcode. Only these four commands contain
+// actually comes off the printed barcode. Only these five commands contain
 // an underscore; none of the aliases can collide with a real order_sn or a
 // BESOK- temp barcode.
 const COMMAND_BARCODE_ALIASES = {
   'NEXT-ORDER': 'NEXT_ORDER',
   'RELEASE-ORDER': 'RELEASE_ORDER',
   'SHIPPING-MODE': 'SHIPPING_MODE',
+  'PRINT-RESI-MODE': 'PRINT_RESI_MODE',
   'PACKING-MODE': 'PACKING_MODE',
 };
 
@@ -463,6 +535,7 @@ function PackingStation() {
 
   const [mode, setMode] = useState('packing'); // packing | shipping — toggled by scanning SHIPPING_MODE / PACKING_MODE
   const [pickupList, setPickupList] = useState([]); // [{ order_sn, shipping_carrier, is_instant }] — Shipping Mode's live queue
+  const [besokList, setBesokList] = useState([]); // Print Resi Mode's live list of "pack besok" orders (see BesokQueueCard)
   const [state, setState] = useState(null); // { session, order, items, allComplete, tracking_no, internal_barcode }
   const [lastSku, setLastSku] = useState(null);
   const [infoMessage, setInfoMessage] = useState('');
@@ -774,6 +847,28 @@ function PackingStation() {
     return () => { cancelled = true; clearInterval(interval); };
   }, [mode]);
 
+  // Print Resi Mode's list (client-requested 2026-10-07): same cadence and the
+  // same "only our own database, never Shopee" reasoning as the pickup list.
+  // A shared loader so a scan can refresh it at once instead of waiting 3s.
+  async function loadBesokList() {
+    try {
+      const res = await fetch(`${API_BASE}/packing/besok-list?shop_id=${SHOP_ID}&station_id=${encodeURIComponent(stationId)}`);
+      if (res.ok) setBesokList((await res.json()).orders);
+    } catch {
+      // best-effort — a missed refresh just means a stale list until the next poll
+    }
+  }
+  useEffect(() => {
+    if (mode !== 'printresi') {
+      setBesokList([]);
+      return;
+    }
+    loadBesokList();
+    const interval = setInterval(loadBesokList, 3000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, stationId]);
+
   // Detects the backend auto-releasing this session after 1h of inactivity
   // (operator walked away and never came back) and logs the operator out —
   // the station itself stays configured for whoever badges in next.
@@ -860,6 +955,7 @@ function PackingStation() {
   // set imperatively — so it can't drift out of sync with what's actually true.
   function getGuidance() {
     if (!operatorName) return { text: 'Scan barcode operator Anda untuk masuk.', type: 'info' };
+    if (mode === 'printresi') return { text: 'Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket untuk mencetak resi aslinya. Scan PACKING_MODE untuk kembali.', type: 'info' };
     if (mode === 'shipping') return { text: 'Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan. Scan PACKING_MODE untuk kembali.', type: 'info' };
     if (paused) return { text: 'Station dijeda. Scan RESUME untuk melanjutkan.', type: 'info' };
     if (!state) return { text: 'Menunggu orderan masuk...', type: 'info' };
@@ -1271,8 +1367,37 @@ function PackingStation() {
     // check on pickups shouldn't require first resolving whatever the
     // packing side happens to be doing.
     if (value === 'SHIPPING_MODE') { setMode('shipping'); return notify('Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan.', 'info'); }
+    if (value === 'PRINT_RESI_MODE') { setMode('printresi'); return notify('Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket untuk mencetak resi aslinya.', 'info'); }
     if (value === 'PACKING_MODE') { setMode('packing'); return notify('Kembali ke Mode Packing.', 'info'); }
     if (paused) return notify('Station sedang dijeda. Scan RESUME terlebih dahulu.', 'error');
+
+    // Print Resi Mode: anything scanned is checked against the "pack besok"
+    // list by the server. A match prints the real resi (or reprints it, or --
+    // when it is the printed resi scanned back -- confirms it); anything else
+    // comes back as a warning, shown like any other scan error.
+    if (mode === 'printresi') {
+      submittingRef.current = true;
+      try {
+        const data = await post('/packing/print-resi', { scanned: value, operator_name: operatorName, station_id: stationId });
+        if (data.action === 'confirmed') {
+          notify(`${data.order_sn} terkonfirmasi — siap diambil kurir.`, 'success');
+        } else {
+          autoPrintLabel(data.session_id);
+          notify(
+            data.action === 'reprinted'
+              ? `Mencetak ulang resi ${data.order_sn}...`
+              : `Mencetak resi ${data.order_sn} — tempel pada paket, lalu scan resi yang tercetak untuk konfirmasi.`,
+            'success'
+          );
+        }
+        loadBesokList();
+        return;
+      } catch (err) {
+        return notify(err.message, 'error');
+      } finally {
+        submittingRef.current = false;
+      }
+    }
 
     if (mode === 'shipping') {
       submittingRef.current = true;
@@ -1530,7 +1655,7 @@ function PackingStation() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>
-            {mode === 'shipping' ? 'Mode Pengiriman' : 'Packing Station'}
+            {mode === 'shipping' ? 'Mode Pengiriman' : mode === 'printresi' ? 'Mode Cetak Resi' : 'Packing Station'}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -1572,6 +1697,8 @@ function PackingStation() {
         )}
         {mode === 'shipping' ? (
           <PickupQueueCard orders={pickupList} />
+        ) : mode === 'printresi' ? (
+          <BesokQueueCard orders={besokList} />
         ) : showItemScan ? (
           <ItemScanCard
             order={state.order}

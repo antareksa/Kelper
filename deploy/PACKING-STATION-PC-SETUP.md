@@ -54,6 +54,27 @@ Then press **Lanjutkan** and scan an operator badge to log in.
 
 Run `start-packing-station-quick.bat`, then scan your badge.
 
+## Modes
+
+Switch a station's mode by scanning its command barcode (print them from the
+Dashboard: **Packing Station Dashboard, Daftar Staff**). `PACKING_MODE` returns
+to normal packing from either of the other two.
+
+- **Packing** (default): scan items; the order's label prints when it is done.
+- **`SHIPPING_MODE`**: lists every package waiting for the courier. Scan a
+  package's resi when the courier takes it.
+- **`PRINT_RESI_MODE`** (new): for orders packed the evening before with only a
+  temp barcode (`BESOK-...`, "Pack Besok"). The screen lists them with their
+  state: *SIAP CETAK* (resi booked), *MENUNGGU LABEL* (resi not booked yet) or
+  *SUDAH DICETAK* (printed, waiting for the resi to be scanned back). Scan the
+  temp barcode on a box and its real resi prints; stick it on and scan the
+  printed resi to confirm. Scanning the temp barcode again reprints. Anything
+  not in the list, or an order whose resi is not booked yet, shows a warning.
+  Operators no longer go looking for these boxes through `NEXT_ORDER`.
+
+The `PRINT_RESI_MODE` barcode must be printed once from the Dashboard before
+stations can use it.
+
 ## 3. Start it automatically when Windows starts
 
 Put a **shortcut** to the quick launcher in the Startup folder (a shortcut runs

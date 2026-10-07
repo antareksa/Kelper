@@ -174,23 +174,13 @@ async function finalizeLeftover(session, order, res) {
 }
 
 // B. NEXT ORDER — pulls the single highest-priority fresh order (orders
-// READY_TO_PACK). Deliberately does NOT auto-pick leftovers (packing_sessions
-// DEFERRED_READY) the way it used to — client-requested (2026-09-23): a Pack
-// Besok box can only ever be identified by its own temp barcode, so resuming
-// one must always go through an explicit /resume-besok scan of that exact
-// code — EXCEPT it does not immediately print anything for one: a labeled
-// Pack Besok leftover is auto-assigned into RESUMING and handed back as-is,
-// still requiring the operator to scan its own BESOK- barcode (see
-// /resume-besok, which now also accepts a RESUMING session already assigned
-// to a station) before finalizeLeftover ever runs. Client-requested
-// (2026-09-23): "Ready to Check" orders — including labeled leftovers — are
-// automatically brought to whichever station is free, but the operator must
-// still physically confirm they have the right box via that scan; auto-
-// picking straight into a print (the old behavior) skipped that
-// confirmation and left the operator with no way to know which box the
-// system had picked (confirmed against production on order 260923QG061V7A).
-// An unlabeled leftover (still in Processing/Ready to Process Tomorrow) is
-// never auto-picked here — nothing to hand a station yet.
+// READY_TO_PACK), instant orders first and then oldest first. It never hands out
+// a Pack Besok leftover (packing_sessions DEFERRED_READY): since 2026-10-07 those
+// are handled in Print Resi Mode instead, where scanning the box's temp barcode
+// prints the real resi (see /besok-list and /print-resi). Before that, a labelled
+// leftover was auto-assigned here (status RESUMING) and the operator had to find
+// the box by its BESOK- barcode. A RESUMING session assigned before that change
+// still resumes normally through the check below and /resume-besok.
 router.post('/next-order', async (req, res) => {
   const { station_id, shop_id, operator_name } = req.body;
   if (!station_id || !shop_id) {
@@ -238,36 +228,23 @@ router.post('/next-order', async (req, res) => {
   // 261004Q27D8NBX, packed after 16:00, went to "ship tomorrow"). Other orders
   // keep the old after-hours behaviour.
   const withinWorkHour = isWithinWorkHour();
+  // Fresh orders only. Until 2026-10-07 this also picked up yesterday's Pack
+  // Besok boxes (DEFERRED_READY, now labelled) and told the operator to go and
+  // find the box by its temp barcode. The client does not want operators
+  // hunting for boxes: those are handled in Print Resi Mode instead, where
+  // scanning the temp barcode prints the real resi (see /besok-list and
+  // /print-resi below).
   const pick = db.prepare(`
-    SELECT * FROM (
-      SELECT ps.id AS session_id, ps.order_sn AS order_sn, ps.started_at AS age, o.is_instant AS is_instant, 'leftover' AS pool
-      FROM packing_sessions ps
-      JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
-      UNION ALL
-      SELECT NULL AS session_id, o.order_sn AS order_sn, o.created_at AS age, o.is_instant AS is_instant, 'fresh' AS pool
-      FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
-        AND (o.label_ready = 1 OR (? = 0 AND COALESCE(o.is_instant, 0) = 0))
-    )
-    ORDER BY is_instant DESC, CASE pool WHEN 'leftover' THEN 0 ELSE 1 END ASC, age ASC
+    SELECT o.order_sn AS order_sn
+    FROM orders o
+    WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+      AND (o.label_ready = 1 OR (? = 0 AND COALESCE(o.is_instant, 0) = 0))
+    ORDER BY o.is_instant DESC, o.created_at ASC
     LIMIT 1
-  `).get(shop_id, shop_id, cutoff, withinWorkHour ? 1 : 0);
+  `).get(shop_id, cutoff, withinWorkHour ? 1 : 0);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
-  }
-
-  if (pick.pool === 'leftover') {
-    // Auto-assign only — deliberately does NOT call finalizeLeftover here.
-    // The operator still has to scan this exact session's BESOK- barcode
-    // (see /resume-besok) before anything prints; this just brings the
-    // order to the station and tells it (via getSessionWithOrder's
-    // allComplete + the order's internal_barcode) which one to look for.
-    db.prepare("UPDATE packing_sessions SET station_id = ?, operator_name = ?, status = 'RESUMING' WHERE id = ?")
-      .run(station_id, operator_name || null, pick.session_id);
-    console.log(`[server] bucket: ${pick.order_sn} -> On Progress Check (RESUMING, auto-assigned to ${station_id}) — awaiting temp barcode scan`);
-    return res.json(getSessionWithOrder(pick.session_id));
   }
 
   const sessionId = db.transaction(() => {
@@ -444,6 +421,139 @@ router.post('/confirm-besok', (req, res) => {
   }
   db.prepare('UPDATE packing_sessions SET besok_confirmed_at = COALESCE(besok_confirmed_at, ?), last_activity_at = ? WHERE id = ?').run(now(), now(), session_id);
   res.json(getSessionWithOrder(session_id));
+});
+
+// ===== PRINT RESI MODE (client-requested 2026-10-07) =====
+// The next-day half of Pack Besok. The client does not want operators to go and
+// find a box by its temp barcode; they want to scan the temp barcode and have
+// the real resi printed. This mode (same shape as Shipping Mode) lists every
+// order still in "pack besok" -- and an operator may scan anything: if it is
+// one of those orders the real resi prints, otherwise they get a warning.
+//
+// A scan can be the BESOK- temp barcode, the order number, or the resi:
+//  - order waiting (DEFERRED_READY), resi booked  -> print it
+//  - order waiting, resi NOT booked yet           -> warning, nothing prints
+//  - order already printed, scan is BESOK-        -> print it AGAIN (printer jam)
+//  - order already printed, scan is resi / order no. -> that is the printed label
+//    scanned back (the printer check), so it moves on to Ready to Pickup
+// A printed order is deliberately NOT bound to the operator's station: a
+// session held by a station would be returned to that station by /next-order,
+// and several printed-but-not-yet-confirmed orders could pile up on one.
+const PRINT_RESI_STATION = 'PRINT-RESI';
+
+router.get('/besok-list', (req, res) => {
+  const shopId = Number(req.query.shop_id);
+  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  touchStation(req.query.station_id);
+
+  const rows = db
+    .prepare(`
+      SELECT ps.id AS session_id, ps.order_sn, ps.internal_barcode, ps.status, ps.started_at,
+             o.is_instant, o.is_dropoff, o.shipping_carrier, o.label_ready
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.shipping_choice = 'PACK_BESOK' AND ps.status IN ('DEFERRED_READY', 'RESUMING', 'AWAITING_LABEL_SCAN')
+        AND o.shop_id = ? AND o.status != 'CANCELLED'
+    `)
+    .all(shopId)
+    .map((r) => ({ ...r, state: r.status === 'AWAITING_LABEL_SCAN' ? 'printed' : r.label_ready ? 'ready' : 'waiting' }));
+
+  // Printed ones first (they still need their scan), then ready to print, then
+  // waiting for the label; instant first and oldest first within each group.
+  const rank = { printed: 0, ready: 1, waiting: 2 };
+  rows.sort((a, b) => rank[a.state] - rank[b.state] || (b.is_instant ? 1 : 0) - (a.is_instant ? 1 : 0) || a.started_at - b.started_at);
+  res.json({ orders: rows });
+});
+
+// Prepares a waiting Pack Besok order for printing: re-checks with Shopee that it
+// was not cancelled overnight, then marks it printed-and-awaiting-its-scan.
+// Returns { status, body } for the route to send.
+async function startBesokPrint(match, operatorName) {
+  const claimed = db.prepare("UPDATE packing_sessions SET status = 'RESUMING' WHERE id = ? AND status IN ('DEFERRED_READY', 'RESUMING')").run(match.session_id).changes;
+  if (!claimed) return { status: 409, body: { error: 'busy', message: `Order ${match.order_sn} sedang diproses — coba lagi sebentar.` } };
+
+  const finish = () => {
+    db.prepare("UPDATE packing_sessions SET station_id = ?, operator_name = ?, tracking_no = ?, status = 'AWAITING_LABEL_SCAN', last_activity_at = ? WHERE id = ?")
+      .run(PRINT_RESI_STATION, operatorName, match.tracking_no, now(), match.session_id);
+    console.log(`[server] bucket: ${match.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — resi printed from Print Resi Mode`);
+    return { status: 200, body: { ok: true, action: 'printed', session_id: match.session_id, order_sn: match.order_sn } };
+  };
+
+  if (isMockOrder(match.order_sn)) return finish();
+
+  try {
+    const accessToken = await getValidAccessToken(match.shop_id);
+    const detail = await getOrderDetail(accessToken, match.shop_id, [match.order_sn]);
+    const liveStatus = detail.response?.order_list?.[0]?.order_status;
+    if (liveStatus === 'CANCELLED' || match.order_status === 'CANCELLED') {
+      db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(match.session_id);
+      db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_needs_resolve = 1 WHERE order_sn = ?").run(match.order_sn);
+      return { status: 400, body: { error: 'order_cancelled', message: `Order ${match.order_sn} dibatalkan semalam (status Shopee: ${liveStatus}) — resi tidak dicetak.` } };
+    }
+    return finish();
+  } catch (err) {
+    // Leave it printable — a transient Shopee failure must not strand it.
+    db.prepare("UPDATE packing_sessions SET status = 'DEFERRED_READY' WHERE id = ?").run(match.session_id);
+    return { status: 502, body: { error: 'shopee_check_failed', message: `Gagal memeriksa order ke Shopee: ${err.message}. Coba scan lagi.` } };
+  }
+}
+
+router.post('/print-resi', async (req, res) => {
+  const scanned = String(req.body.scanned ?? '').trim();
+  const operatorName = req.body.operator_name || null;
+  touchStation(req.body.station_id);
+  if (!scanned) return res.status(400).json({ error: 'empty_scan', message: 'Scan kosong — scan barcode sementara (BESOK-...) pada paket.' });
+  const u = scanned.toUpperCase();
+
+  const matches = db
+    .prepare(`
+      SELECT ps.id AS session_id, ps.status, ps.internal_barcode, o.order_sn, o.shop_id, o.tracking_no, o.label_ready, o.status AS order_status
+      FROM packing_sessions ps
+      JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.shipping_choice = 'PACK_BESOK' AND ps.status IN ('DEFERRED_READY', 'RESUMING', 'AWAITING_LABEL_SCAN')
+        AND (UPPER(ps.internal_barcode) = ? OR UPPER(o.order_sn) = ? OR (o.tracking_no IS NOT NULL AND UPPER(o.tracking_no) = ?))
+    `)
+    .all(u, u, u);
+
+  if (matches.length === 0) {
+    // Say something useful when the scan is a known order that is simply past this step.
+    const known = db
+      .prepare(`
+        SELECT o.order_sn, ps.status FROM orders o LEFT JOIN packing_sessions ps ON ps.order_sn = o.order_sn
+        WHERE UPPER(o.order_sn) = ? OR (o.tracking_no IS NOT NULL AND UPPER(o.tracking_no) = ?)
+           OR UPPER(ps.internal_barcode) = ?
+        ORDER BY ps.id DESC LIMIT 1
+      `)
+      .get(u, u, u);
+    const hint = known ? ` Order ${known.order_sn} bukan Pack Besok yang menunggu cetak (status: ${known.status || 'belum dipacking'}).` : '';
+    return res.status(404).json({ error: 'not_in_besok_list', message: `"${scanned}" tidak ada di daftar Pack Besok.${hint}` });
+  }
+  if (matches.length > 1) {
+    return res.status(409).json({ error: 'ambiguous', message: `"${scanned}" cocok dengan ${matches.length} order — scan barcode sementara (BESOK-...) pada paket.` });
+  }
+  const m = matches[0];
+
+  if (m.status === 'AWAITING_LABEL_SCAN') {
+    const isLabelScan = u === String(m.order_sn).toUpperCase() || (!!m.tracking_no && u === String(m.tracking_no).toUpperCase());
+    if (isLabelScan) {
+      db.prepare("UPDATE packing_sessions SET status = 'READY_FOR_PICKUP', label_confirmed_at = ?, operator_name = COALESCE(?, operator_name) WHERE id = ?").run(now(), operatorName, m.session_id);
+      db.prepare('UPDATE orders SET label_printed = 1 WHERE order_sn = ?').run(m.order_sn);
+      console.log(`[server] bucket: ${m.order_sn} -> Ready to Pickup (resi scanned back in Print Resi Mode)`);
+      return res.json({ ok: true, action: 'confirmed', session_id: m.session_id, order_sn: m.order_sn });
+    }
+    return res.json({ ok: true, action: 'reprinted', session_id: m.session_id, order_sn: m.order_sn });
+  }
+
+  if (!m.label_ready || !m.tracking_no) {
+    return res.status(409).json({
+      error: 'label_not_ready',
+      order_sn: m.order_sn,
+      message: `Resi untuk order ${m.order_sn} belum siap — akan terbook otomatis saat jam kerja. Coba lagi nanti.`,
+    });
+  }
+
+  const result = await startBesokPrint(m, operatorName);
+  res.status(result.status).json(result.body);
 });
 
 // Pack Besok step D — next-day scan of the specific internal barcode on a
