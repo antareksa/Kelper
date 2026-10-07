@@ -7,7 +7,7 @@ const { getOrderDetail, cancelOrder } = require('../shopee/client');
 const { requireAdminAuth } = require('../adminSession');
 const { getConfig } = require('../config');
 const { isProduction } = require('../env');
-const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds } = require('../packingSettings');
+const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWorkHour, getReadyToCheckStuckSeconds, getMaxReadyToCheck } = require('../packingSettings');
 const { startOfDayWIB } = require('../wib');
 const { uploadPackingVideo } = require('../gcs');
 const { expandPackingItems } = require('../packingItems');
@@ -181,6 +181,36 @@ async function finalizeLeftover(session, order, res) {
 // leftover was auto-assigned here (status RESUMING) and the operator had to find
 // the box by its BESOK- barcode. A RESUMING session assigned before that change
 // still resumes normally through the check below and /resume-besok.
+// "Maks Siap Dicek" also holds OUTSIDE work hour (client-requested 2026-10-08).
+// Inside work hour the cap is enforced where orders are booked
+// (shopeeSync.js): booking stops once the pool is full. Outside it nothing is
+// booked, so the pool used to take EVERY order past its delay at once. Now the
+// oldest N fresh orders (N = cap minus the labelled Pack Besok boxes already
+// sitting in the pool) are in Ready to Check and the rest stay in the Waiting
+// List until a station takes one. Returns the order_sns allowed in, oldest
+// first, or null when there is no cap (0 = unlimited) or we are inside work hour.
+function afterHoursFreshAllowed(shopId, cutoff) {
+  const cap = getMaxReadyToCheck();
+  if (isWithinWorkHour() || !(cap > 0)) return null;
+  const labelledBoxes = db
+    .prepare(`
+      SELECT COUNT(*) AS c FROM packing_sessions ps JOIN orders o ON o.order_sn = ps.order_sn
+      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
+    `)
+    .get(shopId).c;
+  const slots = Math.max(0, cap - labelledBoxes);
+  return db
+    .prepare(`
+      SELECT o.order_sn FROM orders o
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ? AND COALESCE(o.is_instant, 0) = 0
+        AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
+      ORDER BY o.created_at ASC
+      LIMIT ?
+    `)
+    .all(shopId, cutoff, slots)
+    .map((r) => r.order_sn);
+}
+
 router.post('/next-order', async (req, res) => {
   const { station_id, shop_id, operator_name } = req.body;
   if (!station_id || !shop_id) {
@@ -235,7 +265,8 @@ router.post('/next-order', async (req, res) => {
   // hunting for boxes: those are handled in Print Resi Mode instead, where
   // scanning the temp barcode prints the real resi (see /besok-list and
   // /print-resi below).
-  const pick = db.prepare(`
+  const allowed = afterHoursFreshAllowed(shop_id, cutoff); // null = no after-hours cap
+  const pick = allowed && allowed.length === 0 ? undefined : db.prepare(`
     SELECT o.order_sn AS order_sn
     FROM orders o
     WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
@@ -1006,11 +1037,13 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
         `)
         .all(shop_id, cutoff)
         .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) }));
+  const afterHoursAllowed = afterHoursFreshAllowed(shop_id, cutoff);
+  const overCap = [];
   const waitingList = [
     ...waitingDelay.map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) })),
     ...queuedFresh,
     ...heldInstants,
-  ].sort((a, b) => a.created_at - b.created_at);
+  ];
 
   const readyToCheck = db
     .prepare(`
@@ -1035,6 +1068,13 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       ORDER BY is_instant DESC, created_at ASC
     `)
     .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id)
+    .filter((row) => {
+      // Past the cap (see afterHoursFreshAllowed): a fresh order that did not
+      // make the first N waits in the Waiting List instead.
+      if (!afterHoursAllowed || row.session_started_at != null || afterHoursAllowed.includes(row.order_sn)) return true;
+      overCap.push({ ...row, tags: computeTags({ isInstant: row.is_instant }) });
+      return false;
+    })
     .map((row) => {
       // Fallback for a row labeled before label_ready_at existed (or, for the
       // fresh/unlabeled-outside-work-hour case, one that was never booked at
@@ -1042,6 +1082,9 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds();
       return { ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
     });
+
+  waitingList.push(...overCap); // pushed out of Ready to Check above
+  waitingList.sort((a, b) => a.created_at - b.created_at);
 
   const onProgressCheck = db
     .prepare(`
@@ -1262,6 +1305,8 @@ function resolveOrderBucket(orderSn) {
   if (!order.label_ready && withinWorkHour) {
     return { order, session: null, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Waiting List', rank: 1 };
   }
+  const allowed = afterHoursFreshAllowed(order.shop_id, cutoff);
+  if (allowed && !allowed.includes(orderSn)) return { order, session: null, bucket: 'Waiting List', rank: 0 };
   return { order, session: null, bucket: 'Ready to Check', rank: 2 };
 }
 
