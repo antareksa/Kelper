@@ -42,6 +42,15 @@ Resumes fetching.
 
 ```bash
 cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/fetch-lock.js unlock 5
+```
+Unlocks for **5 new orders only** (change the number), then locks itself again.
+Orders already fetched are still booked and labelled after the lock; only new
+orders stop coming in. `status` shows how many are left. Running `lock` or
+`unlock` again ends it.
+
+```bash
+cd /opt/kelper/kelper-backend
 NODE_ENV=production node scripts/fetch-lock.js status
 ```
 Just checks current state, changes nothing. Same toggle as the "Mulai

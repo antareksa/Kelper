@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { syncAndLabelOrders } = require('../shopeeSync');
+const { syncAndLabelOrders, getFetchBudget } = require('../shopeeSync');
 const { getSetting, setSetting } = require('../settings');
 const { expandPackingItems } = require('../packingItems');
 
@@ -12,12 +12,16 @@ const router = express.Router();
 // /sync endpoint below and the background timer, since all three share the
 // same underlying check.
 router.get('/sync-status', (req, res) => {
-  res.json({ enabled: getSetting('syncEnabled', 'false') === 'true' });
+  // remaining: orders still allowed in by a limited unlock (null = no limit).
+  res.json({ enabled: getSetting('syncEnabled', 'false') === 'true', remaining: getFetchBudget() });
 });
 
 router.post('/sync-toggle', (req, res) => {
   const { enabled } = req.body;
   setSetting('syncEnabled', enabled ? 'true' : 'false');
+  // The button is a plain on/off: it ends any limited unlock (see shopeeSync.js).
+  setSetting('fetchBudget', '');
+  setSetting('fetchDrain', 'false');
   res.json({ enabled: !!enabled });
 });
 

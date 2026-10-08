@@ -5,7 +5,7 @@ const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, download
 const { getShopAffiliatePerformance, getShopSalesPerformanceDetail } = require('./shopee/brandClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
-const { getSetting } = require('./settings');
+const { getSetting, setSetting } = require('./settings');
 const {
   getOrderDelaySeconds,
   getMaxConcurrentBookings,
@@ -41,6 +41,40 @@ async function getInstantChannelIds(accessToken, shopId) {
   );
 }
 
+// Limited unlock (client-requested 2026-10-09): `fetch-lock.js unlock <n>` lets
+// only n NEW orders in, then locks fetching again by itself -- a safe way to
+// test with a handful of real orders. The remaining allowance lives in the
+// 'fetchBudget' setting (absent/empty = unlimited, the normal unlock).
+// Once spent, discovery stops (syncEnabled -> false) but the orders already
+// fetched are still booked and labelled: 'fetchDrain' keeps bookAndEnrichOnly
+// running until somebody locks/unlocks again. Without that, a plain lock
+// would strand the n orders just fetched with no label.
+function getFetchBudget() {
+  const raw = getSetting('fetchBudget', '');
+  if (raw === '' || raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
+
+// Takes `count` orders off the allowance; locks fetching when it reaches 0.
+function spendFetchBudget(count) {
+  const budget = getFetchBudget();
+  if (budget === null || count <= 0) return;
+  const left = Math.max(0, budget - count);
+  if (left > 0) {
+    setSetting('fetchBudget', String(left));
+    return;
+  }
+  setSetting('fetchBudget', '');
+  setSetting('syncEnabled', 'false');
+  setSetting('fetchDrain', 'true');
+  console.log('[server] fetch limit reached -- fetching LOCKED again (already-fetched orders are still booked)');
+}
+
+function isFetchDraining() {
+  return getSetting('fetchDrain', 'false') === 'true';
+}
+
 // Phase 1 — discover: pull new READY_TO_SHIP order numbers straight from
 // get_order_list and insert them immediately. Deliberately does NOT wait on
 // get_order_detail (item/SKU data) first — booking a shipment only needs the
@@ -66,13 +100,16 @@ async function discoverNewOrders(accessToken, shopId) {
   // order_sn Shopee happens to return this tick (which is most of them,
   // every tick, since READY_TO_SHIP covers everything not yet shipped).
   let newCount = 0;
+  const budget = getFetchBudget(); // null = unlimited
   for (const { order_sn: orderSn } of listResult.response.order_list || []) {
+    if (budget !== null && newCount >= budget) break; // limited unlock: no more than the allowance
     const result = insertOrder.run(orderSn, Number(shopId), now());
     if (result.changes > 0) newCount += 1;
   }
   console.log(`[server] found ${newCount} new order(s) (shop ${shopId})`);
 
   await fillMissingOrderDetails(accessToken, shopId);
+  spendFetchBudget(newCount); // after the details, so the new orders are complete before the lock
 }
 
 // Backfills item_list/buyer/logistics info for any local order that doesn't
@@ -732,7 +769,9 @@ async function discoverOnly(shopId) {
   if (!isSyncEnabled()) return;
 
   if (getConfig().debugMode) {
-    return runDebugTick(shopId);
+    runDebugTick(shopId);
+    spendFetchBudget(1); // one mock order is created per tick
+    return;
   }
 
   purgeStaleMockOrders(shopId);
@@ -744,9 +783,12 @@ async function discoverOnly(shopId) {
 // on its own independent schedule (see startShopeeSync) so it can never
 // delay discoverOnly above from picking up the next new order.
 async function bookAndEnrichOnly(shopId) {
-  if (!isSyncEnabled() || getConfig().debugMode) return;
+  if (getConfig().debugMode) return;
+  const draining = !isSyncEnabled() && isFetchDraining(); // limited unlock spent: finish what was fetched
+  if (!isSyncEnabled() && !draining) return;
 
   const accessToken = await getValidAccessToken(shopId);
+  if (draining) await fillMissingOrderDetails(accessToken, shopId); // discovery is locked, so do the backfill here
   // Kill switch for the auto ship_order/label step — config.json's
   // sync.autoBookShipping, editable without a restart.
   if (getConfig().sync.autoBookShipping) {
@@ -932,4 +974,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining };
