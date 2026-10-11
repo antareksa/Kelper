@@ -58,8 +58,11 @@ Run `start-packing-station-quick.bat`, then scan your badge.
 
 Scan the **`SHUTDOWN_PC`** command barcode (print it from **Packing Station
 Dashboard, Daftar Staff** like the others) **twice within 10 seconds** and the PC
-shuts down. It is refused while an order is being processed. It also works at the
-badge screen, and logs the operator out first.
+shuts down. It is **never refused**, even while an order is in progress (orders keep
+arriving in the evening, so the station always has one). It logs the operator out
+first, which hands an order that is still being scanned back to the queue for another
+station. A package whose label is already printed stays with that operator and is
+there again at their next login. It also works at the badge screen.
 
 A web page cannot power a PC off by itself, so this needs one setting on each PC,
 done once:

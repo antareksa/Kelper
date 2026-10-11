@@ -383,7 +383,7 @@ export const COMMANDS = [
   { cmd: 'PRINT_RESI_MODE', desc: 'Alihkan station ini ke Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket Pack Besok untuk mencetak resi aslinya, lalu scan resi yang tercetak untuk konfirmasi.' },
   { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman atau Mode Cetak Resi.' },
   { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
-  { cmd: 'SHUTDOWN_PC', desc: 'Matikan PC station ini. Scan dua kali dalam 10 detik untuk konfirmasi; hanya bisa jika tidak ada order yang sedang diproses. Perlu pengaturan sekali di PC (enable-shutdown-barcode.reg).' },
+  { cmd: 'SHUTDOWN_PC', desc: 'Matikan PC station ini. Scan dua kali dalam 10 detik untuk konfirmasi. Tetap bisa dipakai saat ada order yang sedang diproses: order itu otomatis dikembalikan ke antrian. Perlu pengaturan sekali di PC (enable-shutdown-barcode.reg).' },
 ];
 
 // SHUTDOWN_PC (client-requested 2026-10-12). A web page cannot power a PC off, so
@@ -1293,10 +1293,14 @@ function PackingStation() {
   // `message` is only a string for the automatic logout — the Keluar button
   // passes its click event here, which must not be shown as text.
   // First scan arms it, a second scan within SHUTDOWN_CONFIRM_MS does it -- a stray
-  // scan of the card must not turn a working PC off. Refused while an order is being
-  // processed. Works logged out too (the PC at the badge screen at the end of the day).
+  // scan of the card must not turn a working PC off. NEVER refused because of an
+  // order in progress (client-requested 2026-10-12): at night the station moves on
+  // to the next order by itself, so there is always one, and the operator must still
+  // be able to switch the PC off. Logging out hands an order that is still being
+  // scanned back to the queue (see the check-out effect and sessionRelease.js); a
+  // package whose label is already printed stays with this operator, who finds it
+  // again at the next login. Works logged out too (the PC at the badge screen).
   function handleShutdownScan() {
-    if (state) return notify('Masih ada order yang sedang diproses. Selesaikan, atau scan RELEASE_ORDER, sebelum mematikan PC.', 'error');
     const nowMs = Date.now();
     if (nowMs - shutdownArmedRef.current > SHUTDOWN_CONFIRM_MS) {
       shutdownArmedRef.current = nowMs;
