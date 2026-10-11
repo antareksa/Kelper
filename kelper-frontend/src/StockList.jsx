@@ -99,6 +99,8 @@ export default function StockList() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       const notes = [];
+      if (data.unknownSku?.length > 0) notes.push(`SKU tidak ada di daftar produk, dilewati: ${data.unknownSku.join('; ')}`);
+      if (data.duplicateRows?.length > 0) notes.push(`SKU muncul lebih dari sekali (baris terakhir dipakai): ${[...new Set(data.duplicateRows)].join('; ')}`);
       if (data.unmatched?.length > 0) notes.push(`Nama tidak cocok dengan produk: ${data.unmatched.join('; ')}`);
       if (data.unreadable?.length > 0) notes.push(`Nilai kosong/tidak terbaca (tidak diubah): ${data.unreadable.join('; ')}`);
       setMessage(`Berhasil impor stok untuk ${data.imported} SKU.${notes.length ? ` ${notes.join('. ')}.` : ''}`);
@@ -153,7 +155,7 @@ export default function StockList() {
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, opacity: uploading ? 0.6 : 1 }}
-          title="Impor stok dari Excel (kolom STOK AKHIR)"
+          title="Impor stok dari Excel: kolom SKU dan Stok"
         >
           <IconUpload size={15} />
           {uploading ? 'Mengimpor...' : 'Unggah Stok'}

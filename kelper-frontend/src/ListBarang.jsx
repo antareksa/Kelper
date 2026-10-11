@@ -782,7 +782,7 @@ function ListBarang() {
           onClick={() => stockFileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor stok dari Excel (kolom STOK AKHIR)"
+          title="Impor stok dari Excel: kolom SKU dan Stok"
         >
           <IconUpload size={15} />
           Unggah Stok
