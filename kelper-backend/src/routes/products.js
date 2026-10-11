@@ -972,14 +972,11 @@ router.get('/catalog', (req, res) => {
   }
 
   // "HABIS" follows OUR stock (the Stok the client enters / uploads), never Shopee's
-  // own number (client-requested 2026-10-12). An unknown stock (never entered) is
-  // not sold out. A bundle is sold out when one of its parts is short for one set
-  // -- a bundle's stock is taken from its parts (see confirmOrderPickedUp) -- and
-  // a bundle with no contents on file falls back to its own stock like any product.
-  const ownStockOf = (sku) => productBySku.get(sku)?.stock ?? null;
+  // own number (client-requested 2026-10-12). A bundle is a product like any other
+  // here: it has its own stock, and selling it takes down only that (see
+  // confirmOrderPickedUp), so its parts do not matter. An unknown stock (never
+  // entered) is not sold out.
   function isSoldOut(item, itemModels) {
-    const parts = contentsByBundle.get(item.item_sku) || [];
-    if (parts.length > 0) return parts.some((p) => { const s = ownStockOf(p.sku); return s != null && s < p.qty; });
     return itemModels.length > 0 && itemModels.every((v) => v.dashboardStock != null && v.dashboardStock <= 0);
   }
 

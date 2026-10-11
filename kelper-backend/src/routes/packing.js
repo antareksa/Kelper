@@ -28,8 +28,9 @@ function touch(sessionId) {
 
 // The manual dashboard stock (products.stock, see db.js). Client-requested
 // 2026-10-07: it now goes down when an order is confirmed PICKED UP in Shipping
-// Mode (confirmOrderPickedUp below), by each item's ordered quantity -- for a
-// bundle, by its parts. Before that (2026-09-25) it went down per item scan
+// Mode (confirmOrderPickedUp below), by each item's ordered quantity -- a bundle
+// takes down ITS OWN stock only, never its parts' (client-requested 2026-10-12;
+// the operator still scans the parts, see packingItems.js). Before that (2026-09-25) it went down per item scan
 // while packing; sessions created before the change keep that old per-scan
 // behaviour (packing_sessions.stock_consumed_at_scan = 1, see db.js) so an
 // order in progress at deploy time is not counted twice. A SKU with no
@@ -711,10 +712,12 @@ function confirmOrderPickedUp(orderSn) {
   db.prepare("UPDATE orders SET status = 'DONE' WHERE order_sn = ?").run(orderSn);
 
   // Dashboard stock goes down NOW, at pickup (client-requested 2026-10-07), by
-  // what was ordered: a bundle's parts, not the bundle itself (see
-  // packingItems.js). Skipped for a session that already took it per scan.
+  // what was ordered, line by line as Shopee sold it: a bundle line takes down the
+  // bundle's own stock and leaves its parts alone (client-requested 2026-10-12).
+  // Skipped for a session that already took it per scan (those older sessions
+  // took the parts per scan, the way they began).
   if (!session.stock_consumed_at_scan) {
-    for (const it of expandPackingItems(orderSn)) consumeStockQty.run(it.qty, pickedUpAt, it.sku);
+    for (const it of db.prepare('SELECT sku, qty FROM order_items WHERE order_sn = ?').all(orderSn)) consumeStockQty.run(it.qty, pickedUpAt, it.sku);
   }
 
   // Client-requested (2026-09-28): freeze this order's per-item price/hpp
