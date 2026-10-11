@@ -109,6 +109,35 @@ untouched. You must type the actual shop_id (e.g. `227886187`) — it refuses
 to run without one, on purpose, so it can never accidentally wipe a real
 shop by mistake.
 
+## Reset EVERYTHING (start from a clean slate)
+
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/reset-all.js
+```
+Shows what will be deleted, then asks you to type `RESET`. Before deleting
+anything it saves a full backup copy to `kelper-backend/backups/`, and the
+delete is all-or-nothing.
+
+Deletes: orders and packing history, attendance, ads/shop statistics, the
+Shopee connection (tokens + cached items), the product/HPP/barcode/stock
+catalog and bundles, staff (operators), and packing settings. Fetching ends
+up **locked**. **Admin accounts are always kept**, otherwise nobody could log
+in to the Dashboard again.
+
+Keep parts by adding options:
+```bash
+NODE_ENV=production node scripts/reset-all.js --keep-staff --keep-products
+```
+Options: `--keep-staff`, `--keep-products`, `--keep-settings`,
+`--keep-shopee`. `--yes` skips the question.
+
+Afterwards reload the Dashboard and Packing Station pages. This does not
+revoke the app at Shopee itself (remove it under Seller Centre if you want
+that too) and does not delete packing-video files. To undo, stop the server
+(`sudo systemctl stop kelper`), copy the backup over
+`kelper.production.db`, then start it again (`sudo systemctl start kelper`).
+
 ## Release an order stuck in Masalah because booking failed
 
 ```bash
