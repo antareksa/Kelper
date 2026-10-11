@@ -833,8 +833,10 @@ router.post('/confirm-pickup', (req, res) => {
   // instead of just an ok flag. order_sn is the RESOLVED order number even
   // when the scan was a resi -- the station uses it to drop the row from its
   // on-screen queue.
-  const order = db.prepare('SELECT created_at FROM orders WHERE order_sn = ?').get(orderSn);
-  res.json({ ok: true, order_sn: orderSn, created_at: order.created_at, picked_up_at: pickedUpAt });
+  // shipping_carrier / is_instant: the station says the expedition's name out loud
+  // (client-requested 2026-10-12, see carrierSpeech.js).
+  const order = db.prepare('SELECT created_at, shipping_carrier, is_instant FROM orders WHERE order_sn = ?').get(orderSn);
+  res.json({ ok: true, order_sn: orderSn, created_at: order.created_at, picked_up_at: pickedUpAt, shipping_carrier: order.shipping_carrier || null, is_instant: !!order.is_instant });
 });
 
 // Shipping Mode's live pickup queue (client-requested 2026-09-30) -- station-

@@ -81,6 +81,15 @@ printing one), and turns Fast Startup off so the shutdown is a full one. No chan
 to the launchers. On a PC without it, scanning the barcode does nothing and the
 station says so after about 25 seconds.
 
+## Sound in Shipping Mode
+
+When a parcel is confirmed picked up in Shipping Mode, the station **says the
+expedition's name out loud** (for example "J and T", "J N E", "S P X"; an instant
+order starts with "Instant"). It uses the PC's own voice, so the PC's **speakers
+must be on and the volume up** (the Windows volume, and Chrome is not muted). A
+scan that is refused (already picked up, unknown) makes no sound. If the carrier is
+not on the order, it says "Ekspedisi tidak diketahui".
+
 ## Modes
 
 Switch a station's mode by scanning its command barcode (print them from the

@@ -4,6 +4,7 @@ import { IconMonitor } from './Icons';
 import { renderCode39Svg } from './Barcode';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE } from './apiBase';
+import { speakCarrier } from './carrierSpeech';
 
 // orders.created_at / packing_sessions.completed_at are unix SECONDS
 // (server-side, see shopeeSync.js's now()), not the millisecond timestamps
@@ -1455,6 +1456,7 @@ function PackingStation() {
         // Optimistic — drops it from the on-screen queue immediately instead
         // of waiting up to 3s for the next poll to notice.
         setPickupList((list) => list.filter((o) => o.order_sn !== data.order_sn));
+        speakCarrier(data.shipping_carrier, data.is_instant); // says the expedition, e.g. "J N E"
         return notify(`${data.order_sn} terkonfirmasi sudah diambil.`, 'success');
       } catch (err) {
         return notify(err.message, 'error');
