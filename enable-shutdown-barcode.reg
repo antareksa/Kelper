@@ -1,0 +1,31 @@
+Windows Registry Editor Version 5.00
+
+; Lets the Packing Station turn this PC off when the SHUTDOWN_PC command barcode is
+; scanned (twice, within 10 seconds). Apply ONCE per station PC, then restart Chrome.
+;
+; What it does:
+;  1. Registers a small Windows handler, kelper-shutdown://, that runs
+;     shutdown /s /t 20  (power off after 20 seconds).
+;  2. Tells Chrome that the Packing Station page may open it without asking
+;     (like enable-silent-printing.reg, this is a Chrome policy for this machine).
+;  3. Turns Fast Startup off, so every shutdown is a FULL shutdown.
+;
+; The address below must be the address the station opens (SERVER_URL in
+; start-packing-station.bat). If yours is different, change it here before applying.
+;
+; To apply: double-click this file and accept the UAC prompt.
+; To undo: delete the kelper-shutdown key, the AutoLaunchProtocolsFromOrigins key,
+; and set HiberbootEnabled back to 1.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Classes\kelper-shutdown]
+@="URL:KELPER shutdown"
+"URL Protocol"=""
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Classes\kelper-shutdown\shell\open\command]
+@="\"C:\\Windows\\System32\\shutdown.exe\" /s /t 20 /c \"KELPER: PC dimatikan lewat barcode\""
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\AutoLaunchProtocolsFromOrigins]
+"1"="{\"allowed_origins\":[\"https://packing.kelper.co.id\"],\"protocol\":\"kelper-shutdown\"}"
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power]
+"HiberbootEnabled"=dword:00000000

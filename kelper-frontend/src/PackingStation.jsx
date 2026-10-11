@@ -383,14 +383,23 @@ export const COMMANDS = [
   { cmd: 'PRINT_RESI_MODE', desc: 'Alihkan station ini ke Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket Pack Besok untuk mencetak resi aslinya, lalu scan resi yang tercetak untuk konfirmasi.' },
   { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman atau Mode Cetak Resi.' },
   { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
+  { cmd: 'SHUTDOWN_PC', desc: 'Matikan PC station ini. Scan dua kali dalam 10 detik untuk konfirmasi; hanya bisa jika tidak ada order yang sedang diproses. Perlu pengaturan sekali di PC (enable-shutdown-barcode.reg).' },
 ];
+
+// SHUTDOWN_PC (client-requested 2026-10-12). A web page cannot power a PC off, so
+// the page opens this custom URL and Windows hands it to a handler that was
+// registered once on the PC (enable-shutdown-barcode.reg), which runs
+// "shutdown /s /t 20". The 20 s lets the operator be logged out first. On a PC
+// without that setup nothing happens and the station says so after 25 s.
+const SHUTDOWN_URL = 'kelper-shutdown://now';
+const SHUTDOWN_CONFIRM_MS = 10000;
 
 // Code 39 (the printed command barcodes, see PackingStationDashboard.jsx's
 // printCommandBarcode) has no underscore in its character set, so the
 // printed barcode for e.g. SHIPPING_MODE actually encodes the hyphenated
 // form instead. Mapping it back here keeps the real command constants above
 // byte-exact everywhere else in this file, while still accepting what
-// actually comes off the printed barcode. Only these five commands contain
+// actually comes off the printed barcode. Only these six commands contain
 // an underscore; none of the aliases can collide with a real order_sn or a
 // BESOK- temp barcode.
 const COMMAND_BARCODE_ALIASES = {
@@ -399,6 +408,7 @@ const COMMAND_BARCODE_ALIASES = {
   'SHIPPING-MODE': 'SHIPPING_MODE',
   'PRINT-RESI-MODE': 'PRINT_RESI_MODE',
   'PACKING-MODE': 'PACKING_MODE',
+  'SHUTDOWN-PC': 'SHUTDOWN_PC',
 };
 
 async function post(path, body) {
@@ -550,6 +560,7 @@ function PackingStation() {
   const [flash, setFlash] = useState(null); // { type: 'success' | 'error' }
   const inputRef = useRef(null);
   const testScanInputRef = useRef(null);
+  const shutdownArmedRef = useRef(0); // when SHUTDOWN_PC was scanned the first time (it must be scanned twice)
   const submittingRef = useRef(false); // reentrancy guard — a real scanner can fire faster than a request round-trips
   const printFrameRef = useRef(null);
 
@@ -1281,6 +1292,35 @@ function PackingStation() {
 
   // `message` is only a string for the automatic logout — the Keluar button
   // passes its click event here, which must not be shown as text.
+  // First scan arms it, a second scan within SHUTDOWN_CONFIRM_MS does it -- a stray
+  // scan of the card must not turn a working PC off. Refused while an order is being
+  // processed. Works logged out too (the PC at the badge screen at the end of the day).
+  function handleShutdownScan() {
+    if (state) return notify('Masih ada order yang sedang diproses. Selesaikan, atau scan RELEASE_ORDER, sebelum mematikan PC.', 'error');
+    const nowMs = Date.now();
+    if (nowMs - shutdownArmedRef.current > SHUTDOWN_CONFIRM_MS) {
+      shutdownArmedRef.current = nowMs;
+      return notify('Scan SHUTDOWN_PC sekali lagi dalam 10 detik untuk mematikan PC.', 'info');
+    }
+    shutdownArmedRef.current = 0;
+    // Ask Windows FIRST, while still inside the scan's key press: browsers only let a
+    // page open an external app right after a user action. Windows waits ~20 s before
+    // powering off, which is plenty for the operator to be logged out below.
+    const link = document.createElement('a');
+    link.href = SHUTDOWN_URL;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    if (operatorName) handleLogout();
+    notify('PC akan dimatikan dalam beberapa detik...', 'info');
+    setBusy(true);
+    setBusyLabel('PC akan dimatikan...');
+    setTimeout(() => {
+      setBusy(false);
+      notify('PC belum mati: pengaturan mati lewat barcode belum dipasang di PC ini (lihat PACKING-STATION-PC-SETUP.md).', 'error');
+    }, 25000);
+  }
+
   function handleLogout(message) {
     setOperatorName('');
     setStationId('');
@@ -1328,6 +1368,9 @@ function PackingStation() {
     if (submittingRef.current) {
       return notify('Masih memproses scan sebelumnya — coba lagi sebentar.', 'error');
     }
+
+    // Before the login branch below: turning the PC off must also work at the badge screen.
+    if (value === 'SHUTDOWN_PC') return handleShutdownScan();
 
     // Not identified yet — every scan here is treated as an operator login
     // barcode attempt, not a packing command.

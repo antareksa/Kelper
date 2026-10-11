@@ -54,6 +54,30 @@ Then press **Lanjutkan** and scan an operator badge to log in.
 
 Run `start-packing-station-quick.bat`, then scan your badge.
 
+## Turning the PC off with a barcode (optional, once per PC)
+
+Scan the **`SHUTDOWN_PC`** command barcode (print it from **Packing Station
+Dashboard, Daftar Staff** like the others) **twice within 10 seconds** and the PC
+shuts down. It is refused while an order is being processed. It also works at the
+badge screen, and logs the operator out first.
+
+A web page cannot power a PC off by itself, so this needs one setting on each PC,
+done once:
+
+1. Copy `enable-shutdown-barcode.reg` (repo root, next to
+   `enable-silent-printing.reg`) to the PC.
+2. Open it in Notepad and check the address inside
+   (`https://packing.kelper.co.id`) is the one in `start-packing-station.bat`
+   (`SERVER_URL`). Change it if not.
+3. Double-click it and accept the UAC prompt.
+4. Close the station window and restart the PC once.
+
+It registers a `kelper-shutdown://` handler that runs `shutdown /s /t 20`, lets
+Chrome open it without asking (a Chrome policy for this machine, like the silent
+printing one), and turns Fast Startup off so the shutdown is a full one. No change
+to the launchers. On a PC without it, scanning the barcode does nothing and the
+station says so after about 25 seconds.
+
 ## Modes
 
 Switch a station's mode by scanning its command barcode (print them from the
