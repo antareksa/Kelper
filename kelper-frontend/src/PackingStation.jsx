@@ -4,7 +4,7 @@ import { IconMonitor } from './Icons';
 import { renderCode39Svg } from './Barcode';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE } from './apiBase';
-import { speakCarrier, preloadCarrierSounds } from './carrierSpeech';
+import { speakCarrier, playSound, preloadCarrierSounds } from './carrierSpeech';
 
 // orders.created_at / packing_sessions.completed_at are unix SECONDS
 // (server-side, see shopeeSync.js's now()), not the millisecond timestamps
@@ -587,11 +587,12 @@ function PackingStation() {
     if (stationReady && inputRef.current) inputRef.current.focus({ preventScroll: true });
   }, [stationReady, operatorName, state]);
 
-  // Shipping Mode announces the expedition from the client's sound files (see
-  // carrierSpeech.js); load them when the mode opens so the sound is instant.
+  // The client's sound files (the expedition announcement in Shipping Mode, and
+  // start_packing in Packing Mode -- see carrierSpeech.js): loaded as soon as an
+  // operator is in, so a sound starts the instant it is needed.
   useEffect(() => {
-    if (mode === 'shipping') preloadCarrierSounds();
-  }, [mode]);
+    if (operatorName) preloadCarrierSounds();
+  }, [operatorName]);
 
   // Kiosk-mode prints silently and instantly, with no OS dialog — but the
   // printer driver itself can still briefly take real OS-level window focus
@@ -1577,6 +1578,9 @@ function PackingStation() {
             flashPanel('success');
             notify(`${grown.product_name} berhasil discan (${grown.scanned_qty}/${grown.qty})`, 'success');
           }
+          // The scan that completes the order (client-requested 2026-10-12): the
+          // operator can stop scanning and start packing the box.
+          if (data.allComplete && !state.allComplete) playSound('start_packing', 'Mulai packing');
           return applyState(data);
         } catch (err) {
           // Any rejected scan (wrong item, already fully scanned, or not

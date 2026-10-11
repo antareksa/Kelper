@@ -24,7 +24,9 @@ const RULES = [
   [/wahana/i, 'wahana', 'Wahana'],
 ];
 
-export const SOUND_KEYS = [...RULES.map((r) => r[1]), 'instant', 'unknown'];
+// Besides the expedition files: 'instant' and 'unknown', and the station's own
+// event sounds (start_packing: every item of an order is scanned, time to pack).
+export const SOUND_KEYS = [...RULES.map((r) => r[1]), 'instant', 'unknown', 'start_packing', 'wrong_item'];
 
 // Which expedition file a carrier maps to; null = a carrier we have no file for.
 export function carrierKey(carrier) {
@@ -127,6 +129,18 @@ function speak(text) {
   } catch {
     // Sound is a convenience; a failure must never get in the way of a pickup scan.
   }
+}
+
+// A single event sound by file name (e.g. 'start_packing'); the PC's voice says
+// `fallbackText` if the file is not there, nothing if there is none.
+export function playSound(key, fallbackText) {
+  try {
+    const element = loaded.get(key);
+    if (element) return playFiles([element]);
+  } catch {
+    // fall through to the voice
+  }
+  if (fallbackText) speak(fallbackText);
 }
 
 // The client's recordings when every file is there, otherwise the PC's voice.
