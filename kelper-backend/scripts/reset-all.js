@@ -17,7 +17,10 @@
 //   --keep-staff       keep operators (Daftar Staff)
 //   --keep-products    keep the product / HPP / barcode / stock catalog and bundles
 //   --keep-settings    keep packing settings (delay, limits, work hours, ...)
-//   --keep-shopee      keep the Shopee connection (tokens and cached items)
+//   --keep-shopee      keep the Shopee connection (the shop stays logged in / connected)
+//   --keep-items       keep the cached Shopee item list shown in List Barang. Without it
+//                      the list is cleared and List Barang stays empty until the sync
+//                      button pulls the items again (they are Shopee's, they come back).
 //
 // Fetching ALWAYS ends up LOCKED: wiping the settings table does it (locked is
 // the default), and with --keep-settings the lock is set explicitly -- an
@@ -41,7 +44,7 @@ const { NODE_ENV } = require('../src/env');
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((a) => a.startsWith('--')));
-const known = ['--yes', '--keep-staff', '--keep-products', '--keep-settings', '--keep-shopee'];
+const known = ['--yes', '--keep-staff', '--keep-products', '--keep-settings', '--keep-shopee', '--keep-items'];
 const unknownFlags = [...flags].filter((f) => !known.includes(f));
 if (unknownFlags.length > 0 || args.some((a) => !a.startsWith('--'))) {
   console.error(`Unknown option(s): ${[...unknownFlags, ...args.filter((a) => !a.startsWith('--'))].join(' ')}`);
@@ -53,7 +56,8 @@ if (unknownFlags.length > 0 || args.some((a) => !a.startsWith('--'))) {
 const GROUPS = [
   { name: 'Orders & packing history', skip: false, tables: ['scan_progress', 'packing_sessions', 'order_income', 'order_items', 'orders', 'station_sessions', 'attendance_log'] },
   { name: 'Ads / shop / affiliate statistics', skip: false, tables: ['ads_performance_daily', 'shop_performance_daily', 'affiliate_performance_daily'] },
-  { name: 'Shopee connection (tokens + cached items)', skip: flags.has('--keep-shopee'), tables: ['shopee_tokens', 'shopee_brand_tokens', 'shopee_item_models', 'shopee_items'] },
+  { name: 'Shopee item list (cached products shown in List Barang)', skip: flags.has('--keep-items'), tables: ['shopee_item_models', 'shopee_items'] },
+  { name: 'Shopee connection (tokens)', skip: flags.has('--keep-shopee'), tables: ['shopee_tokens', 'shopee_brand_tokens'] },
   { name: 'Product catalog (HPP, barcode, stock) + bundles', skip: flags.has('--keep-products'), tables: ['bundle_items', 'products'] },
   { name: 'Staff (operators)', skip: flags.has('--keep-staff'), tables: ['operators'] },
   { name: 'Settings (packing limits, work hours, fetch lock)', skip: flags.has('--keep-settings'), tables: ['settings'] },
@@ -124,6 +128,7 @@ function ask(question) {
   console.log('\nReset done.');
   console.log('  - Fetching is LOCKED (nothing is pulled from Shopee until you unlock it).');
   if (!flags.has('--keep-shopee')) console.log('  - Shopee is DISCONNECTED here -- connect the shop again from the Dashboard.');
+  if (!flags.has('--keep-items')) console.log('  - The Shopee item list was cleared -- once Shopee is connected, press the sync button in List Barang to pull the items again.');
   console.log('  - Reload any open Packing Station / Dashboard pages.');
   console.log(`  - To undo: stop the server and replace kelper.${NODE_ENV}.db with the backup file above.`);
   process.exit(0);

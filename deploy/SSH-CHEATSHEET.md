@@ -130,7 +130,9 @@ Keep parts by adding options:
 NODE_ENV=production node scripts/reset-all.js --keep-staff --keep-products
 ```
 Options: `--keep-staff`, `--keep-products`, `--keep-settings`,
-`--keep-shopee`. `--yes` skips the question.
+`--keep-shopee` (keeps the Shopee connection), `--keep-items` (keeps the item
+list shown in List Barang; without it the list is cleared and comes back when
+you press the sync button). `--yes` skips the question.
 
 Afterwards reload the Dashboard and Packing Station pages. This does not
 revoke the app at Shopee itself (remove it under Seller Centre if you want
