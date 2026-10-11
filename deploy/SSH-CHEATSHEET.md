@@ -138,6 +138,40 @@ that too) and does not delete packing-video files. To undo, stop the server
 (`sudo systemctl stop kelper`), copy the backup over
 `kelper.production.db`, then start it again (`sudo systemctl start kelper`).
 
+## Backups in Google Cloud Storage
+
+Save a backup (safe while the server is running):
+```bash
+cd /opt/kelper/kelper-backend
+NODE_ENV=production node scripts/backup.js save
+```
+Add a label if you like: `... backup.js save before-go-live`. The backup is
+compressed and uploaded to the bucket under `backups/production/`.
+
+List the backups (the last one is the newest):
+```bash
+NODE_ENV=production node scripts/backup.js list
+```
+
+Restore a backup — **replaces the current database**:
+```bash
+NODE_ENV=production node scripts/backup.js load latest
+```
+or `load <name>` with a name from `list`. It checks the backup is healthy,
+shows what is inside it versus what is there now, saves a safety copy of the
+current database to `kelper-backend/backups/`, asks you to type `RESTORE`,
+then stops the server, swaps the database and starts the server again.
+Everything saved after that backup was taken is lost. Reload the Dashboard
+and Packing Station pages afterwards, then check `fetch-lock.js status`.
+
+`load` also accepts a local file, e.g. the copy `reset-all.js` saved:
+`NODE_ENV=production node scripts/backup.js load backups/<file>.db`.
+
+If Google says "no permission": in Google Cloud Console open the bucket >
+Permissions and give the VM's service account the role **Storage Object
+User** (it must be able to write, list and read). Backups contain the Shopee
+tokens, so keep that bucket folder private.
+
 ## Release an order stuck in Masalah because booking failed
 
 ```bash
