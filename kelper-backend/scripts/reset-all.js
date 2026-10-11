@@ -19,8 +19,11 @@
 //   --keep-settings    keep packing settings (delay, limits, work hours, ...)
 //   --keep-shopee      keep the Shopee connection (tokens and cached items)
 //
-// Fetching ends up LOCKED (the settings table is cleared; locked is the
-// default). Station pages that are open should be reloaded afterwards.
+// Fetching ALWAYS ends up LOCKED: wiping the settings table does it (locked is
+// the default), and with --keep-settings the lock is set explicitly -- an
+// unlocked server would otherwise pull every open Shopee order straight back
+// in. Unlock again with fetch-lock.js when you are ready. Station pages that
+// are open should be reloaded afterwards.
 //
 // NOT touched (outside the database): the authorization stored at Shopee itself
 // (remove the app under Seller Centre if you also want it revoked there), and
@@ -75,7 +78,7 @@ for (const g of GROUPS.filter((x) => !x.skip)) {
 const kept = GROUPS.filter((x) => x.skip);
 console.log('\nWill KEEP:');
 console.log(`  - Admin accounts (${count('admin_users')}) -- always kept`);
-for (const g of kept) console.log(`  - ${g.name} (--keep flag)`);
+for (const g of kept) console.log(`  - ${g.name} (--keep flag)${g.tables.includes('settings') ? ' -- except fetching, which is locked' : ''}`);
 if (unlisted.length > 0) console.log(`\nNOTE: table(s) not covered by this script, left untouched: ${unlisted.join(', ')}`);
 console.log('');
 
@@ -108,6 +111,11 @@ function ask(question) {
   const wipe = db.transaction(() => {
     for (const g of GROUPS.filter((x) => !x.skip)) {
       for (const t of g.tables) if (existing.has(t)) db.prepare(`DELETE FROM "${t}"`).run();
+    }
+    if (flags.has('--keep-settings')) {
+      // Settings survive, but fetching must not: lock it and drop any limited-unlock state.
+      db.prepare("INSERT INTO settings (key, value) VALUES ('syncEnabled', 'false') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+      db.prepare("DELETE FROM settings WHERE key IN ('fetchBudget', 'fetchDrain')").run();
     }
   });
   wipe();
