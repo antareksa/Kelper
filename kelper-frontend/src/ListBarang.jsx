@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { colors, card } from './theme';
-import { IconSearch, IconRefresh, IconUpload, IconStore, IconHistory, IconChevronDown } from './Icons';
+import { IconSearch, IconRefresh, IconUpload, IconStore, IconChevronDown } from './Icons';
 import { useShopName } from './useShopName';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE, apiFetch } from './apiBase';
@@ -20,8 +20,8 @@ function formatRupiah(value) {
   return `Rp${Number(value).toLocaleString('id-ID')}`;
 }
 
-const TABLE_GRID = '32px minmax(220px,2fr) 90px 100px 90px 100px 90px 130px 130px 44px';
-const SUB_GRID = '110px 1fr 90px 110px 140px 150px 100px 90px 80px 80px 120px 120px 90px';
+const TABLE_GRID = '32px minmax(220px,2fr) 90px 100px 90px 100px 90px 130px 130px';
+const SUB_GRID = '110px 1fr 90px 110px 140px 150px 100px 90px 80px 80px 120px 120px';
 
 function SummaryCard({ label, value, accent }) {
   return (
@@ -413,10 +413,6 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
 
         <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(product.omsetIni)}</div>
         <div style={{ fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(product.omsetLalu)}</div>
-
-        <button style={{ background: 'none', border: 'none', color: colors.textDim, cursor: 'pointer', padding: 4 }}>
-          <IconHistory size={14} />
-        </button>
       </div>
 
       {expanded && (
@@ -437,7 +433,6 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                 <div>Qty Lalu</div>
                 <div>Omset Ini</div>
                 <div>Omset Lalu</div>
-                <div>Aksi</div>
               </div>
               {product.variants.map((v) => (
                 <div
@@ -469,7 +464,6 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                   <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{v.qtyLalu}</div>
                   <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.omsetIni)}</div>
                   <div style={{ color: colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.omsetLalu)}</div>
-                  <div />
                 </div>
               ))}
             </div>
@@ -831,7 +825,6 @@ function ListBarang() {
                   {sortHeader('profit', 'Est % Profit')}
                   {sortHeader('omsetIni', 'Omset Bulan Ini')}
                   {sortHeader('omsetLalu', 'Omset Bulan Lalu')}
-                  <div>Aksi</div>
                 </div>
 
                 {sorted.map((p) => (
