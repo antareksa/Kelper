@@ -354,7 +354,18 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
             <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {product.name}
             </div>
-            <div style={{ fontSize: 11, color: colors.textDim }}>{product.variants.length} varian</div>
+            {product.isBundle ? (
+              <div
+                title={(product.bundleItems || []).map((i) => `${i.sku} x${i.qty}`).join(', ')}
+                style={{ fontSize: 11, color: (product.bundleItems || []).length ? colors.textDim : colors.red, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
+                {(product.bundleItems || []).length
+                  ? `Isi: ${product.bundleItems.map((i) => `${i.sku} x${i.qty}`).join(' + ')}`
+                  : 'Isi bundle belum diisi'}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: colors.textDim }}>{product.variants.length} varian</div>
+            )}
           </div>
           {hovering && product.image && (
             <ImageHoverPreview src={product.image} anchorRect={thumbRef.current?.getBoundingClientRect()} />
@@ -475,7 +486,6 @@ function ListBarang() {
   const shopName = useShopName();
   const fileInputRef = useRef(null);
   const stockFileInputRef = useRef(null);
-  const barcodeFileInputRef = useRef(null);
 
   useEffect(() => {
     loadCatalog();
@@ -596,6 +606,9 @@ function ListBarang() {
 
         const notes = [];
         if (data.bundlesSet != null) notes.push(`${data.bundlesSet} bundle diisi`);
+        if (data.bundlesCleared > 0) notes.push(`isi ${data.bundlesCleared} produk ditandai bukan bundle dikosongkan`);
+        if (data.unknownSku?.length > 0) notes.push(`SKU tidak ada di Shopee/produk, dilewati: ${data.unknownSku.join('; ')}`);
+        if (data.duplicateRows?.length > 0) notes.push(`SKU muncul lebih dari sekali (baris terakhir dipakai): ${[...new Set(data.duplicateRows)].join('; ')}`);
         if (data.ambiguous?.length > 0) notes.push(`Satu nama dengan beberapa barcode, dilewati: ${data.ambiguous.join('; ')}`);
         if (data.conflicts?.length > 0) notes.push(`Barcode bentrok: ${data.conflicts.join('; ')}`);
         if (data.unresolvedBundles?.length > 0) notes.push(`Bundle dilewati: ${data.unresolvedBundles.join('; ')}`);
@@ -613,9 +626,8 @@ function ListBarang() {
       }
     };
   }
-  const handleFileChange = makeUploadHandler('import-hpp', 'HPP');
+  const handleFileChange = makeUploadHandler('import-item-data', 'Item Data');
   const handleStockFileChange = makeUploadHandler('import-stock', 'stok');
-  const handleBarcodeFileChange = makeUploadHandler('import-barcode', 'barcode');
 
   // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
   // one taken down by Shopee) — neither is "NORMAL" anymore, but the item
@@ -751,10 +763,10 @@ function ListBarang() {
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor HPP dari Excel (Nama Barang online, HPP)"
+          title="Impor Item Data dari Excel: SKU, Nama Item, GTIN, HPP, Harga, Item Bundle?, List Item (GTIN)"
         >
           <IconUpload size={15} />
-          {uploading ? 'Mengimpor...' : 'Unggah HPP'}
+          {uploading ? 'Mengimpor...' : 'Unggah Item Data'}
         </button>
 
         <input ref={stockFileInputRef} type="file" accept=".xlsx" onChange={handleStockFileChange} style={{ display: 'none' }} />
@@ -766,17 +778,6 @@ function ListBarang() {
         >
           <IconUpload size={15} />
           Unggah Stok
-        </button>
-
-        <input ref={barcodeFileInputRef} type="file" accept=".xlsx" onChange={handleBarcodeFileChange} style={{ display: 'none' }} />
-        <button
-          onClick={() => barcodeFileInputRef.current?.click()}
-          disabled={uploading}
-          style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor barcode produk dan isi bundle dari Excel (Product List: GTIN + nama produk)"
-        >
-          <IconUpload size={15} />
-          Unggah Barcode
         </button>
       </div>
 

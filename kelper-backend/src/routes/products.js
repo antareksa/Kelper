@@ -381,6 +381,182 @@ router.post('/import-barcode', upload.single('file'), async (req, res) => {
   res.json({ ok: true, barcodesSet, bundlesSet, unmatched, ambiguous, conflicts, unresolvedBundles });
 });
 
+// The single upload format for List Barang (client-requested 2026-10-12): the
+// "Item Data" sheet, one row per listing --
+//   SKU | Nama Item | GTIN | HPP | Harga | Item Bundle? | List Item (GTIN)
+// It replaces the separate HPP and barcode uploads (those endpoints stay for
+// old clients). Per row it sets HPP, Harga (the dashboard's own selling price)
+// and the GTIN barcode, and for a bundle ("Item Bundle?" = Yes) the contents
+// from "List Item (GTIN)": lines of "<GTIN> - <qty>". A row marked No clears
+// any contents on file for that SKU, so the sheet stays the source of truth.
+//
+// A blank cell never overwrites what is stored (blank HPP/Harga/GTIN = leave
+// as is). A row is matched by SKU; if the SKU cell is empty the item name is
+// tried instead (older sheets). Anything not applied is returned by name:
+//  - unknownSku: SKU that is in neither the Shopee catalog nor the products table
+//  - unmatched: no SKU and the name is not a known product
+//  - unreadable: HPP / Harga cell that is not a number (left unchanged)
+//  - conflicts: GTIN already used by another product / SKU, or twice in the file
+//  - unresolvedBundles: contents that could not be placed (bundle left unchanged)
+//  - duplicateRows: the same SKU on several rows (the last one wins)
+const upsertItemData = db.prepare(`
+  INSERT INTO products (sku, name, hpp, price, updated_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    name = COALESCE(excluded.name, products.name),
+    hpp = COALESCE(excluded.hpp, products.hpp),
+    price = COALESCE(excluded.price, products.price),
+    updated_at = excluded.updated_at
+`);
+
+function knownSkus() {
+  const set = new Set(db.prepare('SELECT sku FROM products').all().map((p) => p.sku));
+  const modelsByItem = new Map();
+  for (const m of db.prepare('SELECT item_id, model_sku FROM shopee_item_models').all()) {
+    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+    modelsByItem.get(m.item_id).push(m);
+  }
+  for (const item of db.prepare('SELECT item_id, item_sku FROM shopee_items').all()) {
+    if (item.item_sku) set.add(item.item_sku);
+    for (const m of modelsByItem.get(item.item_id) || []) if (m.model_sku) set.add(m.model_sku);
+  }
+  return set;
+}
+
+// "8994450940004 - 1,\n8994450940097 - 1" -> [{ ref, qty }, ...]; null on a line it cannot read.
+function parseBundleList(text) {
+  const out = [];
+  for (const piece of String(text || '').split(/[\n;,]+/).map((x) => x.trim()).filter(Boolean)) {
+    let m = piece.match(/^(.+?)\s+[-xX\u00d7:]\s+(\d+)$/) || piece.match(/^(\d{8,14})\s*[xX\u00d7]\s*(\d+)$/);
+    if (m) { out.push({ ref: m[1].trim(), qty: Number(m[2]) }); continue; }
+    if (/^\S+$/.test(piece)) { out.push({ ref: piece, qty: 1 }); continue; }
+    return null;
+  }
+  return out;
+}
+
+router.post('/import-item-data', upload.single('file'), async (req, res) => {
+  const sheet = await loadSheet(req, res);
+  if (!sheet) return;
+
+  const skuCol = findColumn(sheet, 1, /^sku$/i);
+  const nameCol = findColumn(sheet, 1, /^nama/i);
+  if (!skuCol && !nameCol) {
+    return res.status(400).json({ error: 'columns_missing', message: 'Kolom "SKU" / "Nama Item" tidak ditemukan di baris pertama. Pakai format Item Data.' });
+  }
+  const gtinCol = findColumn(sheet, 1, /^gtin$/i);
+  const hppCol = findColumn(sheet, 1, /^hpp/i);
+  const hargaCol = findColumn(sheet, 1, /^harga/i);
+  const bundleCol = findColumn(sheet, 1, /bundle/i);
+  const listCol = findColumn(sheet, 1, /list\s*item/i);
+
+  const known = knownSkus();
+  const nameToSku = buildNameToSku();
+  const now = Math.floor(Date.now() / 1000);
+  const unknownSku = [];
+  const unmatched = [];
+  const unreadable = [];
+  const conflicts = [];
+  const unresolvedBundles = [];
+  const duplicateRows = [];
+
+  // ---- read the rows
+  const bySku = new Map();
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const name = nameCol ? cellText(row.getCell(nameCol)) : '';
+    let sku = skuCol ? cellText(row.getCell(skuCol)) : '';
+    if (!sku && !name) return; // blank row
+    const label = name || sku;
+    if (!sku) {
+      sku = nameToSku.get(normalizeName(name)) || '';
+      if (!sku) { unmatched.push(label); return; }
+    } else if (!known.has(sku)) {
+      unknownSku.push(`${sku}${name ? ' (' + name + ')' : ''}`);
+      return;
+    }
+
+    const readMoney = (col) => {
+      if (!col) return null;
+      const raw = cellValue(row.getCell(col));
+      if (raw == null || String(raw).trim() === '' || String(raw).trim() === '-') return null;
+      const v = parseRupiah(raw);
+      if (v == null) unreadable.push(`${label} (${cellText(row.getCell(col))})`);
+      return v;
+    };
+    let gtin = gtinCol ? cellText(row.getCell(gtinCol)) : '';
+    if (gtin === '-') gtin = '';
+    if (bySku.has(sku)) duplicateRows.push(sku);
+    bySku.set(sku, {
+      sku, name: name || null, label,
+      hpp: readMoney(hppCol), price: readMoney(hargaCol), gtin,
+      isBundle: bundleCol ? /^\s*(y|ya|yes|true|1)\b/i.test(cellText(row.getCell(bundleCol))) : false,
+      listText: listCol ? cellText(row.getCell(listCol)) : '',
+    });
+  });
+
+  const rows = [...bySku.values()];
+  let barcodesSet = 0;
+  let bundlesSet = 0;
+  let bundlesCleared = 0;
+
+  const apply = db.transaction(() => {
+    // ---- product fields
+    for (const r of rows) upsertItemData.run(r.sku, r.name, r.hpp, r.price, now);
+
+    // ---- barcodes (single products only; a bundle has none of its own)
+    const gtinToSku = new Map();
+    const seen = new Map();
+    for (const r of rows) {
+      if (r.isBundle || !r.gtin) continue;
+      if (!BARCODE_PATTERN.test(r.gtin)) { conflicts.push(`${r.gtin} (${r.sku}) bukan barcode yang valid`); continue; }
+      if (seen.has(r.gtin) && seen.get(r.gtin) !== r.sku) { conflicts.push(`${r.gtin} dipakai ${seen.get(r.gtin)} dan ${r.sku} di file`); continue; }
+      seen.set(r.gtin, r.sku);
+      const other = db.prepare('SELECT sku FROM products WHERE barcode = ? AND sku != ?').get(r.gtin, r.sku);
+      const sameAsSku = db.prepare('SELECT sku FROM products WHERE sku = ? AND sku != ?').get(r.gtin, r.sku);
+      if (other || sameAsSku) { conflicts.push(`${r.gtin} (${r.sku}) sudah dipakai ${(other || sameAsSku).sku}`); continue; }
+      upsertBarcode.run(r.sku, r.gtin, now);
+      gtinToSku.set(r.gtin, r.sku);
+      barcodesSet += 1;
+    }
+
+    // ---- bundle contents
+    for (const r of rows) {
+      if (!r.isBundle) {
+        const had = db.prepare('DELETE FROM bundle_items WHERE bundle_sku = ?').run(r.sku).changes;
+        if (had > 0) bundlesCleared += 1;
+        continue;
+      }
+      const parsed = parseBundleList(r.listText);
+      if (!parsed || parsed.length === 0) {
+        unresolvedBundles.push(`${r.label}: kolom List Item (GTIN) kosong / tidak terbaca`);
+        continue;
+      }
+      const items = [];
+      let failed = null;
+      for (const p of parsed) {
+        const sku = gtinToSku.get(p.ref) || db.prepare('SELECT sku FROM products WHERE barcode = ?').get(p.ref)?.sku || (known.has(p.ref) ? p.ref : null);
+        if (!sku || sku === r.sku || !(p.qty >= 1)) { failed = p.ref; break; }
+        const existing = items.find((i) => i.sku === sku);
+        if (existing) existing.qty += p.qty; else items.push({ sku, qty: p.qty });
+      }
+      if (failed) {
+        unresolvedBundles.push(`${r.label}: isi "${failed}" bukan barcode/SKU produk mana pun`);
+        continue;
+      }
+      db.prepare('DELETE FROM bundle_items WHERE bundle_sku = ?').run(r.sku);
+      for (const it of items) db.prepare('INSERT INTO bundle_items (bundle_sku, component_sku, qty) VALUES (?, ?, ?)').run(r.sku, it.sku, it.qty);
+      bundlesSet += 1;
+    }
+  });
+  apply();
+
+  res.json({
+    ok: true, imported: rows.length, hppSet: rows.filter((r) => r.hpp != null).length, priceSet: rows.filter((r) => r.price != null).length,
+    barcodesSet, bundlesSet, bundlesCleared, unknownSku, unmatched, unreadable, conflicts, unresolvedBundles, duplicateRows,
+  });
+});
+
 // Bulk version of the stock edit above, from the client's daily stock sheet
 // ("STOKAN ONLINE ..."): matches each DESCRIPSI to a product by listing name
 // and sets the local stock count to its "STOK AKHIR" column. A row whose
@@ -777,6 +953,12 @@ router.get('/catalog', (req, res) => {
     modelsByItem.get(m.item_id).push(m);
   }
 
+  const contentsByBundle = new Map();
+  for (const r of db.prepare('SELECT bundle_sku, component_sku, qty FROM bundle_items ORDER BY rowid').all()) {
+    if (!contentsByBundle.has(r.bundle_sku)) contentsByBundle.set(r.bundle_sku, []);
+    contentsByBundle.get(r.bundle_sku).push({ sku: r.component_sku, qty: r.qty });
+  }
+
   const catalog = items.map((item) => {
     const itemModels = (modelsByItem.get(item.item_id) || []).map((m) => {
       const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
@@ -823,6 +1005,7 @@ router.get('/catalog', (req, res) => {
       name: item.name,
       status: item.item_status,
       isBundle: isBundleSku(item.item_sku),
+      bundleItems: contentsByBundle.get(item.item_sku) || [],
       trendPct,
       omsetIni: omsetIniTotal,
       omsetLalu: omsetLaluTotal,
