@@ -553,6 +553,23 @@ function ListBarang() {
     }
   }
 
+  // Downloads the Shopee item list with SKUs as Excel (see /products/export-items).
+  async function handleExport() {
+    setError(null);
+    try {
+      const res = await apiFetch(`${API_BASE}/products/export-items`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Gagal mengunduh');
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'item-shopee.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   // Imports HPP / stock from the client's Excel sheets and assigns them onto
   // the matching product — the join to the Shopee variants happens
   // server-side in /products/catalog, so reloading it here is enough to
@@ -719,6 +736,14 @@ function ListBarang() {
           title="Sync dari Shopee"
         >
           <IconRefresh size={15} />
+        </button>
+
+        <button
+          onClick={handleExport}
+          style={{ ...pillStyle, gap: 8 }}
+          title="Unduh daftar item Shopee beserta SKU (Excel). Klik sync dulu agar datanya terbaru."
+        >
+          Unduh Daftar Item
         </button>
 
         <input ref={fileInputRef} type="file" accept=".xlsx" onChange={handleFileChange} style={{ display: 'none' }} />

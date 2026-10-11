@@ -659,6 +659,60 @@ router.post('/sync-shopee', async (req, res) => {
   }
 });
 
+// Item list with SKUs as an Excel file (client-requested 2026-10-12): one row per
+// Shopee variant (an item without variants is one row), straight from the
+// catalog cache that sync-shopee fills -- press the sync button first for live
+// data. The SKU columns show where the SKU actually comes from, because KELPER
+// uses the variant's SKU, else the item's, else "ITEM-<id>" when the seller never
+// typed one into Shopee (those are the rows to fix in Seller Centre).
+router.get('/export-items', async (req, res) => {
+  const items = db.prepare('SELECT * FROM shopee_items').all();
+  const modelsByItem = new Map();
+  for (const m of db.prepare('SELECT * FROM shopee_item_models ORDER BY model_id').all()) {
+    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+    modelsByItem.get(m.item_id).push(m);
+  }
+  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
+
+  const rows = [];
+  for (const item of items) {
+    for (const m of modelsByItem.get(item.item_id) || []) {
+      const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
+      const p = productBySku.get(sku);
+      rows.push({
+        sku,
+        values: [
+          item.item_id, m.model_id || null, sku, item.item_sku || null, m.model_sku || null,
+          item.name, m.model_id ? m.model_name : null, m.model_status || item.item_status,
+          m.stock, m.price, p?.barcode ? Number(p.barcode) || p.barcode : null, p?.hpp ?? null,
+          m.model_sku || item.item_sku ? '' : 'Belum ada SKU di Shopee',
+        ],
+      });
+    }
+  }
+  rows.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Item Shopee');
+  ws.columns = [
+    { header: 'Item ID', width: 16 }, { header: 'Model ID', width: 16 }, { header: 'SKU (dipakai KELPER)', width: 26 },
+    { header: 'SKU Induk', width: 22 }, { header: 'SKU Variasi', width: 22 }, { header: 'Nama Item', width: 70 },
+    { header: 'Variasi', width: 28 }, { header: 'Status', width: 12 }, { header: 'Stok Shopee', width: 13 },
+    { header: 'Harga Shopee', width: 14 }, { header: 'GTIN (Dashboard)', width: 20 }, { header: 'HPP (Dashboard)', width: 15 },
+    { header: 'Catatan', width: 26 },
+  ];
+  for (const r of rows) ws.addRow(r.values);
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  for (const col of [1, 2, 11]) ws.getColumn(col).numFmt = '0';
+  for (const col of [10, 12]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="item-shopee.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
+});
+
 // null (never 0) when there's no basis for a % change — same convention as
 // dashboard.js's own pctChange, duplicated here rather than shared since
 // it's a 3-line pure function and the two route files have no other reason
