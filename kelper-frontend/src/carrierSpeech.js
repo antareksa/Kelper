@@ -58,7 +58,7 @@ export function soundKeysFor(carrier, isInstant = false) {
 }
 
 // ---------------------------------------------------------------- the files
-const EXTENSIONS = ['mp3', 'wav', 'ogg'];
+const EXTENSIONS = ['mp3', 'm4a', 'mp4', 'wav', 'ogg']; // .mp4 / .m4a = audio-only AAC, e.g. from a phone recorder
 const BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) || '/';
 const loaded = new Map(); // key -> a ready HTMLAudioElement, or null when there is no usable file
 let preloading = null;

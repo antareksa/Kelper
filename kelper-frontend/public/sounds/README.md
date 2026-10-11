@@ -2,7 +2,7 @@
 
 When a parcel is confirmed picked up in Shipping Mode, the station plays the sound
 of its expedition. Put one sound file per expedition in THIS folder, named exactly
-as below. Any of `.mp3`, `.wav` or `.ogg` works (mp3 is the usual choice).
+as below. Any of `.mp3`, `.m4a`, `.mp4` (audio only), `.wav` or `.ogg` works.
 
 | File name (without extension) | Plays for carriers like |
 |---|---|
