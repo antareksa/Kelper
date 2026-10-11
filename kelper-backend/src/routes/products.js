@@ -557,80 +557,46 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
   });
 });
 
-// Bulk version of the stock edit above. Two accepted layouts, told apart by the
-// header row:
-//  - "Item Stok" (client-requested 2026-10-12): SKU | Stok. Matched by SKU; a SKU
-//    that is in neither the Shopee catalog nor the products table is reported
-//    (unknownSku) and skipped, the same rule as the Item Data upload.
-//  - the older daily sheet ("STOKAN ONLINE ..."): matches each DESCRIPSI to a
-//    product by listing name and sets the stock from its "STOK AKHIR" column.
+// Bulk version of the stock edit above, from the client's "Item Stok" sheet
+// (client-requested 2026-10-12): SKU | Stok. Matched by SKU; a SKU that is in
+// neither the Shopee catalog nor the products table is reported (unknownSku) and
+// skipped, the same rule as the Item Data upload. This replaced the older daily
+// sheet that was matched by listing name (DESCRIPSI | STOK AKHIR).
 // A row whose stock is empty, negative or not a number (or a formula the file
 // carries no result for) is reported, never written as 0 -- an unknown count must
-// not read as sold out.
+// not read as sold out. A real 0 is written.
 router.post('/import-stock', upload.single('file'), async (req, res) => {
   const sheet = await loadSheet(req, res);
   if (!sheet) return;
 
   const skuColumn = findColumn(sheet, 1, /^sku$/i);
   const stokColumn = findColumn(sheet, 1, /^(stok|stock)$/i);
-  if (skuColumn && stokColumn) {
-    const known = knownSkus();
-    const nowTs = Math.floor(Date.now() / 1000);
-    const bySku = new Map();
-    const unknownSku = [];
-    const unreadable = [];
-    const duplicateRows = [];
-    sheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const sku = cellText(row.getCell(skuColumn));
-      if (!sku) return;
-      if (!known.has(sku)) { unknownSku.push(sku); return; }
-      const raw = cellValue(row.getCell(stokColumn));
-      const stock = raw === null || String(raw).trim() === '' ? null : Number(raw);
-      if (stock === null || !Number.isFinite(stock) || stock < 0) { unreadable.push(`${sku} (${cellText(row.getCell(stokColumn)) || 'kosong'})`); return; }
-      if (bySku.has(sku)) duplicateRows.push(sku);
-      bySku.set(sku, Math.round(stock));
-    });
-    db.transaction(() => { for (const [sku, stock] of bySku) upsertStock.run(sku, stock, nowTs); })();
-    return res.json({ ok: true, imported: bySku.size, unknownSku, unmatched: [], unreadable, duplicateRows });
-  }
-
-  const nameCol = findColumn(sheet, 1, /descrip|deskrip|nama/i) || 1;
-  const stockCol = findColumn(sheet, 1, /stok\s*akhir|stock\s*akhir/i);
-  if (!stockCol) {
+  if (!skuColumn || !stokColumn) {
     return res.status(400).json({
       error: 'stock_column_missing',
       message: 'Kolom "SKU" dan "Stok" tidak ditemukan di baris pertama sheet pertama. Pakai format Item Stok (SKU, Stok).',
     });
   }
 
-  const nameToSku = buildNameToSku();
-  const now = Math.floor(Date.now() / 1000);
-  let imported = 0;
-  const unmatched = [];
+  const known = knownSkus();
+  const nowTs = Math.floor(Date.now() / 1000);
+  const bySku = new Map();
+  const unknownSku = [];
   const unreadable = [];
-
+  const duplicateRows = [];
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
-    const name = cellText(row.getCell(nameCol));
-    if (!name) return;
-
-    const raw = cellValue(row.getCell(stockCol));
-    const stock = raw === null || raw === '' ? null : Number(raw);
-    if (stock === null || !Number.isFinite(stock) || stock < 0) {
-      unreadable.push(name);
-      return;
-    }
-    const sku = nameToSku.get(normalizeName(name));
-    if (!sku) {
-      unmatched.push(name);
-      return;
-    }
-    upsertStock.run(sku, Math.round(stock), now);
-    imported += 1;
+    const sku = cellText(row.getCell(skuColumn));
+    if (!sku) return;
+    if (!known.has(sku)) { unknownSku.push(sku); return; }
+    const raw = cellValue(row.getCell(stokColumn));
+    const stock = raw === null || String(raw).trim() === '' ? null : Number(raw);
+    if (stock === null || !Number.isFinite(stock) || stock < 0) { unreadable.push(`${sku} (${cellText(row.getCell(stokColumn)) || 'kosong'})`); return; }
+    if (bySku.has(sku)) duplicateRows.push(sku);
+    bySku.set(sku, Math.round(stock));
   });
-
-  res.json({ ok: true, imported, unmatched, unreadable });
+  db.transaction(() => { for (const [sku, stock] of bySku) upsertStock.run(sku, stock, nowTs); })();
+  res.json({ ok: true, imported: bySku.size, unknownSku, unmatched: [], unreadable, duplicateRows });
 });
 
 const upsertHpp = db.prepare(`
