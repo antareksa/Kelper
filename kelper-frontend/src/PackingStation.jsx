@@ -419,7 +419,11 @@ async function post(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.message || data.error);
+  if (!res.ok) {
+    const err = new Error(data.message || data.error);
+    err.code = data.error; // e.g. 'wrong_item', so a caller can tell a bad scan from a network problem
+    throw err;
+  }
   return data;
 }
 
@@ -1584,8 +1588,11 @@ function PackingStation() {
           return applyState(data);
         } catch (err) {
           // Any rejected scan (wrong item, already fully scanned, or not
-          // part of this order at all) flashes both panels red.
+          // part of this order at all) flashes both panels red -- and plays the
+          // client's wrong_item sound (2026-10-12), but only for those two
+          // answers: a network or server problem is not "wrong item".
           flashPanel('error');
+          if (err.code === 'wrong_item' || err.code === 'over_qty') playSound('wrong_item', 'Item salah');
           throw err;
         }
       }

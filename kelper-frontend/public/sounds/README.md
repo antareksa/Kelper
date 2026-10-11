@@ -20,6 +20,13 @@ as below. Any of `.mp3`, `.m4a`, `.mp4` (audio only), `.wav` or `.ogg` works.
 | `instant` | played FIRST for an instant order, then the expedition's sound |
 | `unknown` | played when the order has no carrier on it |
 
+Two more sounds belong to Packing Mode, not to an expedition:
+
+| File name | Plays when |
+|---|---|
+| `start_packing` | the operator scans the LAST item of an order (time to pack the box) |
+| `wrong_item` | a scanned item is not in the order, or was already scanned in full |
+
 Tips: keep each one short (about 1-2 seconds, just the name) and at a similar volume.
 
 If a file is missing, the station says that expedition's name with the PC's own voice
