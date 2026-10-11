@@ -38,6 +38,13 @@ const DEFAULTS = {
   // "Ready to Check" before the Order Lists panel flags it with the "stuck"
   // tag — see routes/packing.js's /order-lists tag computation.
   readyToCheckStuckSeconds: 300,
+  // Client-requested (2026-10-12): expeditions whose orders go up in priority
+  // (after instant orders, before the "fewer items" rule -- see priorityOrder.js).
+  // Free text, comma separated; an order matches an entry when its shipping
+  // carrier CONTAINS it (case-insensitive, so "SPX" covers "SPX Express" and
+  // "SPX Hemat"). Earlier in the list = higher priority. Empty = no expedition
+  // priority. The client has not named the expeditions yet.
+  priorityCarriers: '',
 };
 
 function getOrderDelayMinutes() {
@@ -57,6 +64,15 @@ function getMaxConcurrentBookings() {
 function getMaxReadyToCheck() {
   const v = Number(getSetting('maxReadyToCheck', String(DEFAULTS.maxReadyToCheck)));
   return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function getPriorityCarriersText() {
+  return String(getSetting('priorityCarriers', DEFAULTS.priorityCarriers) || '');
+}
+
+// Lowercased, trimmed entries, in the order the client wrote them.
+function getPriorityCarriers() {
+  return getPriorityCarriersText().split(/[,;\n]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
 }
 
 function getWorkHourStartHour() {
@@ -99,10 +115,11 @@ function getPackingSettings() {
     workHourEndHour: getWorkHourEndHour(),
     workHourEnabled: getWorkHourEnabled(),
     readyToCheckStuckSeconds: getReadyToCheckStuckSeconds(),
+    priorityCarriers: getPriorityCarriersText(),
   };
 }
 
-function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds }) {
+function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
   if (orderDelayMinutes != null) setSetting('orderDelayMinutes', Math.max(0, Number(orderDelayMinutes)));
   if (maxConcurrentBookings != null) setSetting('maxConcurrentBookings', Math.max(0, Number(maxConcurrentBookings)));
   if (maxReadyToCheck != null) setSetting('maxReadyToCheck', Math.max(0, Number(maxReadyToCheck)));
@@ -110,6 +127,7 @@ function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReady
   if (workHourEndHour != null) setSetting('workHourEndHour', Math.min(23, Math.max(0, Number(workHourEndHour))));
   if (workHourEnabled != null) setSetting('workHourEnabled', workHourEnabled ? 'true' : 'false');
   if (readyToCheckStuckSeconds != null) setSetting('readyToCheckStuckSeconds', Math.max(1, Number(readyToCheckStuckSeconds)));
+  if (typeof priorityCarriers === 'string') setSetting('priorityCarriers', priorityCarriers.trim().slice(0, 300));
   return getPackingSettings();
 }
 
@@ -122,6 +140,7 @@ module.exports = {
   getWorkHourEndHour,
   getWorkHourEnabled,
   getReadyToCheckStuckSeconds,
+  getPriorityCarriers,
   isWithinWorkHour,
   getPackingSettings,
   setPackingSettings,

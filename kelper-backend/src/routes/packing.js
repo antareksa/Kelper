@@ -11,6 +11,7 @@ const { getOrderDelaySeconds, getPackingSettings, setPackingSettings, isWithinWo
 const { startOfDayWIB } = require('../wib');
 const { uploadPackingVideo } = require('../gcs');
 const { expandPackingItems } = require('../packingItems');
+const { priorityOrderBy, priorityCompare, piecesSql } = require('../priorityOrder');
 const { isBookingInFlight } = require('../shopeeSync');
 const { releaseInProgress, releaseStationSessions } = require('../sessionRelease');
 const { touchStation } = require('../stationPresence');
@@ -200,15 +201,16 @@ function afterHoursFreshAllowed(shopId, cutoff) {
     `)
     .get(shopId).c;
   const slots = Math.max(0, cap - labelledBoxes);
+  const ob = priorityOrderBy('o'); // same rule as the claim below, so the first one here IS the one handed out
   return db
     .prepare(`
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ? AND COALESCE(o.is_instant, 0) = 0
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
-      ORDER BY o.created_at ASC
+      ${ob.sql}
       LIMIT ?
     `)
-    .all(shopId, cutoff, slots)
+    .all(shopId, cutoff, ...ob.params, slots)
     .map((r) => r.order_sn);
 }
 
@@ -266,15 +268,20 @@ router.post('/next-order', async (req, res) => {
   // hunting for boxes: those are handled in Print Resi Mode instead, where
   // scanning the temp barcode prints the real resi (see /besok-list and
   // /print-resi below).
+  // Priority (client-requested 2026-10-12): instant, then a priority expedition,
+  // then fewer pieces to scan, then the oldest -- see priorityOrder.js.
   const allowed = afterHoursFreshAllowed(shop_id, cutoff); // null = no after-hours cap
-  const pick = allowed && allowed.length === 0 ? undefined : db.prepare(`
-    SELECT o.order_sn AS order_sn
-    FROM orders o
-    WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
-      AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
-    ORDER BY o.is_instant DESC, o.created_at ASC
-    LIMIT 1
-  `).get(shop_id, cutoff, withinWorkHour ? 1 : 0);
+  const ob = priorityOrderBy('o');
+  const pick = allowed
+    ? (allowed.length ? { order_sn: allowed[0] } : undefined) // the visible set is already in priority order
+    : db.prepare(`
+        SELECT o.order_sn AS order_sn
+        FROM orders o
+        WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+          AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
+        ${ob.sql}
+        LIMIT 1
+      `).get(shop_id, cutoff, withinWorkHour ? 1 : 0, ...ob.params);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
@@ -1050,7 +1057,8 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const readyToCheck = db
     .prepare(`
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at,
+        o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
         AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
@@ -1064,11 +1072,11 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       -- A Pack Besok order that's now labeled: claimable, but only via its
       -- own barcode scan (resume-besok), not a generic NEXT_ORDER pick —
       -- internal_barcode is included so ops can see which code to look for.
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at,
+        o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
-      ORDER BY is_instant DESC, created_at ASC
     `)
     .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id)
     .filter((row) => {
@@ -1084,7 +1092,8 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       // all) — entered the pool when it cleared its own delay.
       const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds();
       return { ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
-    });
+    })
+    .sort(priorityCompare()); // the order stations are handed these in (priorityOrder.js)
 
   waitingList.push(...overCap); // pushed out of Ready to Check above
   waitingList.sort((a, b) => a.created_at - b.created_at);

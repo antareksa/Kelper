@@ -468,7 +468,8 @@ function OrderLists() {
     settings.workHourStartHour !== settingsDraft.workHourStartHour ||
     settings.workHourEndHour !== settingsDraft.workHourEndHour ||
     settings.workHourEnabled !== settingsDraft.workHourEnabled ||
-    settings.readyToCheckStuckSeconds !== settingsDraft.readyToCheckStuckSeconds
+    settings.readyToCheckStuckSeconds !== settingsDraft.readyToCheckStuckSeconds ||
+    (settings.priorityCarriers ?? '') !== (settingsDraft.priorityCarriers ?? '')
   );
 
   return (
@@ -623,6 +624,18 @@ function OrderLists() {
             value={settingsDraft?.readyToCheckStuckSeconds ?? ''}
             onChange={handleSettingsNumberChange('readyToCheckStuckSeconds')}
             style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Prioritas Ekspedisi</label>
+          <input
+            type="text"
+            placeholder="mis. SPX, J&T (kosong = tanpa)"
+            title="Pisahkan dengan koma; urutan = prioritas. Cukup sebagian nama, mis. SPX untuk SPX Express dan SPX Hemat. Urutan pembagian order: 1. Instant, 2. ekspedisi ini, 3. item lebih sedikit, 4. paling lama."
+            disabled={!settingsDraft}
+            value={settingsDraft?.priorityCarriers ?? ''}
+            onChange={(e) => setSettingsDraft((s) => ({ ...s, priorityCarriers: e.target.value }))}
+            style={{ ...settingsInputStyle, width: 210 }}
           />
         </div>
         <div>

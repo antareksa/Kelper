@@ -13,6 +13,7 @@ const {
   isWithinWorkHour,
 } = require('./packingSettings');
 const { dateStringWIB, dateStringDDMMYYYYWIB } = require('./wib');
+const { priorityOrderBy } = require('./priorityOrder');
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -355,14 +356,17 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   // one flagOrderAsException just created) — once flagged to Masalah, an
   // order must wait for manual resolution, not get silently picked up and
   // retried again on the very next tick.
+  // Booked in the same priority the stations are handed orders in (priorityOrder.js),
+  // so the cap on Ready to Check fills with the orders that will be worked first.
+  const ob = priorityOrderBy('o');
   let pending = db
     .prepare(`
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0 AND o.created_at <= ?
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
-      ORDER BY o.is_instant DESC, o.created_at ASC
+      ${ob.sql}
     `)
-    .all(shopId, cutoff);
+    .all(shopId, cutoff, ...ob.params);
 
   const maxReadyToCheck = getMaxReadyToCheck();
   if (maxReadyToCheck > 0) {
