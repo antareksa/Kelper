@@ -4,7 +4,7 @@ import { IconMonitor } from './Icons';
 import { renderCode39Svg } from './Barcode';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE } from './apiBase';
-import { speakCarrier } from './carrierSpeech';
+import { speakCarrier, preloadCarrierSounds } from './carrierSpeech';
 
 // orders.created_at / packing_sessions.completed_at are unix SECONDS
 // (server-side, see shopeeSync.js's now()), not the millisecond timestamps
@@ -586,6 +586,12 @@ function PackingStation() {
   useEffect(() => {
     if (stationReady && inputRef.current) inputRef.current.focus({ preventScroll: true });
   }, [stationReady, operatorName, state]);
+
+  // Shipping Mode announces the expedition from the client's sound files (see
+  // carrierSpeech.js); load them when the mode opens so the sound is instant.
+  useEffect(() => {
+    if (mode === 'shipping') preloadCarrierSounds();
+  }, [mode]);
 
   // Kiosk-mode prints silently and instantly, with no OS dialog — but the
   // printer driver itself can still briefly take real OS-level window focus
