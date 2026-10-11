@@ -4,7 +4,6 @@ import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
 import ListBarang from './ListBarang';
 import StockList from './StockList';
-import BundleList from './BundleList';
 import OrderSearch from './OrderSearch';
 import OperatorPerformance from './OperatorPerformance';
 import ShopeeConfigPage from './ShopeeConfigPage';
@@ -16,7 +15,6 @@ import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken, getA
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
-const BUNDLE_TAB = { path: '/bundle', label: 'List Bundle', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
@@ -29,7 +27,6 @@ const PACKING_SUB_ITEMS = [
 
 const DashboardIcon = DASHBOARD_TAB.Icon;
 const ItemsIcon = ITEMS_TAB.Icon;
-const BundleIcon = BUNDLE_TAB.Icon;
 const OrderIcon = ORDER_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
@@ -301,18 +298,6 @@ function Dashboard() {
                 {ITEMS_TAB.label}
               </button>
 
-              {!isPacking && (
-                <>
-
-                  <button
-                    onClick={() => navigate(BUNDLE_TAB.path)}
-                    style={navItemStyle(location.pathname === BUNDLE_TAB.path)}
-                  >
-                    <BundleIcon size={16} />
-                    {BUNDLE_TAB.label}
-                  </button>
-                </>
-              )}
 
               <button
                 onClick={() => navigate(ORDER_TAB.path)}
@@ -437,7 +422,7 @@ function Dashboard() {
             <Route path="/" element={<Navigate to={homePath} replace />} />
             <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
-            <Route path="/bundle" element={isPacking ? <Navigate to={homePath} replace /> : <BundleList />} />
+            <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />

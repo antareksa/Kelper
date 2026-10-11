@@ -930,7 +930,7 @@ function skuQtyInRange(startTs, endTs) {
 router.get('/catalog', (req, res) => {
   // Bundles ARE listed here (the 2026-10-03 "leave them out" was reverted
   // 2026-10-07): each carries isBundle so the page can tag it as a bundle; what
-  // is inside a bundle is managed on the List Bundle page.
+  // is inside a bundle is edited in its expanded row (PUT /bundles/:sku/items).
   // Sorted by SKU in natural order (KEL-2 before KEL-10, not after it), the
   // way the client numbers its products (client-requested 2026-10-03).
   const skuOf = (i) => i.item_sku || `ITEM-${i.item_id}`;
@@ -939,7 +939,7 @@ router.get('/catalog', (req, res) => {
     .all()
     .sort((a, b) => skuOf(a).localeCompare(skuOf(b), undefined, { numeric: true, sensitivity: 'base' }));
   const models = db.prepare('SELECT * FROM shopee_item_models').all();
-  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
+  const productBySku = new Map(db.prepare('SELECT sku, name, hpp, barcode, stock, price FROM products').all().map((p) => [p.sku, p]));
 
   const thisMonthStart = startOfMonthWIB(0);
   const lastMonthStart = startOfMonthWIB(1);
@@ -953,10 +953,22 @@ router.get('/catalog', (req, res) => {
     modelsByItem.get(m.item_id).push(m);
   }
 
+  // Bundle contents, with each component's name and barcode (a single-variant
+  // listing is named by its SKU, same rule as the editor's component picker).
+  const listingNameBySku = new Map();
+  for (const item of items) {
+    const ms = modelsByItem.get(item.item_id) || [];
+    if (ms.length <= 1) listingNameBySku.set(ms[0]?.model_sku || item.item_sku || `ITEM-${item.item_id}`, item.name);
+  }
   const contentsByBundle = new Map();
   for (const r of db.prepare('SELECT bundle_sku, component_sku, qty FROM bundle_items ORDER BY rowid').all()) {
     if (!contentsByBundle.has(r.bundle_sku)) contentsByBundle.set(r.bundle_sku, []);
-    contentsByBundle.get(r.bundle_sku).push({ sku: r.component_sku, qty: r.qty });
+    contentsByBundle.get(r.bundle_sku).push({
+      sku: r.component_sku,
+      qty: r.qty,
+      name: listingNameBySku.get(r.component_sku) || productBySku.get(r.component_sku)?.name || null,
+      barcode: productBySku.get(r.component_sku)?.barcode ?? null,
+    });
   }
 
   const catalog = items.map((item) => {

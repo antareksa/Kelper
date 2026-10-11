@@ -13,6 +13,7 @@ import { IconSearch, IconRefresh, IconUpload, IconStore, IconHistory, IconChevro
 import { useShopName } from './useShopName';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE, apiFetch } from './apiBase';
+import BundleContents from './BundleContents';
 
 function formatRupiah(value) {
   if (value == null) return '—';
@@ -311,7 +312,7 @@ function BarcodeInput({ sku, value, onSaved }) {
   );
 }
 
-function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved, onBarcodeSaved }) {
+function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved, onBarcodeSaved, onBundleSaved }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -374,7 +375,7 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {product.isBundle && (
-            <span title="Produk bundle — isinya diatur di List Bundle" style={{ fontSize: 10.5, fontWeight: 600, color: colors.blue, background: 'rgba(59, 130, 246, 0.14)', padding: '3px 8px', borderRadius: 999 }}>
+            <span title="Produk bundle — buka baris ini untuk melihat / mengubah isinya" style={{ fontSize: 10.5, fontWeight: 600, color: colors.blue, background: 'rgba(59, 130, 246, 0.14)', padding: '3px 8px', borderRadius: 999 }}>
               BUNDLE
             </span>
           )}
@@ -412,6 +413,7 @@ function ProductRow({ product, expanded, onToggle, onStockSaved, onHppSaved, onP
 
       {expanded && (
         <div style={{ background: colors.bg, padding: '4px 12px 14px 44px' }}>
+          {product.isBundle && <BundleContents product={product} singles={singles} onSaved={onBundleSaved} />}
           <div style={{ overflowX: 'auto' }}>
             <div style={{ minWidth: 900 }}>
               <div style={{ display: 'grid', gridTemplateColumns: SUB_GRID, gap: 10, padding: '8px 10px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3 }}>
@@ -684,6 +686,12 @@ function ListBarang() {
     </div>
   );
 
+  // What a bundle can be made of: single-variant listings that are not bundles themselves.
+  const singles = catalog
+    .filter((p) => !p.isBundle && p.variants.length <= 1)
+    .map((p) => ({ sku: p.variants[0]?.sku || p.sku, name: p.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   const allVariants = statusFiltered.flatMap((p) => p.variants);
   const skuKosong = allVariants.filter((v) => v.hpp == null).length;
   const avgMargin = avgProfitPct(allVariants);
@@ -822,12 +830,14 @@ function ListBarang() {
                   <ProductRow
                     key={p.item_id}
                     product={p}
+                    singles={singles}
                     expanded={expandedSku === p.sku}
                     onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
                     onStockSaved={handleStockSaved}
                     onHppSaved={handleHppSaved}
                     onPriceSaved={handlePriceSaved}
                     onBarcodeSaved={handleBarcodeSaved}
+                    onBundleSaved={loadCatalog}
                   />
                 ))}
               </div>

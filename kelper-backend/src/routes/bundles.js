@@ -5,6 +5,9 @@ const router = express.Router();
 
 const { isBundleSku } = require('../bundleUtil');
 
+// Bundle contents editor (List Barang). Contents are read through
+// /products/catalog; this route only saves them.
+//
 // One entry per Shopee listing with a single variant (the Robot test item
 // with two variants has no one SKU, so it never appears): the SKU it is
 // sold under, same rule as /products/catalog.
@@ -24,48 +27,6 @@ function listingsBySku() {
   }
   return bySku;
 }
-
-// Every bundle with the items inside it, plus the list of single products
-// the editor can pick components from.
-router.get('/', (req, res) => {
-  const listings = listingsBySku();
-  const products = new Map(db.prepare('SELECT sku, name, barcode FROM products').all().map((p) => [p.sku, p]));
-  const itemsByBundle = new Map();
-  for (const r of db.prepare('SELECT bundle_sku, component_sku, qty FROM bundle_items ORDER BY rowid').all()) {
-    if (!itemsByBundle.has(r.bundle_sku)) itemsByBundle.set(r.bundle_sku, []);
-    itemsByBundle.get(r.bundle_sku).push(r);
-  }
-
-  const bundleSkus = new Set([...listings.keys()].filter(isBundleSku));
-  for (const sku of itemsByBundle.keys()) bundleSkus.add(sku);
-
-  const bundles = [...bundleSkus]
-    .map((sku) => {
-      const listing = listings.get(sku);
-      const items = (itemsByBundle.get(sku) || []).map((i) => ({
-        sku: i.component_sku,
-        qty: i.qty,
-        name: listings.get(i.component_sku)?.name || products.get(i.component_sku)?.name || null,
-        barcode: products.get(i.component_sku)?.barcode ?? null,
-      }));
-      return {
-        sku,
-        item_id: listing?.item_id ?? null,
-        name: listing?.name || products.get(sku)?.name || sku,
-        status: listing?.status ?? null,
-        stock: listing?.stock ?? null,
-        items,
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const singles = [...listings.values()]
-    .filter((l) => !isBundleSku(l.sku))
-    .map((l) => ({ sku: l.sku, name: l.name, barcode: products.get(l.sku)?.barcode ?? null }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  res.json({ bundles, singles });
-});
 
 // Replaces a bundle's whole item list. Each component must be a known single
 // product (never another bundle, and never the bundle itself), qty a positive
