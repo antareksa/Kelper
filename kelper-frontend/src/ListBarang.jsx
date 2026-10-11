@@ -57,6 +57,14 @@ function TrendBadge({ value }) {
 
 // Average profit % across variants that actually have an HPP entry; null
 // (shown as "—") when none of them do, rather than presenting 0%.
+// The product row's Stock: OUR stock (the dashboard's own number), summed over the
+// variants that have one entered. null = none entered yet -> shown as a dash and
+// sorted last, never as 0.
+function totalStock(variants) {
+  const known = variants.filter((v) => v.dashboardStock != null);
+  return known.length === 0 ? null : known.reduce((sum, v) => sum + v.dashboardStock, 0);
+}
+
 function avgProfitPct(variants) {
   const withHpp = variants.filter((v) => v.profitPct != null);
   if (withHpp.length === 0) return null;
@@ -396,7 +404,7 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
         <TrendBadge value={product.trendPct} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: colors.text, fontFamily: 'var(--num)' }}>
-          {product.minPurchase ?? '—'}
+          {totalStock(product.variants) ?? '—'}
         </div>
 
         <div style={{ fontSize: 12.5, fontWeight: 600, color: profitPct == null ? colors.textFaint : profitPct < 0 ? colors.red : colors.green, fontFamily: 'var(--num)' }}>
@@ -652,7 +660,7 @@ function ListBarang() {
     name: (p) => p.name,
     sku: (p) => p.sku,
     trend: (p) => p.trendPct,
-    minPurchase: (p) => p.minPurchase,
+    stock: (p) => totalStock(p.variants),
     profit: (p) => avgProfitPct(p.variants),
     omsetIni: (p) => p.omsetIni,
     omsetLalu: (p) => p.omsetLalu,
@@ -819,7 +827,7 @@ function ListBarang() {
                   <div />
                   {sortHeader('sku', 'SKU Induk')}
                   {sortHeader('trend', 'Tren')}
-                  {sortHeader('minPurchase', 'Min. Pembelian')}
+                  {sortHeader('stock', 'Stock')}
                   {sortHeader('profit', 'Est % Profit')}
                   {sortHeader('omsetIni', 'Omset Bulan Ini')}
                   {sortHeader('omsetLalu', 'Omset Bulan Lalu')}

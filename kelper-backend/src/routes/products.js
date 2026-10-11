@@ -1025,7 +1025,6 @@ router.get('/catalog', (req, res) => {
       trendPct,
       omsetIni: omsetIniTotal,
       omsetLalu: omsetLaluTotal,
-      minPurchase: item.min_purchase_limit,
       image: item.image_url,
       soldOut: isSoldOut(item, itemModels),
       variants: itemModels,
