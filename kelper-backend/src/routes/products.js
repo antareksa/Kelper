@@ -971,6 +971,18 @@ router.get('/catalog', (req, res) => {
     });
   }
 
+  // "HABIS" follows OUR stock (the Stok the client enters / uploads), never Shopee's
+  // own number (client-requested 2026-10-12). An unknown stock (never entered) is
+  // not sold out. A bundle is sold out when one of its parts is short for one set
+  // -- a bundle's stock is taken from its parts (see confirmOrderPickedUp) -- and
+  // a bundle with no contents on file falls back to its own stock like any product.
+  const ownStockOf = (sku) => productBySku.get(sku)?.stock ?? null;
+  function isSoldOut(item, itemModels) {
+    const parts = contentsByBundle.get(item.item_sku) || [];
+    if (parts.length > 0) return parts.some((p) => { const s = ownStockOf(p.sku); return s != null && s < p.qty; });
+    return itemModels.length > 0 && itemModels.every((v) => v.dashboardStock != null && v.dashboardStock <= 0);
+  }
+
   const catalog = items.map((item) => {
     const itemModels = (modelsByItem.get(item.item_id) || []).map((m) => {
       const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
@@ -1023,7 +1035,7 @@ router.get('/catalog', (req, res) => {
       omsetLalu: omsetLaluTotal,
       minPurchase: item.min_purchase_limit,
       image: item.image_url,
-      soldOut: itemModels.length > 0 && itemModels.every((m) => (m.stock ?? 0) <= 0),
+      soldOut: isSoldOut(item, itemModels),
       variants: itemModels,
     };
   });

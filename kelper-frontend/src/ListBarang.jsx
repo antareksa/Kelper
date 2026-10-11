@@ -385,7 +385,7 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
             </span>
           )}
           {product.soldOut && (
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: colors.red, background: colors.redDim, padding: '3px 8px', borderRadius: 999 }}>
+            <span title={product.isBundle && product.bundleItems?.length ? 'Stok salah satu isi bundle kurang (stok dashboard)' : 'Stok dashboard 0'} style={{ fontSize: 10.5, fontWeight: 600, color: colors.red, background: colors.redDim, padding: '3px 8px', borderRadius: 999 }}>
               ● HABIS
             </span>
           )}
