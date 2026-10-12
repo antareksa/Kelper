@@ -370,7 +370,7 @@ router.get('/summary', (req, res) => {
     .get(shopId, selectedDate);
 
   // Same "exact date, null if never fetched" pattern as Affiliasi — see
-  // shopeeSync.js's fetchShopPerformance.
+  // the Brand Portal visitors fetch that used to fill it (removed).
   const shopPerformanceRow = db
     .prepare('SELECT date, unique_visitors FROM shop_performance_daily WHERE shop_id = ? AND date = ?')
     .get(shopId, selectedDate);

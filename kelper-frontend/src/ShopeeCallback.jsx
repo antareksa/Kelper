@@ -3,7 +3,7 @@ import { API_BASE } from './apiBase';
 import { refreshActiveShopId } from './shopConfig';
 
 // exchangeUrl lets the same component handle both the main app's callback
-// and the Brand Portal app's (a separate Shopee app — see ShopeeBrandAuth) —
+// and the Affiliate (AMS) app's (a separate Shopee app — see ShopeeBrandAuth) —
 // each app's code is only valid against its own /auth[/brand]/exchange, so
 // which endpoint gets called must match which app's redirect URI brought us
 // here (App.jsx's isShopeeBrandCallback decides that from the URL path).
@@ -29,7 +29,7 @@ function ShopeeCallback({ onDone, exchangeUrl = '/auth/exchange', title = 'Konek
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error);
         // Only the main app's connection changes which shop is "active" —
-        // Brand Portal (exchangeUrl === '/auth/brand/exchange') just adds
+        // Affiliate (AMS) (exchangeUrl === '/auth/brand/exchange') just adds
         // analytics access for whichever shop is already active, it never
         // switches it.
         if (exchangeUrl === '/auth/exchange') {

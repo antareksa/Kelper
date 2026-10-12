@@ -190,7 +190,7 @@ function Dashboard() {
           {/* Client-requested (2026-10-02): goes to the Settings page
               (where the real Shopee connection controls live) instead of
               immediately firing the OAuth login itself -- lets the admin
-              see/choose which app (main vs Brand Portal) to connect, rather
+              see/choose which app (main vs Affiliate (AMS)) to connect, rather
               than this button always kicking off the main app's login. */}
           {isPacking ? (
             <p style={{ fontSize: 13, color: colors.textDim, margin: 0 }}>Hubungi admin utama untuk menghubungkan toko.</p>

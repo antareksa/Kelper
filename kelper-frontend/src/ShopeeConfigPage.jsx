@@ -99,7 +99,7 @@ function DashboardSettings() {
 }
 
 // Dedicated page for both Shopee connections (main app for order sync,
-// Brand Portal app for Affiliasi/Pengunjung) — moved here from the sidebar's
+// Affiliate (AMS) app for Affiliasi) — moved here from the sidebar's
 // bottom-left so checking/managing them doesn't take up permanent space in
 // every other screen; this is purely a status/control page, nothing else.
 function ShopeeConfigPage() {
@@ -116,7 +116,7 @@ function ShopeeConfigPage() {
         </div>
 
         <div style={{ ...card(), flex: 1, minWidth: 260 }}>
-          <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Brand Portal (Affiliasi/Pengunjung)</div>
+          <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Affiliate (AMS) (Affiliasi)</div>
           <ShopeeBrandAuth />
         </div>
 

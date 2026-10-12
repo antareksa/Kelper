@@ -9,7 +9,7 @@ import { API_BASE, apiFetch } from './apiBase';
 // logged in) instead of firing on mount unconditionally.
 //
 // `variant` picks which Shopee app this checks: 'main' (order sync, default)
-// or 'brand' (the separate Brand Portal app — see ShopeeBrandAuth). They
+// or 'brand' (the separate Affiliate (AMS) app — see ShopeeBrandAuth). They
 // hit entirely separate backend routes/tokens, so connecting or
 // disconnecting one can never affect the other. The brand variant skips the
 // shop-name lookup — /shop/info is a main-app-credentialed call, and Brand

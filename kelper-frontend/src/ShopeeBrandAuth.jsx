@@ -1,7 +1,7 @@
 import { useShopeeConnection } from './useShopeeConnection';
 
-// Brand Portal connection status — same shape as ShopeeAuth, but for the
-// separate Brand Portal Shopee app (its own Partner ID/Key and OAuth
+// Affiliate (AMS) connection status — same shape as ShopeeAuth, but for the
+// separate Affiliate (AMS) Shopee app (its own Partner ID/Key and OAuth
 // callback, see App.jsx/useShopeeConnection). Kept as its own component
 // rather than a prop on ShopeeAuth since the two connections are
 // independent: one can be connected while the other isn't, and nothing
@@ -10,18 +10,18 @@ function ShopeeBrandAuth() {
   const { checking, connected, loginShopee, logoutShopee } = useShopeeConnection(true, 'brand');
 
   function handleDisconnect() {
-    if (!window.confirm('Putuskan koneksi Brand Portal? Affiliasi & Pengunjung akan berhenti tersedia sampai terhubung lagi.')) return;
+    if (!window.confirm('Putuskan koneksi Affiliate (AMS)? Affiliasi akan berhenti tersedia sampai terhubung lagi.')) return;
     logoutShopee();
   }
 
   if (checking) {
-    return <span style={{ fontSize: 12, opacity: 0.6 }}>Memeriksa Brand Portal...</span>;
+    return <span style={{ fontSize: 12, opacity: 0.6 }}>Memeriksa Affiliate (AMS)...</span>;
   }
 
   if (connected) {
     return (
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4 }}>✓ Brand Portal Terhubung</div>
+        <div style={{ fontSize: 12, color: '#2e7d32', lineHeight: 1.4 }}>✓ Affiliate (AMS) Terhubung</div>
         <button onClick={handleDisconnect} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75, marginTop: 6 }}>
           Putuskan
         </button>

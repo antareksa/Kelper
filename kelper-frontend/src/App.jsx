@@ -28,7 +28,7 @@ function isShopeeCallback() {
   return params.has('code') && (window.location.pathname.startsWith('/check-connection') || params.has('shop_id'));
 }
 
-// The Brand Portal app (a separate Shopee app, see ShopeeBrandAuth) is
+// The Affiliate (AMS) app (a separate Shopee app, see ShopeeBrandAuth) is
 // registered with its own redirect URI ending in this path (the main app
 // uses /check-connection instead — see .env's SHOPEE_REDIRECT_URI), so its
 // callback can be told apart from the main app's — both return the same
@@ -110,7 +110,7 @@ function App() {
   }
 
   if (view === 'shopee-callback-brand') {
-    return <ShopeeCallback onDone={backToLanding} exchangeUrl="/auth/brand/exchange" title="Koneksi Brand Portal" />;
+    return <ShopeeCallback onDone={backToLanding} exchangeUrl="/auth/brand/exchange" title="Koneksi Affiliate (AMS)" />;
   }
 
   if (view === 'landing') {

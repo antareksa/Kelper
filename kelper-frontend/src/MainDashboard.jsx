@@ -101,12 +101,12 @@ function BlockedCard({ label, note }) {
 }
 
 // All five funnel steps are real now. Affiliasi comes from a separate
-// source (Brand Portal, fetched once daily) with its own 1-day reporting
+// source (Affiliate (AMS), fetched once daily) with its own 1-day reporting
 // lag, so it's never "today" — the label says which day it actually is.
 // Iklan is genuinely today's spend so far (refetched every few minutes —
 // see shopeeSync.js's fetchAdsPerformance), same as Margin/Layanan/Biaya
 // Pesanan. `blocked` only fires transiently, before the first fetch has
-// happened yet (e.g. right after connecting Brand Portal, or right after
+// happened yet (e.g. right after connecting Affiliate (AMS), or right after
 // server startup for Iklan).
 function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   const steps = [
@@ -452,7 +452,7 @@ function MainDashboard() {
             {data.pengunjung ? (
               <KpiCard label="Pengunjung" value={String(data.pengunjung.uniqueVisitors)} />
             ) : (
-              <BlockedCard label="Pengunjung" note="Belum ada data — menunggu fetch harian pertama dari Brand Portal." />
+              <BlockedCard label="Pengunjung" note="Belum ada data." />
             )}
           </div>
 

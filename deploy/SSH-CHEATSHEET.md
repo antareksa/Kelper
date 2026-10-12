@@ -244,7 +244,7 @@ effect.
 
 ## Switch both Shopee apps from sandbox to LIVE
 
-Do these in order. Both apps (main + Brand Portal) share one `AUTH_BASE` and
+Do these in order. Both apps (main + the Affiliate / AMS app) share one `AUTH_BASE` and
 one `API_BASE`, so the host change hits both at once — swap all four
 credentials in the same sitting, or the app left on test credentials will
 fail against the live host.
@@ -262,8 +262,8 @@ and change these six lines (get the Live Partner ID/Key from Partner Console
 ```
 SHOPEE_PARTNER_ID=<main app LIVE Partner ID>
 SHOPEE_PARTNER_KEY=<main app LIVE Key>
-SHOPEE_BRAND_PARTNER_ID=<Brand Portal LIVE Partner ID>
-SHOPEE_BRAND_PARTNER_KEY=<Brand Portal LIVE Key>
+SHOPEE_BRAND_PARTNER_ID=<AMS app LIVE Partner ID>
+SHOPEE_BRAND_PARTNER_KEY=<AMS app LIVE Key>
 SHOPEE_AUTH_BASE=https://partner.shopeemobile.com/api/v2/shop/auth_partner
 SHOPEE_API_BASE=https://partner.shopeemobile.com
 ```
@@ -271,18 +271,20 @@ Leave `SHOPEE_REDIRECT_URI`, `SHOPEE_BRAND_REDIRECT_URI` and
 `SHOPEE_PUSH_CALLBACK_URL` alone (they're `dashboard.kelper.co.id` URLs and
 don't change between sandbox and live).
 
-**Also add these two lines for Brand Portal on live** (not needed on sandbox;
-leave them out of `.env.development`):
+**The Affiliasi numbers come from Shopee's AMS API** (Affiliate Marketing Solution
+Management), not the Brand Portal (changed 2026-10-12). The `SHOPEE_BRAND_*` lines
+above are now the credentials of that app: create an app of type **Affiliate
+Marketing Solution Management** in the Shopee Open Platform Console and put its
+Live Partner ID and Key there. It is authorized like any shop (seller login), so
+**remove** these two lines from `.env.production` if they are still there, they
+were only for the Brand Portal login:
 ```
-SHOPEE_BRAND_AUTH_BASE=https://open.shopee.com/auth
+SHOPEE_BRAND_AUTH_BASE=...
 SHOPEE_BRAND_AUTH_TYPE=principal
 ```
-Brand Portal accounts log in through a different Shopee login than seller
-accounts. Without these, the Brand "Hubungkan" sends them through the seller
-login, where they have no shop to authorize, and Shopee answers "no supported
-resources available for this authorize/deauthorize operation". Check a line
-isn't already there before adding it (`Ctrl+W` in nano), so it doesn't end up
-duplicated.
+Then restart (step 3) and press **Hubungkan** next to "Affiliate (AMS)" in
+Pengaturan. The Dashboard's Affiliasi card fills in the next day: the server asks
+Shopee once a day for yesterday's total. The Pengunjung card has no source for now.
 
 **3. Restart**, then reconnect both apps from Dashboard -> Pengaturan:
 ```bash
@@ -291,7 +293,7 @@ sudo systemctl restart kelper
 Old sandbox tokens stop working against the live host, so you will see
 `Invalid access_token` lines in the logs until you reconnect — expected.
 
-**4. Reconnect** the main app and Brand Portal (Hubungkan) in Pengaturan.
+**4. Reconnect** the main app and Affiliate / AMS (Hubungkan) in Pengaturan.
 The newest connection becomes the active shop automatically.
 
 If the Shopee page that opens shows an error instead of a login:

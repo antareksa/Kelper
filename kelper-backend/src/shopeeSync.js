@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
 const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance } = require('./shopee/client');
-const { getShopAffiliatePerformance, getShopSalesPerformanceDetail } = require('./shopee/brandClient');
+const { getAffiliatePerformance } = require('./shopee/amsClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
 const { getSetting, setSetting } = require('./settings');
@@ -819,13 +819,19 @@ const insertAffiliatePerformance = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?)
 `);
 
-// Fetches YESTERDAY's Affiliasi summary once per shop per day — Shopee's own
-// data has a 1-day reporting lag (today's figures error with "end_date is
-// not ready"), so there's nothing to gain from checking more often than
-// once a day, and once fetched a past day's numbers don't change. Runs
-// independently of the main order-sync's isSyncEnabled pause toggle — this
-// has nothing to do with order fetching, and pausing one shouldn't silently
-// pause the other.
+// Fetches YESTERDAY's Affiliasi total once per shop per day -- Shopee's own data
+// has a 1-day reporting lag, so there's nothing to gain from checking more often
+// than once a day, and once fetched a past day's numbers don't change. Runs
+// independently of the main order-sync's isSyncEnabled pause toggle -- this has
+// nothing to do with order fetching, and pausing one shouldn't silently pause the
+// other.
+//
+// Source: Shopee's AMS get_affiliate_performance (client-decided 2026-10-12, replacing
+// the Brand Portal API). It answers per affiliate, 20 to a page, so every page is
+// fetched and added up: sales, orders and buyers of CONFIRMED orders over all channels.
+// total_buyers is each affiliate's own count, so a buyer who bought through two
+// affiliates counts twice: the buyers total is an upper bound, never an undercount.
+const AFFILIATE_MAX_PAGES = 100; // 2000 affiliates; a stop against a runaway has_more
 async function fetchAffiliatePerformance(shopId) {
   const yesterday = dateStringWIB(1);
   const already = db
@@ -833,55 +839,30 @@ async function fetchAffiliatePerformance(shopId) {
     .get(shopId, yesterday);
   if (already) return;
 
-  const accessToken = await getValidBrandAccessToken(shopId);
-  const result = await getShopAffiliatePerformance(accessToken, shopId, {
-    startDate: yesterday,
-    endDate: yesterday,
-    timezone: 'GMT+7',
-    granularity: 'day',
-  });
-  if (result.error) {
-    console.error(`[server] get_shop_affiliate_performance failed for shop ${shopId}: ${result.message || result.error}`);
-    return;
+  const accessToken = await getValidBrandAccessToken(shopId); // the AMS app's token (see amsClient.js)
+  let sales = 0;
+  let orders = 0;
+  let buyers = 0;
+  for (let pageNo = 1; pageNo <= AFFILIATE_MAX_PAGES; pageNo += 1) {
+    const result = await getAffiliatePerformance(accessToken, shopId, { date: yesterday.replace(/-/g, ''), pageNo });
+    if (result.error) {
+      // Nothing is stored on a failure (not even a partial total), so it is retried on the next pass.
+      console.error(`[server] get_affiliate_performance failed for shop ${shopId}: ${result.message || result.error}`);
+      return;
+    }
+    const response = result.response || {};
+    for (const affiliate of response.list || []) {
+      sales += Number(affiliate.sales) || 0; // "sales" arrives as a string
+      orders += Number(affiliate.orders) || 0;
+      buyers += Number(affiliate.total_buyers) || 0;
+    }
+    if (!response.has_more) break;
   }
 
-  // An empty summary means Shopee has nothing to report (no affiliate
-  // orders that day) — genuinely zero, not "not fetched yet". Storing a
-  // zeroed row either way is what lets the Dashboard tell "connected, zero
-  // activity" apart from "never fetched" (no row at all).
-  const summary = result.response?.summary?.[0] || { sales_confirmed: 0, orders_confirmed: 0, buyers_confirmed: 0 };
-  insertAffiliatePerformance.run(shopId, yesterday, summary.sales_confirmed ?? 0, summary.orders_confirmed ?? 0, summary.buyers_confirmed ?? 0, now());
-}
-
-const insertShopPerformance = db.prepare(`
-  INSERT OR REPLACE INTO shop_performance_daily (shop_id, date, unique_visitors, fetched_at)
-  VALUES (?, ?, ?, ?)
-`);
-
-// Fetches YESTERDAY's Pengunjung (unique_visitors) once per shop per day —
-// same 1-day reporting lag and once-daily reasoning as fetchAffiliatePerformance
-// above, just a different Brand Portal endpoint.
-async function fetchShopPerformance(shopId) {
-  const yesterday = dateStringWIB(1);
-  const already = db
-    .prepare('SELECT 1 FROM shop_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, yesterday);
-  if (already) return;
-
-  const accessToken = await getValidBrandAccessToken(shopId);
-  const result = await getShopSalesPerformanceDetail(accessToken, shopId, {
-    startDate: yesterday,
-    endDate: yesterday,
-    timezone: 'GMT+7',
-    granularity: 'day',
-  });
-  if (result.error) {
-    console.error(`[server] get_shop_sales_performance_detail failed for shop ${shopId}: ${result.message || result.error}`);
-    return;
-  }
-
-  const summary = result.response?.summary?.[0] || { unique_visitors: 0 };
-  insertShopPerformance.run(shopId, yesterday, summary.unique_visitors ?? 0, now());
+  // No affiliate activity that day is a genuine zero, not "not fetched yet". Storing a
+  // zeroed row either way is what lets the Dashboard tell "connected, zero activity"
+  // apart from "never fetched" (no row at all).
+  insertAffiliatePerformance.run(shopId, yesterday, sales, orders, buyers, now());
 }
 
 const ADS_REFETCH_INTERVAL_SECONDS = 5 * 60;
@@ -955,7 +936,7 @@ function startShopeeSync() {
         console.error(`[server] Affiliasi fetch failed for shop ${shopId}: ${err.message}`);
       }
       try {
-        await fetchShopPerformance(shopId);
+        // Pengunjung (visitors) came from the Brand Portal API and is no longer fetched.
       } catch (err) {
         console.error(`[server] Pengunjung fetch failed for shop ${shopId}: ${err.message}`);
       }
@@ -978,4 +959,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance };
