@@ -5,6 +5,7 @@ import { renderCode39Svg } from './Barcode';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE } from './apiBase';
 import { speakCarrier, playSound, preloadCarrierSounds } from './carrierSpeech';
+import { renderBesokLabelSvg, isBesokCode, BESOK_LABEL_MM } from './besokLabel';
 
 // orders.created_at / packing_sessions.completed_at are unix SECONDS
 // (server-side, see shopeeSync.js's now()), not the millisecond timestamps
@@ -381,7 +382,7 @@ export const COMMANDS = [
   { cmd: 'RELEASE_ORDER', desc: 'Lepaskan order ini dan kembalikan ke antrian untuk station manapun (misalnya Anda tidak akan menyelesaikannya).' },
   { cmd: 'REPRINT', desc: 'Setelah semua item discan: jika label gagal terscan kembali (masalah printer), cetak ulang tanpa membuat pengiriman baru.' },
   { cmd: 'SHIPPING_MODE', desc: 'Alihkan station ini ke Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan kurir, terpisah dari proses packing.' },
-  { cmd: 'PRINT_RESI_MODE', desc: 'Alihkan station ini ke Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket Pack Besok untuk mencetak resi aslinya, lalu scan resi yang tercetak untuk konfirmasi.' },
+  { cmd: 'PRINT_RESI_MODE', desc: 'Alihkan station ini ke Mode Cetak Resi — scan barcode sementara (PACK BESOK) pada paket Pack Besok untuk mencetak resi aslinya, lalu scan resi yang tercetak untuk konfirmasi.' },
   { cmd: 'PACKING_MODE', desc: 'Kembali ke mode packing biasa dari Mode Pengiriman atau Mode Cetak Resi.' },
   { cmd: 'LOGOUT', desc: 'Akhiri shift operator ini di station (station tetap terkonfigurasi untuk operator berikutnya).' },
   { cmd: 'SHUTDOWN_PC', desc: 'Matikan PC station ini. Scan dua kali dalam 10 detik untuk konfirmasi. Tetap bisa dipakai saat ada order yang sedang diproses: order itu otomatis dikembalikan ke antrian. Perlu pengaturan sekali di PC (enable-shutdown-barcode.reg).' },
@@ -978,7 +979,7 @@ function PackingStation() {
   // set imperatively — so it can't drift out of sync with what's actually true.
   function getGuidance() {
     if (!operatorName) return { text: 'Scan barcode operator Anda untuk masuk.', type: 'info' };
-    if (mode === 'printresi') return { text: 'Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket untuk mencetak resi aslinya. Scan PACKING_MODE untuk kembali.', type: 'info' };
+    if (mode === 'printresi') return { text: 'Mode Cetak Resi — scan barcode sementara (PACK BESOK) pada paket untuk mencetak resi aslinya. Scan PACKING_MODE untuk kembali.', type: 'info' };
     if (mode === 'shipping') return { text: 'Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan. Scan PACKING_MODE untuk kembali.', type: 'info' };
     if (paused) return { text: 'Station dijeda. Scan RESUME untuk melanjutkan.', type: 'info' };
     if (!state) return { text: 'Menunggu orderan masuk...', type: 'info' };
@@ -1109,10 +1110,10 @@ function PackingStation() {
     }
   }
 
-  // Prints a physical Code 39 barcode label for a Pack Besok order's
-  // internal_barcode (BESOK-XXXX), so there's something real to stick on the
+  // Prints a physical barcode label (Code 128, 33 x 15 mm) for a Pack Besok order's
+  // internal_barcode (B + 8 digits), so there's something real to stick on the
   // parked package and scan back tomorrow — RESUME_BESOK already looks this
-  // exact value up (see handleScanSubmit's `value.startsWith('BESOK-')`
+  // exact value up (see handleScanSubmit's `isBesokCode(value)`
   // branch), it just had nothing physical printed for it until now.
   function printBesokLabel(session, order) {
     const iframe = printFrameRef.current;
@@ -1129,35 +1130,17 @@ function PackingStation() {
         focusScanInput();
       }, 1000);
     };
+    // 33 x 15 mm, its own page size (not the shipping label's paper size above):
+    // see besokLabel.js for the layout and why it is built the way it is.
     iframe.srcdoc = `
       <html>
         <head>
           <style>
-            @page { size: ${paperWidthMm}mm ${paperHeightMm}mm; margin: 0; }
-            html, body {
-              width: ${paperWidthMm}mm;
-              height: ${paperHeightMm}mm;
-              margin: 0;
-              overflow: hidden;
-            }
-            body {
-              font-family: monospace;
-              box-sizing: border-box;
-              padding: 8mm;
-              text-align: center;
-              page-break-after: avoid;
-              page-break-inside: avoid;
-            }
-            svg { max-width: 100%; height: auto; }
+            @page { size: ${BESOK_LABEL_MM.w}mm ${BESOK_LABEL_MM.h}mm; margin: 0; }
+            html, body { width: ${BESOK_LABEL_MM.w}mm; height: ${BESOK_LABEL_MM.h}mm; margin: 0; overflow: hidden; }
           </style>
         </head>
-        <body>
-          <h2>PACK BESOK</h2>
-          ${renderCode39Svg(session.internal_barcode)}
-          <p style="letter-spacing: 2px;">${session.internal_barcode}</p>
-          <p style="font-size: 11px;">Order: ${order?.order_sn ?? '—'}</p>
-          <p style="font-size: 11px;">Tempel di paket, scan besok untuk lanjutkan.</p>
-        </body>
+        <body>${renderBesokLabelSvg(session.internal_barcode)}</body>
       </html>
     `;
   }
@@ -1426,7 +1409,7 @@ function PackingStation() {
     // check on pickups shouldn't require first resolving whatever the
     // packing side happens to be doing.
     if (value === 'SHIPPING_MODE') { setMode('shipping'); return notify('Mode Pengiriman — scan label yang sudah dikemas untuk konfirmasi pengambilan.', 'info'); }
-    if (value === 'PRINT_RESI_MODE') { setMode('printresi'); return notify('Mode Cetak Resi — scan barcode sementara (BESOK-) pada paket untuk mencetak resi aslinya.', 'info'); }
+    if (value === 'PRINT_RESI_MODE') { setMode('printresi'); return notify('Mode Cetak Resi — scan barcode sementara (PACK BESOK) pada paket untuk mencetak resi aslinya.', 'info'); }
     if (value === 'PACKING_MODE') { setMode('packing'); return notify('Kembali ke Mode Packing.', 'info'); }
     if (paused) return notify('Station sedang dijeda. Scan RESUME terlebih dahulu.', 'error');
 
@@ -1498,7 +1481,7 @@ function PackingStation() {
 
       if (!state) {
         // no active session — only NEXT_ORDER or resuming a Pack Besok barcode make sense here
-        if (value.startsWith('BESOK-')) {
+        if (isBesokCode(value)) {
           setBusy(true);
           setBusyLabel('Mengonfirmasi status order...');
           try {

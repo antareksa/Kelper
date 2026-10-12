@@ -114,6 +114,20 @@ function getSessionWithOrder(sessionId) {
 // does the order move to READY_FOR_PICKUP, which does NOT block — that
 // status just means "waiting for Shipping Mode to confirm the courier took
 // it", a separate, later, decoupled step.
+// The temp barcode stuck on a Pack Besok box (client-requested 2026-10-12): the letter B
+// and 8 digits, e.g. B12345678. It had to get shorter to fit a 33 x 15 mm label with
+// bars a scanner can read (the old BESOK-XXXXXXXX would need bars 0.125 mm thin).
+// Codes already on boxes (BESOK-XXXXXXXX) stay valid: every lookup compares the
+// stored value as it is. Unique among all sessions, ever.
+function newBesokCode() {
+  const taken = db.prepare('SELECT 1 FROM packing_sessions WHERE internal_barcode = ?');
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const code = `B${String(crypto.randomInt(0, 100000000)).padStart(8, '0')}`;
+    if (!taken.get(code)) return code;
+  }
+  throw new Error('could not find a free temp barcode');
+}
+
 function finalizeCompletedOrder(state, res) {
   if (state.order.label_ready && state.order.tracking_no) {
     db.prepare(`
@@ -123,7 +137,7 @@ function finalizeCompletedOrder(state, res) {
     `).run(state.order.tracking_no, state.session.id);
     console.log(`[server] bucket: ${state.order.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — frontend will now attempt to print the label`);
   } else {
-    const internalBarcode = `BESOK-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    const internalBarcode = newBesokCode();
     db.prepare(`
       UPDATE packing_sessions
       SET shipping_choice = 'PACK_BESOK', internal_barcode = ?, status = 'DEFERRED_READY'
@@ -542,7 +556,7 @@ router.post('/print-resi', async (req, res) => {
   const scanned = String(req.body.scanned ?? '').trim();
   const operatorName = req.body.operator_name || null;
   touchStation(req.body.station_id);
-  if (!scanned) return res.status(400).json({ error: 'empty_scan', message: 'Scan kosong — scan barcode sementara (BESOK-...) pada paket.' });
+  if (!scanned) return res.status(400).json({ error: 'empty_scan', message: 'Scan kosong — scan barcode sementara PACK BESOK pada paket.' });
   const u = scanned.toUpperCase();
 
   const matches = db
@@ -569,7 +583,7 @@ router.post('/print-resi', async (req, res) => {
     return res.status(404).json({ error: 'not_in_besok_list', message: `"${scanned}" tidak ada di daftar Pack Besok.${hint}` });
   }
   if (matches.length > 1) {
-    return res.status(409).json({ error: 'ambiguous', message: `"${scanned}" cocok dengan ${matches.length} order — scan barcode sementara (BESOK-...) pada paket.` });
+    return res.status(409).json({ error: 'ambiguous', message: `"${scanned}" cocok dengan ${matches.length} order — scan barcode sementara PACK BESOK pada paket.` });
   }
   const m = matches[0];
 

@@ -81,6 +81,18 @@ printing one), and turns Fast Startup off so the shutdown is a full one. No chan
 to the launchers. On a PC without it, scanning the barcode does nothing and the
 station says so after about 25 seconds.
 
+## The temp "Pack Besok" label (33 x 15 mm)
+
+The temp barcode label is **33 x 15 mm** (its own page size, not the shipping label's):
+"PACK BESOK" and the date on top, a Code 128 barcode, and the code in letters. The
+bars are 0.25 mm (2 dots at 203 dpi), which a scanner reads reliably at this size.
+
+- The printer must have 33 x 15 mm labels loaded and that paper size available. The
+  station prints with the Windows **default printer** only, so the shipping label
+  (100 x 120 mm) and this label go to the same printer. If a separate small-label
+  printer is needed for it, that needs an extra step on the PC.
+- Print at 100% / actual size, no margins.
+
 ## Sound in Shipping Mode
 
 When a parcel is confirmed picked up in Shipping Mode, the station **says the
@@ -100,7 +112,7 @@ to normal packing from either of the other two.
 - **`SHIPPING_MODE`**: lists every package waiting for the courier. Scan a
   package's resi when the courier takes it.
 - **`PRINT_RESI_MODE`** (new): for orders packed the evening before with only a
-  temp barcode (`BESOK-...`, "Pack Besok"). The screen lists them with their
+  temp barcode (`B` + 8 digits, printed as "BESOK 12345678", "Pack Besok"; boxes labelled before 2026-10-12 carry the older `BESOK-XXXXXXXX`, which still works). The screen lists them with their
   state: *SIAP CETAK* (resi booked), *MENUNGGU LABEL* (resi not booked yet) or
   *SUDAH DICETAK* (printed, waiting for the resi to be scanned back). Scan the
   temp barcode on a box and its real resi prints; stick it on and scan the
