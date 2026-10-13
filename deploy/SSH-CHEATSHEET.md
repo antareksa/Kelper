@@ -283,8 +283,10 @@ SHOPEE_BRAND_AUTH_BASE=...
 SHOPEE_BRAND_AUTH_TYPE=principal
 ```
 Then restart (step 3) and press **Hubungkan** next to "Affiliate (AMS)" in
-Pengaturan. The Dashboard's Affiliasi card fills in the next day: the server asks
-Shopee once a day for yesterday's total. The Pengunjung card has no source for now.
+Pengaturan. The Affiliasi card then fills in by itself: within a few minutes the
+server fetches yesterday and every missing day back 30 days (one day at a time,
+newest first; a day Shopee refuses is not asked again for 30 minutes). Later it
+fetches each new day once. The Pengunjung card has no source for now.
 
 **3. Restart**, then reconnect both apps from Dashboard -> Pengaturan:
 ```bash

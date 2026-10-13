@@ -819,50 +819,79 @@ const insertAffiliatePerformance = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?)
 `);
 
-// Fetches YESTERDAY's Affiliasi total once per shop per day -- Shopee's own data
-// has a 1-day reporting lag, so there's nothing to gain from checking more often
-// than once a day, and once fetched a past day's numbers don't change. Runs
-// independently of the main order-sync's isSyncEnabled pause toggle -- this has
-// nothing to do with order fetching, and pausing one shouldn't silently pause the
-// other.
+// Fetches the Affiliasi total of ONE missing day per call: the newest day without a
+// row, from yesterday back AFFILIATE_BACKFILL_DAYS days. Shopee's data runs a day
+// behind, so "today" is never asked for; going back means a day the server missed
+// (it was off, or the AMS app was connected late) is filled in on its own instead of
+// staying empty for good. Shopee keeps Day figures for the past three months, so 30
+// days is well inside what it will answer. Once a day is stored it is never asked
+// again. Runs independently of the main order-sync's isSyncEnabled pause toggle --
+// this has nothing to do with order fetching.
 //
 // Source: Shopee's AMS get_affiliate_performance (client-decided 2026-10-12, replacing
 // the Brand Portal API). It answers per affiliate, 20 to a page, so every page is
 // fetched and added up: sales, orders and buyers of CONFIRMED orders over all channels.
 // total_buyers is each affiliate's own count, so a buyer who bought through two
 // affiliates counts twice: the buyers total is an upper bound, never an undercount.
+//
+// This runs on every enrichment pass (every few seconds), so a day that fails is not
+// asked again for AFFILIATE_RETRY_SECONDS -- otherwise a refusal (e.g. the app has no
+// AMS permission) would hit Shopee every 5 seconds all day. The failure is remembered
+// in memory only: a restart tries again straight away.
 const AFFILIATE_MAX_PAGES = 100; // 2000 affiliates; a stop against a runaway has_more
+const AFFILIATE_BACKFILL_DAYS = 30;
+const AFFILIATE_RETRY_SECONDS = 30 * 60;
+const affiliateFailedAt = new Map(); // "shopId:date" -> unix seconds of the last failed attempt
+function resetAffiliateRetry() { affiliateFailedAt.clear(); } // for tests
+
 async function fetchAffiliatePerformance(shopId) {
-  const yesterday = dateStringWIB(1);
-  const already = db
-    .prepare('SELECT 1 FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, yesterday);
-  if (already) return;
-
-  const accessToken = await getValidBrandAccessToken(shopId); // the AMS app's token (see amsClient.js)
-  let sales = 0;
-  let orders = 0;
-  let buyers = 0;
-  for (let pageNo = 1; pageNo <= AFFILIATE_MAX_PAGES; pageNo += 1) {
-    const result = await getAffiliatePerformance(accessToken, shopId, { date: yesterday.replace(/-/g, ''), pageNo });
-    if (result.error) {
-      // Nothing is stored on a failure (not even a partial total), so it is retried on the next pass.
-      console.error(`[server] get_affiliate_performance failed for shop ${shopId}: ${result.message || result.error}`);
-      return;
-    }
-    const response = result.response || {};
-    for (const affiliate of response.list || []) {
-      sales += Number(affiliate.sales) || 0; // "sales" arrives as a string
-      orders += Number(affiliate.orders) || 0;
-      buyers += Number(affiliate.total_buyers) || 0;
-    }
-    if (!response.has_more) break;
+  const have = new Set(
+    db
+      .prepare('SELECT date FROM affiliate_performance_daily WHERE shop_id = ? AND date >= ?')
+      .all(shopId, dateStringWIB(AFFILIATE_BACKFILL_DAYS))
+      .map((r) => r.date)
+  );
+  let day = null;
+  for (let ago = 1; ago <= AFFILIATE_BACKFILL_DAYS; ago += 1) {
+    const candidate = dateStringWIB(ago);
+    if (have.has(candidate)) continue;
+    const failedAt = affiliateFailedAt.get(`${shopId}:${candidate}`);
+    if (failedAt && now() - failedAt < AFFILIATE_RETRY_SECONDS) continue;
+    day = candidate;
+    break;
   }
+  if (!day) return;
 
-  // No affiliate activity that day is a genuine zero, not "not fetched yet". Storing a
-  // zeroed row either way is what lets the Dashboard tell "connected, zero activity"
-  // apart from "never fetched" (no row at all).
-  insertAffiliatePerformance.run(shopId, yesterday, sales, orders, buyers, now());
+  try {
+    const accessToken = await getValidBrandAccessToken(shopId); // the AMS app's token (see amsClient.js)
+    let sales = 0;
+    let orders = 0;
+    let buyers = 0;
+    for (let pageNo = 1; pageNo <= AFFILIATE_MAX_PAGES; pageNo += 1) {
+      const result = await getAffiliatePerformance(accessToken, shopId, { date: day.replace(/-/g, ''), pageNo });
+      if (result.error) {
+        // Nothing is stored on a failure (not even a partial total), so this day is retried later.
+        affiliateFailedAt.set(`${shopId}:${day}`, now());
+        console.error(`[server] get_affiliate_performance failed for shop ${shopId} (${day}): ${result.message || result.error}`);
+        return;
+      }
+      const response = result.response || {};
+      for (const affiliate of response.list || []) {
+        sales += Number(affiliate.sales) || 0; // "sales" arrives as a string
+        orders += Number(affiliate.orders) || 0;
+        buyers += Number(affiliate.total_buyers) || 0;
+      }
+      if (!response.has_more) break;
+    }
+
+    // No affiliate activity that day is a genuine zero, not "not fetched yet". Storing a
+    // zeroed row either way is what lets the Dashboard tell "connected, zero activity"
+    // apart from "never fetched" (no row at all).
+    insertAffiliatePerformance.run(shopId, day, sales, orders, buyers, now());
+  } catch (err) {
+    affiliateFailedAt.set(`${shopId}:${day}`, now()); // a token or network failure counts too
+    throw err;
+  }
 }
 
 const ADS_REFETCH_INTERVAL_SECONDS = 5 * 60;
@@ -959,4 +988,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance, resetAffiliateRetry };
