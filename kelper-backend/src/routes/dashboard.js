@@ -208,6 +208,26 @@ function pctChange(today, yesterday) {
   return Math.round(((today - yesterday) / yesterday) * 1000) / 10;
 }
 
+// Page views of one WIB day, from the item_views readings (see db.js). Per item: the day's
+// views = the next day's first reading (or, for a day still running, the latest reading)
+// minus the day's first reading. A counter that went DOWN is ignored for that item, not
+// subtracted. null when no item has a usable pair of readings (nothing recorded yet).
+function pageViewsFor(shopId, date) {
+  const rows = db.prepare('SELECT item_id, views_start, views_latest FROM item_views WHERE shop_id = ? AND date = ?').all(shopId, date);
+  if (rows.length === 0) return null;
+  const nextStart = new Map(
+    db.prepare('SELECT item_id, views_start FROM item_views WHERE shop_id = ? AND date = ?').all(shopId, shiftDateStringWIB(date, 1)).map((r) => [r.item_id, r.views_start])
+  );
+  let total = 0;
+  let counted = 0;
+  for (const r of rows) {
+    const end = nextStart.has(r.item_id) ? nextStart.get(r.item_id) : r.views_latest;
+    const delta = end - r.views_start;
+    if (delta >= 0) { total += delta; counted += 1; }
+  }
+  return counted === 0 ? null : { date, pageViews: total };
+}
+
 router.get('/summary', (req, res) => {
   const { shop_id: shopId, date } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
@@ -355,8 +375,8 @@ router.get('/summary', (req, res) => {
   const mostStock = db.prepare(`${stockRankSelect} ORDER BY p.stock DESC LIMIT 5`).all(shopId);
   const leastStock = db.prepare(`${stockRankSelect} ORDER BY p.stock ASC LIMIT 5`).all(shopId);
 
-  // Affiliasi comes from a completely separate source (Brand Portal's
-  // get_shop_affiliate_performance, fetched once daily — see
+  // Affiliasi comes from a completely separate source (Shopee's AMS
+  // get_affiliate_performance, fetched once daily — see
   // shopeeSync.js's fetchAffiliatePerformance) with its own 1-day reporting
   // lag, so it's never available for "today" itself. Looked up by the exact
   // selected date (not "latest fetched") now that the date picker can move
@@ -367,11 +387,9 @@ router.get('/summary', (req, res) => {
     .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
     .get(shopId, selectedDate);
 
-  // Same "exact date, null if never fetched" pattern as Affiliasi — see
-  // the Brand Portal visitors fetch that used to fill it (removed).
-  const shopPerformanceRow = db
-    .prepare('SELECT date, unique_visitors FROM shop_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, selectedDate);
+  // Page View (replaced Pengunjung, 2026-10-13): from per-item readings of Shopee's view
+  // counter, see pageViewsFor. For today it is "so far today"; null before any reading.
+  const pageViews = pageViewsFor(shopId, selectedDate);
 
   // Iklan, unlike Affiliasi/Pengunjung, genuinely is "today" when today is
   // selected — see shopeeSync.js's fetchAdsPerformance (refetched every few
@@ -388,11 +406,11 @@ router.get('/summary', (req, res) => {
   res.json({
     date: selectedDate,
     isToday,
-    // The page shows the day when it has real orders OR an Affiliasi / Iklan figure was
+    // The page shows the day when it has real orders OR an Affiliasi / Iklan / Page View figure was
     // recorded for it (changed 2026-10-13). Before, a day with no completed orders hid
     // everything, so an Affiliasi or ad-spend figure that existed for it was never shown.
     // Only a day with nothing of any kind still says "Data tidak tersedia".
-    hasData: hasOrders || !!affiliateRow || !!adsRow,
+    hasData: hasOrders || !!affiliateRow || !!adsRow || !!pageViews,
     today: {
       orderCount: today.orderCount,
       omzet: today.omzet,
@@ -410,9 +428,7 @@ router.get('/summary', (req, res) => {
           buyersConfirmed: affiliateRow.buyers_confirmed,
         }
       : null,
-    pengunjung: shopPerformanceRow
-      ? { date: shopPerformanceRow.date, uniqueVisitors: shopPerformanceRow.unique_visitors }
-      : null,
+    pageViews: pageViews ? { ...pageViews, partial: isToday } : null,
     trend: {
       orderCountPct: pctChange(today.orderCount, yesterday.orderCount),
       omzetPct: pctChange(today.omzet, yesterday.omzet),

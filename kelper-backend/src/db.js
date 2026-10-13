@@ -180,6 +180,23 @@ db.exec(`
     PRIMARY KEY (shop_id, date)
   );
 
+  -- Page views per item, for the Dashboard's Page View card (2026-10-13). Shopee's
+  -- get_item_extra_info gives each item's views as a running total, so the day's figure
+  -- is a DIFFERENCE between readings. One row per item per WIB day: views_start is the
+  -- first reading of that day (never changed), views_latest is overwritten by every
+  -- refresh through the day. The day's views = the next day's views_start (or, for
+  -- today, views_latest) minus views_start -- see routes/dashboard.js's pageViewsFor.
+  -- Per item, so an item added later never shows up as a sudden jump.
+  CREATE TABLE IF NOT EXISTS item_views (
+    shop_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    views_start INTEGER NOT NULL,
+    views_latest INTEGER NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (shop_id, item_id, date)
+  );
+
   -- Iklan (Ads Expenditure) from Shopee's Ads API
   -- (get_all_cpc_ads_hourly_performance) — this one covers TODAY (unlike
   -- the two Brand Portal tables above), refetched periodically through the

@@ -90,12 +90,20 @@ function KpiCard({ label, value, trend, spark }) {
   );
 }
 
-function BlockedCard({ label, note }) {
+// Page View (replaced Pengunjung, 2026-10-13): the day's views of the shop's product pages,
+// summed over all items. It counts page views, not unique visitors. For today it is the
+// count since midnight so far.
+function PageViewCard({ pageViews }) {
   return (
-    <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column', opacity: 0.65 }}>
-      <CardHeader label={label} />
-      <div style={{ fontSize: 15, fontWeight: 600, color: colors.textFaint, marginBottom: 6 }}>Belum terhubung</div>
-      <div style={{ fontSize: 11.5, color: colors.textFaint, lineHeight: 1.4 }}>{note}</div>
+    <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
+      <CardHeader label="Page View" />
+      <div style={{ fontSize: 24, fontWeight: 700, color: pageViews ? colors.text : colors.textFaint, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>
+        {pageViews ? pageViews.pageViews.toLocaleString('id-ID') : '—'}
+      </div>
+      <div style={{ fontSize: 11.5, marginTop: 4, marginBottom: 12, color: colors.textFaint, lineHeight: 1.4 }}>
+        {pageViews ? (pageViews.partial ? 'Sejak 00:00 sampai sekarang' : 'Total halaman produk dilihat hari itu') : 'Belum ada data untuk tanggal ini'}
+      </div>
+      <div style={{ height: 30 }} />
     </div>
   );
 }
@@ -449,11 +457,7 @@ function MainDashboard() {
               value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
               trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari hari sebelumnya' }}
             />
-            {data.pengunjung ? (
-              <KpiCard label="Pengunjung" value={String(data.pengunjung.uniqueVisitors)} />
-            ) : (
-              <BlockedCard label="Pengunjung" note="Belum ada data." />
-            )}
+            <PageViewCard pageViews={data.pageViews} />
           </div>
 
           <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
-const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance } = require('./shopee/client');
+const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance, getItemExtraInfo } = require('./shopee/client');
 const { getAffiliatePerformance } = require('./shopee/amsClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
 const { getConfig } = require('./config');
@@ -894,6 +894,44 @@ async function fetchAffiliatePerformance(shopId) {
   }
 }
 
+// Page views (client-decided 2026-10-13: the Dashboard's Pengunjung card became Page
+// View). Reads every cached item's running view count from get_item_extra_info (50
+// items per call) with the MAIN shop token, and keeps it in item_views: the first
+// reading of each WIB day is its start, later ones update the latest. Refreshed at
+// most every PAGEVIEWS_REFRESH_SECONDS; a failed attempt also waits that long (this runs
+// on every enrichment pass). Independent of the order-sync pause toggle. Items come from
+// the catalog cache that the List Barang sync fills, so a new item counts after that.
+const PAGEVIEWS_REFRESH_SECONDS = 30 * 60;
+const pageViewsAttemptAt = new Map(); // shopId -> unix seconds of the last attempt
+function resetPageViewRetry() { pageViewsAttemptAt.clear(); } // for tests
+const upsertItemViews = db.prepare(`
+  INSERT INTO item_views (shop_id, item_id, date, views_start, views_latest, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(shop_id, item_id, date) DO UPDATE SET views_latest = excluded.views_latest, fetched_at = excluded.fetched_at
+`);
+async function fetchPageViews(shopId) {
+  const last = pageViewsAttemptAt.get(shopId);
+  if (last && now() - last < PAGEVIEWS_REFRESH_SECONDS) return;
+
+  const itemIds = db.prepare('SELECT item_id FROM shopee_items WHERE shop_id = ?').all(shopId).map((r) => r.item_id);
+  if (itemIds.length === 0) return; // nothing to read yet: no wait, so items synced a moment later are picked up at once
+  pageViewsAttemptAt.set(shopId, now()); // before the call: a failure waits too
+  const accessToken = await getValidAccessToken(shopId);
+  const today = dateStringWIB(0);
+  for (let i = 0; i < itemIds.length; i += 50) {
+    const result = await getItemExtraInfo(accessToken, shopId, itemIds.slice(i, i + 50));
+    if (result.error) {
+      console.error(`[server] get_item_extra_info failed for shop ${shopId}: ${result.message || result.error}`);
+      return; // batches already stored stay; the rest are tried at the next refresh
+    }
+    for (const item of result.response?.item_list || []) {
+      const views = Number(item.views);
+      if (!Number.isFinite(views) || views < 0) continue;
+      upsertItemViews.run(shopId, item.item_id, today, views, views, now());
+    }
+  }
+}
+
 const ADS_REFETCH_INTERVAL_SECONDS = 5 * 60;
 const insertAdsPerformance = db.prepare(`
   INSERT OR REPLACE INTO ads_performance_daily (shop_id, date, expense, fetched_at)
@@ -964,20 +1002,20 @@ function startShopeeSync() {
       } catch (err) {
         console.error(`[server] Affiliasi fetch failed for shop ${shopId}: ${err.message}`);
       }
-      try {
-        // Pengunjung (visitors) came from the Brand Portal API and is no longer fetched.
-      } catch (err) {
-        console.error(`[server] Pengunjung fetch failed for shop ${shopId}: ${err.message}`);
-      }
     }
 
-    // Ads spend uses the main app's own token, independent of the order-sync
-    // pause toggle and of whether Brand Portal is connected at all.
+    // Ads spend and page views use the main app's own token, independent of the
+    // order-sync pause toggle and of whether the Affiliate (AMS) app is connected.
     for (const { shop_id: shopId } of shops) {
       try {
         await fetchAdsPerformance(shopId);
       } catch (err) {
         console.error(`[server] Iklan fetch failed for shop ${shopId}: ${err.message}`);
+      }
+      try {
+        await fetchPageViews(shopId);
+      } catch (err) {
+        console.error(`[server] Page View fetch failed for shop ${shopId}: ${err.message}`);
       }
     }
 
@@ -988,4 +1026,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance, resetAffiliateRetry };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance, resetAffiliateRetry, fetchPageViews, resetPageViewRetry };

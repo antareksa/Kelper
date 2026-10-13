@@ -55,7 +55,7 @@ if (unknownFlags.length > 0 || args.some((a) => !a.startsWith('--'))) {
 // Child tables first: nothing relies on foreign-key cascades.
 const GROUPS = [
   { name: 'Orders & packing history', skip: false, tables: ['scan_progress', 'packing_sessions', 'order_income', 'order_items', 'orders', 'station_sessions', 'attendance_log'] },
-  { name: 'Ads / shop / affiliate statistics', skip: false, tables: ['ads_performance_daily', 'shop_performance_daily', 'affiliate_performance_daily'] },
+  { name: 'Ads / shop / affiliate statistics', skip: false, tables: ['ads_performance_daily', 'shop_performance_daily', 'affiliate_performance_daily', 'item_views'] },
   { name: 'Shopee item list (cached products shown in List Barang)', skip: flags.has('--keep-items'), tables: ['shopee_item_models', 'shopee_items'] },
   { name: 'Shopee connection (tokens)', skip: flags.has('--keep-shopee'), tables: ['shopee_tokens', 'shopee_brand_tokens'] },
   { name: 'Product catalog (HPP, barcode, stock) + bundles', skip: flags.has('--keep-products'), tables: ['bundle_items', 'products'] },

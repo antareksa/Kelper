@@ -180,13 +180,11 @@ router.get('/check', async (req, res) => {
   }
 });
 
-// Brand Portal is a second, separate Shopee app (own Partner ID/Key,
-// registered with its own redirect URI in the Partner Console) used only
-// for the Affiliasi/Pengunjung metrics that need Brand Portal-specific
-// APIs — everything below mirrors the routes above exactly, just against
-// shopee_brand_tokens/BRAND_CREDENTIALS instead of the main app's, so
-// connecting or disconnecting it can never affect the main Shopee
-// connection that order sync depends on.
+// The SECOND Shopee app (own Partner ID/Key, SHOPEE_BRAND_* in the env, tokens in
+// shopee_brand_tokens, BRAND_CREDENTIALS in client.js). It used to be the Brand Portal app;
+// since 2026-10-12 it is the Affiliate Marketing Solution (AMS) app that feeds Affiliasi.
+// The "brand" names (routes, env variables, table) stay because renaming them would mean
+// changing the VM's env file and the redirect URL registered in Shopee's console.
 router.get('/brand/login', (req, res) => {
   res.redirect(buildAuthUrl(BRAND_CREDENTIALS));
 });

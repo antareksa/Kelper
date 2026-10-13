@@ -236,6 +236,14 @@ function getItemBaseInfo(accessToken, shopId, itemIdList) {
   });
 }
 
+// Extra info per item (sale, views, likes, rating_star, comment_count); "views" is the
+// item's page views. Shopee caps this at 50 item ids per call.
+function getItemExtraInfo(accessToken, shopId, itemIdList) {
+  return shopGet('/api/v2/product/get_item_extra_info', accessToken, shopId, {
+    item_id_list: itemIdList.join(','),
+  });
+}
+
 function getModelList(accessToken, shopId, itemId) {
   return shopGet('/api/v2/product/get_model_list', accessToken, shopId, { item_id: itemId });
 }
@@ -348,6 +356,7 @@ module.exports = {
   getAllCpcAdsHourlyPerformance,
   getItemList,
   getItemBaseInfo,
+  getItemExtraInfo,
   getModelList,
   getMassShippingParameter,
   massShipOrder,
