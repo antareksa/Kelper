@@ -96,7 +96,7 @@ function KpiCard({ label, value, trend, spark }) {
 function PageViewCard({ pageViews }) {
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
-      <CardHeader label="Page View" />
+      <CardHeader label="Jumlah Pengunjung" />
       <div style={{ fontSize: 24, fontWeight: 700, color: pageViews ? colors.text : colors.textFaint, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>
         {pageViews ? pageViews.pageViews.toLocaleString('id-ID') : '—'}
       </div>
