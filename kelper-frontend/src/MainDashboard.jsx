@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { colors, card } from './theme';
 import { Sparkline } from './Sparkline';
-import { IconArrowUpRight } from './Icons';
 import { useShopName } from './useShopName';
 import { SHOP_ID } from './shopConfig';
 import { API_BASE, apiFetch } from './apiBase';
@@ -67,10 +66,7 @@ function trendType(pct) {
 
 function CardHeader({ label }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-      <div style={{ fontSize: 12, color: colors.textDim }}>{label}</div>
-      <IconArrowUpRight size={13} color={colors.textFaint} />
-    </div>
+    <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 10 }}>{label}</div>
   );
 }
 

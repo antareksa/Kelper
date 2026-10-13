@@ -175,11 +175,3 @@ export function IconChevronDown({ size = 12 }) {
     </svg>
   );
 }
-
-export function IconArrowUpRight({ size = 13, color }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color || 'currentColor'} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 12 12 4M5.5 4H12v6.5" />
-    </svg>
-  );
-}
