@@ -236,11 +236,9 @@ router.get('/summary', (req, res) => {
   const marginPctToday = today.omzet ? Math.round((today.laba / today.omzet) * 1000) / 10 : null;
   const marginPctYesterday = yesterday.omzet ? Math.round((yesterday.laba / yesterday.omzet) * 1000) / 10 : null;
 
-  // The selected day has no real orders at all — nothing to show for it
-  // (a date before the shop had any activity, or one still in the future).
-  // A genuinely quiet real day would also hit this, but there's no separate
-  // "we checked and there were zero" marker to tell the two apart.
-  const hasData = today.orderCount > 0;
+  // Whether the selected day has real orders. On its own this no longer decides whether
+  // the page shows anything: see hasData in the response below.
+  const hasOrders = today.orderCount > 0;
 
   // Intraday cumulative Omzet/Laba for the selected day, bucketed by WIB
   // hour. For today, only up to the current hour (live, keeps updating as
@@ -390,7 +388,11 @@ router.get('/summary', (req, res) => {
   res.json({
     date: selectedDate,
     isToday,
-    hasData,
+    // The page shows the day when it has real orders OR an Affiliasi / Iklan figure was
+    // recorded for it (changed 2026-10-13). Before, a day with no completed orders hid
+    // everything, so an Affiliasi or ad-spend figure that existed for it was never shown.
+    // Only a day with nothing of any kind still says "Data tidak tersedia".
+    hasData: hasOrders || !!affiliateRow || !!adsRow,
     today: {
       orderCount: today.orderCount,
       omzet: today.omzet,
