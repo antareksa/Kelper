@@ -8,3 +8,6 @@ kelper-asset/
 .kiosk-chrome-profile-local/
 .packing-videos/
 kelper-backend/real_label_test.pdf
+
+# database backups (reset-all.js / backup.js): they contain Shopee tokens
+kelper-backend/backups/
