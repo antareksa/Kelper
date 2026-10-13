@@ -110,7 +110,8 @@ function PageViewCard({ pageViews }) {
 
 // All five funnel steps are real now. Affiliasi comes from a separate
 // source (Affiliate (AMS), fetched once daily) with its own 1-day reporting
-// lag, so it's never "today" — the label says which day it actually is.
+// lag, so it's never "today". Its row is the selected date's, so the label
+// doesn't repeat the date (the date picker at the top already shows it).
 // Iklan is genuinely today's spend so far (refetched every few minutes —
 // see shopeeSync.js's fetchAdsPerformance), same as Margin/Layanan/Biaya
 // Pesanan. `blocked` only fires transiently, before the first fetch has
@@ -123,7 +124,7 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
     { label: 'Layanan', value: formatRupiah(layanan), color: colors.blue, blocked: false },
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
     {
-      label: affiliasi ? `Affiliasi (${affiliasi.date})` : 'Affiliasi',
+      label: 'Affiliasi',
       value: affiliasi ? formatRupiah(affiliasi.salesConfirmed) : null,
       color: colors.orange,
       blocked: !affiliasi,
