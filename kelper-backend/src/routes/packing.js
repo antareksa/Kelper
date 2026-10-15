@@ -17,7 +17,10 @@ const { releaseInProgress, releaseStationSessions } = require('../sessionRelease
 const { touchStation } = require('../stationPresence');
 
 const router = express.Router();
-const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+// Packing videos go to a temp file, not memory: up to 200 MB each (about 25 min at
+// the station's 1 Mbps; raised from 50 MB = ~6.5 min on 2026-10-15, longer packs
+// never reached the bucket), and several stations can upload at once.
+const uploadVideo = multer({ dest: require('os').tmpdir(), limits: { fileSize: 200 * 1024 * 1024 } });
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -385,17 +388,23 @@ router.post('/masalah', (req, res) => {
 router.post('/upload-video', uploadVideo.single('video'), async (req, res) => {
   const { order_sn } = req.body;
   if (!order_sn || !req.file) {
+    if (req.file) require('fs').unlink(req.file.path, () => {});
     return res.status(400).json({ error: 'order_sn_and_video_required' });
   }
   const { gcsEnabled, gcsBucket } = getConfig().evidence;
-  if (!gcsEnabled) return res.json({ ok: true, skipped: true });
+  if (!gcsEnabled) {
+    require('fs').unlink(req.file.path, () => {});
+    return res.json({ ok: true, skipped: true });
+  }
 
   try {
-    await uploadPackingVideo(gcsBucket, order_sn, req.file.buffer);
+    await uploadPackingVideo(gcsBucket, order_sn, req.file.path);
     res.json({ ok: true });
   } catch (err) {
     console.warn(`[packing-video] GCS upload failed for ${order_sn}: ${err.message}`);
     res.status(502).json({ error: 'gcs_upload_failed', message: err.message });
+  } finally {
+    require('fs').unlink(req.file.path, () => {});
   }
 });
 

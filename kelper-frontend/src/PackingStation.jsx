@@ -592,6 +592,9 @@ function PackingStation() {
   // rather than state, since none of this should ever trigger a re-render.
   const [cameraReady, setCameraReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  // Session id of the order whose first item scan has happened (any barcode, even a
+  // wrong item): recording starts there, not when the order appears (2026-10-15).
+  const [scanStartedSessionId, setScanStartedSessionId] = useState(null);
   const videoPreviewRef = useRef(null);
   const videoStreamRef = useRef(null);
   const videoRecorderRef = useRef(null);
@@ -678,7 +681,12 @@ function PackingStation() {
   // (not just status) is checked so this doesn't restart on every scan while
   // status stays the same for the same order; only a genuine session change
   // re-triggers it.
-  const RECORDING_ACTIVE_STATUSES = ['IN_PROGRESS', 'AWAITING_LABEL_SCAN'];
+  //
+  // Client-requested (2026-10-15): recording starts at the FIRST item scan of the
+  // order (any barcode, even a wrong item -- see handleScanSubmit), not when the
+  // order appears on screen. An order that already has scanned items (e.g. the page
+  // was reloaded mid-order) records straight away, as do the later steps.
+  const anyItemScanned = !!state?.items?.some((it) => it.scanned_qty > 0);
   useEffect(() => {
     const sessionId = state?.session?.id ?? null;
     const status = state?.session?.status;
@@ -686,7 +694,8 @@ function PackingStation() {
     // Also while a "ship tomorrow" box waits for its temp barcode to be scanned
     // back -- the same proof-of-the-right-sticker the real label gets.
     const waitingBesokScan = status === 'DEFERRED_READY' && !state?.session?.besok_confirmed_at;
-    const shouldRecord = RECORDING_ACTIVE_STATUSES.includes(status) || waitingBesokScan;
+    const scanningStarted = status === 'IN_PROGRESS' && (scanStartedSessionId === sessionId || anyItemScanned);
+    const shouldRecord = scanningStarted || status === 'AWAITING_LABEL_SCAN' || waitingBesokScan;
 
     if (shouldRecord && sessionId !== recordingSessionIdRef.current) {
       startPackingVideo(sessionId, orderSn);
@@ -694,7 +703,7 @@ function PackingStation() {
       stopPackingVideo();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.session?.id, state?.session?.status, state?.session?.besok_confirmed_at]);
+  }, [state?.session?.id, state?.session?.status, state?.session?.besok_confirmed_at, scanStartedSessionId, anyItemScanned]);
 
   // Covers the operator hitting "← Back"/logging out mid-scan — same
   // reasoning as the check-out effect below, just for an in-progress
@@ -1568,7 +1577,9 @@ function PackingStation() {
           return applyState(data);
         }
         // otherwise treat it as an item SKU scan — the server auto-decides
-        // ship-today vs. defer-to-tomorrow once every item is scanned
+        // ship-today vs. defer-to-tomorrow once every item is scanned.
+        // Any item scan, right or wrong, starts this order's video.
+        setScanStartedSessionId(state.session.id);
         try {
           const data = await post('/packing/scan-item', { session_id: state.session.id, sku: value });
           setLastSku(value);

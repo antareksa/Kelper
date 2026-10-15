@@ -6,10 +6,14 @@ const { Storage } = require('@google-cloud/storage');
 // never calls this (see config.js's evidence.gcsEnabled, off by default).
 const storage = new Storage();
 
-async function uploadPackingVideo(bucketName, orderSn, buffer) {
-  const bucket = storage.bucket(bucketName);
-  const file = bucket.file(`${orderSn}.webm`);
-  await file.save(buffer, { contentType: 'video/webm', resumable: false });
+// filePath: the upload's temp file (routes/packing.js). One plain request, not a
+// resumable upload (that one keeps state files in the service user's home folder).
+async function uploadPackingVideo(bucketName, orderSn, filePath) {
+  await storage.bucket(bucketName).upload(filePath, {
+    destination: `${orderSn}.webm`,
+    contentType: 'video/webm',
+    resumable: false,
+  });
 }
 
 // The uploaded video of one order (same name uploadPackingVideo gives it), for the
