@@ -54,6 +54,22 @@ Then press **Lanjutkan** and scan an operator badge to log in.
 
 Run `start-packing-station-quick.bat`, then scan your badge.
 
+## Windows Update off, screen always on (optional, once per PC)
+
+Copy `setup-pc.bat` (repo root) to the PC, double-click it **while signed in as
+the account the station runs under**, and accept the UAC prompt. Then restart the PC once.
+
+- **Windows Update fully off**: update policies, updates paused until 2045, the
+  update services and tasks disabled. A scheduled task `KELPER\Block Windows Update`
+  (runs as SYSTEM) re-applies the block at every start, because Windows switches
+  updates back on by itself otherwise. Windows Defender may stop getting new
+  definitions while updates are off.
+- **Screen**: no screen saver, "Turn off display" and "Sleep" set to Never,
+  hibernate off.
+
+To turn updates back on: open a Command Prompt in the file's folder and run
+`setup-pc.bat undo`. The screen settings stay (Settings > Power to change them).
+
 ## Turning the PC off with a barcode (optional, once per PC)
 
 Scan the **`SHUTDOWN_PC`** command barcode (print it from **Packing Station
