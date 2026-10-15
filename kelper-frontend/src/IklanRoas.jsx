@@ -30,6 +30,7 @@ function formatTime(unix) {
 }
 
 const STATUS_LABEL = { ongoing: 'Berjalan', paused: 'Dijeda', scheduled: 'Terjadwal', ended: 'Selesai', deleted: 'Dihapus', closed: 'Ditutup' };
+const STATUS_ORDER = ['ongoing', 'paused', 'scheduled', 'ended', 'closed', 'deleted']; // the filter buttons, in this order
 
 const MODES = [
   { value: 'off', label: 'Mati', hint: 'Tidak ada perhitungan mingguan.' },
@@ -278,6 +279,7 @@ function IklanRoas() {
   const [loadError, setLoadError] = useState(null);
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const load = useCallback(async () => {
     try {
@@ -325,6 +327,7 @@ function IklanRoas() {
 
   if (loadError && !data) return <div style={{ color: colors.red, fontSize: 13 }}>{loadError}</div>;
   if (!data) return <div style={{ color: colors.textDim, fontSize: 13 }}>Memuat...</div>;
+  const shown = statusFilter === 'all' ? data.campaigns : data.campaigns.filter((c) => c.status === statusFilter);
 
   return (
     <div style={{ color: colors.text }}>
@@ -339,6 +342,24 @@ function IklanRoas() {
       </div>
 
       <SettingsCard settings={data.settings} weeks={data.weeks} onSaved={load} />
+
+      {data.campaigns.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+          {[['all', 'Semua'], ...STATUS_ORDER.filter((st) => data.campaigns.some((c) => c.status === st)).map((st) => [st, STATUS_LABEL[st] || st])].map(([value, label]) => {
+            const count = value === 'all' ? data.campaigns.length : data.campaigns.filter((c) => c.status === value).length;
+            const active = statusFilter === value;
+            return (
+              <button
+                key={value}
+                onClick={() => setStatusFilter(value)}
+                style={{ ...buttonStyle(false), padding: '6px 12px', fontSize: 12.5, background: active ? colors.text : colors.cardAlt, color: active ? colors.bg : colors.textDim }}
+              >
+                {label} ({count})
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div style={{ ...card({ padding: 0 }), marginBottom: 16, overflowX: 'auto' }}>
         <div style={{ minWidth: 1050 }}>
@@ -357,7 +378,9 @@ function IklanRoas() {
               Belum ada campaign iklan produk. Tekan "Sinkron dari Shopee", atau tunggu hingga 30 menit.
             </div>
           ) : (
-            data.campaigns.map((c) => <CampaignRow key={c.campaignId} c={c} busy={busy} onIklan={onIklan} onAuto={onAuto} />)
+            shown.length === 0
+              ? <div style={{ padding: 16, fontSize: 12.5, color: colors.textFaint }}>Tidak ada campaign dengan status ini.</div>
+              : shown.map((c) => <CampaignRow key={c.campaignId} c={c} busy={busy} onIklan={onIklan} onAuto={onAuto} />)
           )}
         </div>
       </div>
