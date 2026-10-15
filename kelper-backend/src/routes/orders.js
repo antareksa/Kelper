@@ -3,6 +3,23 @@ const db = require('../db');
 const { syncAndLabelOrders, getFetchBudget } = require('../shopeeSync');
 const { getSetting, setSetting } = require('../settings');
 const { expandPackingItems } = require('../packingItems');
+const { getConfig } = require('../config');
+const { packingVideoFile } = require('../gcs');
+
+// Whether the order's packing video is in the bucket: true / false, or null when
+// that can't be told (video upload off, or Google didn't answer within 4 s) -- the
+// button is then still offered and the download itself says what is wrong.
+async function hasPackingVideo(orderSn) {
+  const { gcsEnabled, gcsBucket } = getConfig().evidence;
+  if (!gcsEnabled) return null;
+  try {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+    const [exists] = await Promise.race([packingVideoFile(gcsBucket, orderSn).exists(), timeout]);
+    return exists;
+  } catch {
+    return null;
+  }
+}
 
 const router = express.Router();
 
@@ -47,7 +64,7 @@ router.post('/sync', async (req, res) => {
 // actions) — this is a plain read-only view of whatever the local DB has for
 // that order, no Shopee API calls. order_sn is globally unique, so no
 // shop_id is needed to disambiguate.
-router.get('/search', (req, res) => {
+router.get('/search', async (req, res) => {
   const orderSn = (req.query.order_sn || '').trim();
   if (!orderSn) return res.status(400).json({ error: 'order_sn_required' });
 
@@ -73,6 +90,7 @@ router.get('/search', (req, res) => {
     label_ready: !!order.label_ready,
     label_printed: !!order.label_printed,
     needs_retry_ship: !!order.needs_retry_ship,
+    has_video: await hasPackingVideo(orderSn),
     items: items.map((it) => ({ ...it, scanned_qty: progressBySku[it.sku] || 0 })),
     session: session
       ? {
@@ -121,6 +139,40 @@ router.get('/list', (req, res) => {
     truncated: rows.length > LIMIT,
     orders: rows.slice(0, LIMIT).map((r) => ({ ...r, is_instant: !!r.is_instant, total: hidePrices ? undefined : r.total })),
   });
+});
+
+// The order's packing video from the bucket, as a download (client-requested
+// 2026-10-15: the button in the order detail). Streamed through the server: the
+// bucket is not public, and the browser sends the admin login with this request.
+router.get('/video', async (req, res) => {
+  const orderSn = (req.query.order_sn || '').trim();
+  if (!orderSn) return res.status(400).json({ error: 'order_sn_required' });
+  const { gcsEnabled, gcsBucket } = getConfig().evidence;
+  if (!gcsEnabled) return res.status(404).json({ error: 'video_storage_off', message: 'Penyimpanan video tidak aktif di server ini.' });
+
+  const file = packingVideoFile(gcsBucket, orderSn);
+  try {
+    const [exists] = await file.exists();
+    if (!exists) return res.status(404).json({ error: 'no_video', message: 'Tidak ada video untuk order ini.' });
+    const [meta] = await file.getMetadata();
+    res.setHeader('Content-Type', 'video/webm');
+    res.setHeader('Content-Disposition', `attachment; filename="${orderSn.replace(/[^A-Za-z0-9_-]/g, '')}.webm"`);
+    if (meta.size) res.setHeader('Content-Length', meta.size);
+    file.createReadStream()
+      .on('error', (err) => {
+        console.warn(`[packing-video] download failed for ${orderSn}: ${err.message}`);
+        if (!res.headersSent) res.status(502).json({ error: 'gcs_read_failed', message: err.message });
+        else res.destroy(err);
+      })
+      .pipe(res);
+  } catch (err) {
+    console.warn(`[packing-video] download failed for ${orderSn}: ${err.message}`);
+    const denied = err.code === 403 || /permission|denied|forbidden/i.test(err.message);
+    res.status(502).json({
+      error: 'gcs_read_failed',
+      message: denied ? 'Server tidak punya izin membaca video di Google Cloud Storage.' : `Gagal mengambil video: ${err.message}`,
+    });
+  }
 });
 
 router.get('/queue-counts', (req, res) => {

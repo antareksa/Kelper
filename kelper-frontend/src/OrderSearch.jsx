@@ -29,6 +29,53 @@ function StatusBadge({ label, accent = colors.text }) {
   );
 }
 
+// The order's packing video from Google Cloud Storage (client-requested
+// 2026-10-15; backend routes/orders.js /video). Fetched with the admin login and
+// saved as <order_sn>.webm. hasVideo false = the bucket has none for this order;
+// null = unknown, so the button is still offered.
+function VideoButton({ orderSn, hasVideo }) {
+  const [state, setState] = useState(null); // null | 'loading' | error message
+
+  async function download() {
+    setState('loading');
+    try {
+      const res = await apiFetch(`${API_BASE}/orders/video?order_sn=${encodeURIComponent(orderSn)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setState(data.message || 'Gagal mengunduh video.');
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${orderSn}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setState(null);
+    } catch (err) {
+      setState(err.message);
+    }
+  }
+
+  if (hasVideo === false) {
+    return <div style={{ marginTop: 10, fontSize: 12, color: colors.textFaint }}>Tidak ada video packing</div>;
+  }
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={download}
+        disabled={state === 'loading'}
+        style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.cardAlt, color: colors.text, fontSize: 12.5, fontWeight: 600, cursor: state === 'loading' ? 'default' : 'pointer', fontFamily: 'var(--sans)', opacity: state === 'loading' ? 0.6 : 1 }}
+      >
+        {state === 'loading' ? 'Mengunduh video...' : 'Unduh Video Packing'}
+      </button>
+      {state && state !== 'loading' && <div style={{ marginTop: 6, fontSize: 12, color: colors.red, maxWidth: 260 }}>{state}</div>}
+    </div>
+  );
+}
+
 function OrderDetailCard({ result }) {
   return (
     <div style={card()}>
@@ -40,6 +87,7 @@ function OrderDetailCard({ result }) {
         <div style={{ textAlign: 'right', fontSize: 12.5, color: colors.textDim }}>
           <div>DITERIMA - {formatDateTime(result.created_at)}</div>
           <div>PENGIRIMAN - {result.shipping_carrier || '—'}{result.is_instant ? ' (Instant)' : ''}</div>
+          <VideoButton orderSn={result.order_sn} hasVideo={result.has_video} />
         </div>
       </div>
 
