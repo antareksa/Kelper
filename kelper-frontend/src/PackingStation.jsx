@@ -1727,10 +1727,10 @@ function PackingStation() {
           <div
             style={{
               position: 'absolute',
-              top: 12,
+              bottom: 12,
               right: 12,
               zIndex: 10,
-              width: 160,
+              width: 'min(320px, 30vw)',
               borderRadius: 10,
               overflow: 'hidden',
               border: `2px solid ${colors.red}`,
@@ -1738,9 +1738,9 @@ function PackingStation() {
             }}
           >
             <video ref={videoPreviewRef} autoPlay muted playsInline style={{ display: 'block', width: '100%', height: 'auto' }} />
-            <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.55)', padding: '2px 8px', borderRadius: 6 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.red }} className="kelper-pulse" />
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>REC</span>
+            <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,0,0,0.55)', padding: '3px 10px', borderRadius: 6 }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: colors.red }} className="kelper-pulse" />
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>REC</span>
             </div>
           </div>
         )}
