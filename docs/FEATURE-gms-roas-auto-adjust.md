@@ -71,14 +71,17 @@ for each managed SKU, discovered via the sync above (sku, campaign_id, current_r
 
 `current_roas_target` is read directly from Shopee (`get_product_level_campaign_setting_info`) immediately before each weekly adjustment, not from a locally-cached value — avoids any drift if a campaign was ever touched outside KELPER.
 
+## Settled
+
+- **Floor/ceiling values:** floor = **1**, ceiling = **10** — `roas_target` is clamped to `[1, 10]` after every weekly adjustment.
+
 ## Open questions (must be settled before building)
 
-1. **Floor/ceiling values.** Stated as "Floor 10, ceil 1" — this is floor > ceiling, backwards from the normal meaning (floor = lower bound, ceiling = upper bound). Needs clarifying: is it floor 1 / ceiling 10, or something else entirely?
-2. **Direction of adjustment.** As written, a *good* week (profit beat last week by x%) *decreases* the ROAS target — which in Shopee's GMV Max Custom ROAS model means bidding *more* aggressively (spend more, lower required return per ad-rupiah). A *bad* week *increases* it (more conservative, likely less spend). This is a legitimate "double down on what's working" strategy, but it's worth one explicit confirmation since it's the opposite of an instinctive "profit's down, cut ad spend" read — and it's real money being moved automatically.
-3. **x and y values** — not yet specified (presumably configurable, not hardcoded).
-4. **Week boundary** — which day does the week start on (WIB)? Needs to match whatever cadence the client thinks in.
-5. **What happens on a week with no prior week's data yet** (first week for a newly-added SKU) — skip, or treat as "no change"?
-6. **Multi-item (auto product selection) campaigns** — confirm these should simply be excluded from the automation, per the constraint above, rather than handled some other way.
+1. **Direction of adjustment.** As written, a *good* week (profit beat last week by x%) *decreases* the ROAS target — which in Shopee's GMV Max Custom ROAS model means bidding *more* aggressively (spend more, lower required return per ad-rupiah). A *bad* week *increases* it (more conservative, likely less spend). This is a legitimate "double down on what's working" strategy, but it's worth one explicit confirmation since it's the opposite of an instinctive "profit's down, cut ad spend" read — and it's real money being moved automatically.
+2. **x and y values** — not yet specified (presumably configurable, not hardcoded).
+3. **Week boundary** — which day does the week start on (WIB)? Needs to match whatever cadence the client thinks in.
+4. **What happens on a week with no prior week's data yet** (first week for a newly-added SKU) — skip, or treat as "no change"?
+5. **Multi-item (auto product selection) campaigns** — confirm these should simply be excluded from the automation, per the constraint above, rather than handled some other way.
 
 ## Implementation needs (once the above is settled)
 
