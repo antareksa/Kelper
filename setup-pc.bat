@@ -17,6 +17,12 @@ REM        C:\ProgramData\KELPER (only administrators can change it).
 REM   2. The screen never turns off and the PC never sleeps:
 REM      - Screen saver off.
 REM      - "Turn off display" and "Sleep" set to Never, hibernate off.
+REM   3. The SHUTDOWN_PC command barcode (same as enable-shutdown-barcode.reg):
+REM      - Registers kelper-shutdown://, which runs shutdown /s /t 20.
+REM      - A Chrome policy lets the Packing Station page open it without asking.
+REM        The page address is read from SERVER_URL in start-packing-station.bat
+REM        when that file sits next to this one, else https://packing.kelper.co.id.
+REM      - Fast Startup off, so every shutdown is a full one.
 REM
 REM Note: with Windows Update off, Windows Defender may also stop getting new
 REM virus definitions. Turn updates back on now and then if the PC should get
@@ -51,7 +57,7 @@ echo  KELPER - Packing Station PC setup
 echo ============================================================
 echo.
 
-echo [1/2] Turning Windows Update off ...
+echo [1/3] Turning Windows Update off ...
 call :policies_on
 if not exist "%KDIR%" mkdir "%KDIR%"
 copy /y "%~f0" "%KBAT%" >nul
@@ -65,7 +71,7 @@ if errorlevel 1 (
 )
 echo.
 
-echo [2/2] Screen: no screen saver, display and sleep never turn off ...
+echo [2/3] Screen: no screen saver, display and sleep never turn off ...
 reg add "HKCU\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f >nul
 reg add "HKCU\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f >nul
 reg add "HKCU\Control Panel\Desktop" /v SCRNSAVE.EXE /t REG_SZ /d "" /f >nul
@@ -81,8 +87,21 @@ powercfg /change hibernate-timeout-dc 0
 powercfg /hibernate off >nul 2>&1
 echo     Done.
 echo.
+
+echo [3/3] SHUTDOWN_PC barcode ...
+set "ORIGIN=https://packing.kelper.co.id"
+if exist "%~dp0start-packing-station.bat" (
+  for /f "tokens=1,* delims==" %%a in ('findstr /b /i /c:"set SERVER_URL=" "%~dp0start-packing-station.bat"') do set "ORIGIN=%%b"
+)
+reg add "HKLM\SOFTWARE\Classes\kelper-shutdown" /ve /d "URL:KELPER shutdown" /f >nul
+reg add "HKLM\SOFTWARE\Classes\kelper-shutdown" /v "URL Protocol" /d "" /f >nul
+reg add "HKLM\SOFTWARE\Classes\kelper-shutdown\shell\open\command" /ve /d "\"C:\Windows\System32\shutdown.exe\" /s /t 20 /c \"KELPER: PC dimatikan lewat barcode\"" /f >nul
+reg add "HKLM\SOFTWARE\Policies\Google\Chrome\AutoLaunchProtocolsFromOrigins" /v 1 /d "{\"allowed_origins\":[\"%ORIGIN%\"],\"protocol\":\"kelper-shutdown\"}" /f >nul
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d 0 /f >nul
+if errorlevel 1 (echo     ERROR: could not write the registry.) else (echo     Done, allowed for %ORIGIN%)
+echo.
 echo ============================================================
-echo  Finished. Restart the PC once.
+echo  Finished. Restart the PC once (Chrome needs it for the barcode).
 echo ============================================================
 pause
 exit /b 0

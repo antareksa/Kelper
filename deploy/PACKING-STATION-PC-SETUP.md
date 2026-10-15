@@ -66,6 +66,10 @@ the account the station runs under**, and accept the UAC prompt. Then restart th
   definitions while updates are off.
 - **Screen**: no screen saver, "Turn off display" and "Sleep" set to Never,
   hibernate off.
+- **The `SHUTDOWN_PC` barcode**: the same settings as `enable-shutdown-barcode.reg`
+  (see below), so that file is not needed on a PC that ran `setup-pc.bat`. The page
+  address is taken from `SERVER_URL` in `start-packing-station.bat` when that file is
+  in the same folder, otherwise `https://packing.kelper.co.id`.
 
 To turn updates back on: open a Command Prompt in the file's folder and run
 `setup-pc.bat undo`. The screen settings stay (Settings > Power to change them).
