@@ -2,8 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const db = require('../db');
-const { getValidAccessToken } = require('../shopee/tokenStore');
-const { getItemList, getItemBaseInfo, getModelList } = require('../shopee/client');
+const { syncShopeeCatalog } = require('../catalogSync');
 const { startOfMonthWIB } = require('../wib');
 const { isBundleSku } = require('../bundleUtil');
 
@@ -385,8 +384,8 @@ router.post('/import-barcode', upload.single('file'), async (req, res) => {
 // "Item Data" sheet, one row per listing --
 //   SKU | Nama Item | GTIN | HPP | Harga | Item Bundle? | List Item (GTIN)
 // It replaces the separate HPP and barcode uploads (those endpoints stay for
-// old clients). Per row it sets HPP, Harga (the dashboard's own selling price)
-// and the GTIN barcode, and for a bundle ("Item Bundle?" = Yes) the contents
+// old clients). Per row it sets HPP and the GTIN barcode (a Harga column is
+// accepted but ignored since 2026-10-15: Harga follows Shopee, catalogSync.js), and for a bundle ("Item Bundle?" = Yes) the contents
 // from "List Item (GTIN)": lines of "<GTIN> - <qty>". A row marked No clears
 // any contents on file for that SKU, so the sheet stays the source of truth.
 //
@@ -446,7 +445,6 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
   }
   const gtinCol = findColumn(sheet, 1, /^gtin$/i);
   const hppCol = findColumn(sheet, 1, /^hpp/i);
-  const hargaCol = findColumn(sheet, 1, /^harga/i);
   const bundleCol = findColumn(sheet, 1, /bundle/i);
   const listCol = findColumn(sheet, 1, /list\s*item/i);
 
@@ -489,7 +487,7 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
     if (bySku.has(sku)) duplicateRows.push(sku);
     bySku.set(sku, {
       sku, name: name || null, label,
-      hpp: readMoney(hppCol), price: readMoney(hargaCol), gtin,
+      hpp: readMoney(hppCol), price: null, gtin, // Harga comes from Shopee since 2026-10-15 (catalogSync.js): the file's Harga column is ignored
       isBundle: bundleCol ? /^\s*(y|ya|yes|true|1)\b/i.test(cellText(row.getCell(bundleCol))) : false,
       listText: listCol ? cellText(row.getCell(listCol)) : '',
     });
@@ -622,26 +620,8 @@ router.put('/:sku/hpp', (req, res) => {
   res.json({ ok: true, sku, hpp });
 });
 
-const upsertPrice = db.prepare(`
-  INSERT INTO products (sku, price, updated_at)
-  VALUES (?, ?, ?)
-  ON CONFLICT(sku) DO UPDATE SET
-    price = excluded.price,
-    updated_at = excluded.updated_at
-`);
-
-// Client's own manual selling price per SKU — see db.js migration comment.
-// This is what the Dashboard's Omzet/Laba and this page's own profit
-// columns are computed from now, not Shopee's synced price.
-router.put('/:sku/price', (req, res) => {
-  const sku = req.params.sku;
-  const { price } = req.body;
-  if (price !== null && (typeof price !== 'number' || !Number.isInteger(price) || price < 0)) {
-    return res.status(400).json({ error: 'invalid_price', message: 'price must be a non-negative integer or null.' });
-  }
-  upsertPrice.run(sku, price, Math.floor(Date.now() / 1000));
-  res.json({ ok: true, sku, price });
-});
+// PUT /:sku/price (a hand-entered Harga) is gone since 2026-10-15: Harga follows
+// Shopee, copied in by every catalog sync (catalogSync.js).
 
 const upsertBarcode = db.prepare(`
   INSERT INTO products (sku, barcode, updated_at)
@@ -697,134 +677,15 @@ router.put('/:sku/barcode', (req, res) => {
   res.json({ ok: true, sku, barcode });
 });
 
-const upsertItem = db.prepare(`
-  INSERT INTO shopee_items (item_id, shop_id, item_sku, name, item_status, min_purchase_limit, has_model, image_url, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(item_id) DO UPDATE SET
-    shop_id = excluded.shop_id,
-    item_sku = excluded.item_sku,
-    name = excluded.name,
-    item_status = excluded.item_status,
-    min_purchase_limit = excluded.min_purchase_limit,
-    has_model = excluded.has_model,
-    image_url = excluded.image_url,
-    updated_at = excluded.updated_at
-`);
-
-const upsertModel = db.prepare(`
-  INSERT INTO shopee_item_models (item_id, model_id, model_sku, model_name, price, stock, model_status, image_url, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(item_id, model_id) DO UPDATE SET
-    model_sku = excluded.model_sku,
-    model_name = excluded.model_name,
-    price = excluded.price,
-    stock = excluded.stock,
-    model_status = excluded.model_status,
-    image_url = excluded.image_url,
-    updated_at = excluded.updated_at
-`);
-
-// A model's tier_index picks one option per tier_variation dimension (e.g.
-// [1, 0] -> color option_list[1], Size option_list[0]). Shopee only attaches
-// an "image" to a tier option when the seller explicitly set one per
-// variation (typically per-color) — most shops never do, so this is usually
-// null and the catalog endpoint falls back to the item's own photo.
-function findModelImage(tierVariation, tierIndex) {
-  if (!tierVariation || !tierIndex) return null;
-  for (let i = 0; i < tierIndex.length; i += 1) {
-    const option = tierVariation[i]?.option_list?.[tierIndex[i]];
-    if (option?.image?.image_url) return option.image.image_url;
-  }
-  return null;
-}
-
-// Pulls the shop's live catalog from Shopee into the local cache tables —
-// on demand (the Refresh button), not on every page load. Items without
-// variants ("has_model": false) don't appear in get_model_list at all; their
-// price/stock live directly on the item, so they're synthesized into a
-// single model_id=0 row to keep the rest of the app dealing with one shape.
+// The Refresh button in List Barang: the same catalog sync the server also runs
+// by itself every hour (catalogSync.js), which also brings Harga up to date.
 router.post('/sync-shopee', async (req, res) => {
   const shopId = Number(req.body.shop_id || req.query.shop_id);
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
   try {
-    const accessToken = await getValidAccessToken(shopId);
-    const now = Math.floor(Date.now() / 1000);
-
-    // Shopee's get_item_list requires a specific item_status per call — a
-    // product the seller archives on Shopee (UNLIST) or that gets banned
-    // simply stops appearing under NORMAL, so querying only NORMAL would
-    // silently leave stale "still active" rows in the local cache forever.
-    // Pulling all three keeps status filtering (below) actually meaningful.
-    const itemIds = new Set();
-    for (const itemStatus of ['NORMAL', 'UNLIST', 'BANNED']) {
-      let offset = 0;
-      for (;;) {
-        const list = await getItemList(accessToken, shopId, { offset, pageSize: 50, itemStatus });
-        if (list.error) throw new Error(list.message || list.error);
-        for (const item of list.response.item || []) itemIds.add(item.item_id);
-        if (!list.response.has_next_page) break;
-        offset = list.response.next;
-      }
-    }
-
-    const itemIdList = [...itemIds];
-    let syncedItems = 0;
-    let syncedModels = 0;
-    for (let i = 0; i < itemIdList.length; i += 50) {
-      const batch = itemIdList.slice(i, i + 50);
-      const baseInfo = await getItemBaseInfo(accessToken, shopId, batch);
-      if (baseInfo.error) throw new Error(baseInfo.message || baseInfo.error);
-
-      for (const item of baseInfo.response.item_list || []) {
-        upsertItem.run(
-          item.item_id,
-          shopId,
-          item.item_sku || null,
-          item.item_name,
-          item.item_status,
-          item.purchase_limit_info?.min_purchase_limit ?? null,
-          item.has_model ? 1 : 0,
-          item.image?.image_url_list?.[0] || null,
-          now
-        );
-        syncedItems += 1;
-
-        if (item.has_model) {
-          const models = await getModelList(accessToken, shopId, item.item_id);
-          if (models.error) continue; // best-effort — one item's models failing shouldn't abort the whole sync
-          for (const model of models.response.model || []) {
-            upsertModel.run(
-              item.item_id,
-              model.model_id,
-              model.model_sku || null,
-              model.model_name,
-              model.price_info?.[0]?.current_price ?? null,
-              model.stock_info_v2?.summary_info?.total_available_stock ?? null,
-              model.model_status,
-              findModelImage(models.response.tier_variation, model.tier_index),
-              now
-            );
-            syncedModels += 1;
-          }
-        } else {
-          upsertModel.run(
-            item.item_id,
-            0,
-            item.item_sku || null,
-            item.item_name,
-            item.price_info?.[0]?.current_price ?? null,
-            item.stock_info_v2?.summary_info?.total_available_stock ?? null,
-            item.item_status,
-            null,
-            now
-          );
-          syncedModels += 1;
-        }
-      }
-    }
-
-    res.json({ ok: true, items: syncedItems, models: syncedModels });
+    const { items, models } = await syncShopeeCatalog(shopId);
+    res.json({ ok: true, items, models });
   } catch (err) {
     res.status(500).json({ error: 'sync_failed', message: err.message });
   }

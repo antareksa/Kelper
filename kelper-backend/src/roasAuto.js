@@ -217,7 +217,7 @@ function itemLabaBetween(shopId, itemId, startTs, endTs) {
   let laba = 0;
   for (const r of rows) {
     const price = r.price_snapshot != null ? r.price_snapshot : r.price;
-    const hpp = r.price_snapshot != null ? r.hpp_snapshot : r.hpp;
+    const hpp = r.hpp_snapshot ?? r.hpp;
     if (price != null && hpp != null) laba += (price - hpp) * r.qty;
   }
   return { laba, orderLines: rows.length };

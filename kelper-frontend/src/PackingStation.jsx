@@ -142,7 +142,7 @@ function ItemScanCard({ order, receivedAt, items, flash, allComplete, waitingMes
       </div>
 
       <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
-        <div style={{ ...panelStyle, flex: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '24px' }}>
+        <div style={{ ...panelStyle, flex: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', textAlign: 'center', padding: '24px', overflowY: 'auto' }}>
           {current ? (
             <>
               <ItemThumb imageUrl={current.image_url} sku={current.sku} size={320} />
@@ -177,7 +177,7 @@ function ItemScanCard({ order, receivedAt, items, flash, allComplete, waitingMes
 function ActionMessageCard({ order, receivedAt, message, type }) {
   const accent = type === 'error' ? colors.red : type === 'success' ? colors.green : colors.textDim;
   return (
-    <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 })}>
+    <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto' })}>
       {order && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${colors.border}`, flexWrap: 'wrap', gap: 8 }}>
           <div style={{ fontSize: 13, color: colors.textDim }}>
@@ -220,8 +220,26 @@ function PickupQueueCard({ orders }) {
     );
   }
 
+  // Packages waiting per expedition (client-requested 2026-10-15), most first.
+  const perCarrier = new Map();
+  for (const o of orders) {
+    const name = o.shipping_carrier || 'Lainnya';
+    perCarrier.set(name, (perCarrier.get(name) || 0) + 1);
+  }
+  const carrierTotals = [...perCarrier.entries()].sort((a, b) => b[1] - a[1]);
+
   return (
     <div style={card({ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 })}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, flexShrink: 0 }}>
+        <span style={{ padding: '8px 14px', borderRadius: 8, background: colors.text, color: colors.bg, fontSize: 15, fontWeight: 700 }}>
+          Total {orders.length}
+        </span>
+        {carrierTotals.map(([name, count]) => (
+          <span key={name} style={{ padding: '8px 14px', borderRadius: 8, background: colors.cardAlt, border: `1px solid ${colors.border}`, color: colors.text, fontSize: 15, fontWeight: 600, textTransform: 'uppercase' }}>
+            {name} <span style={{ fontFamily: 'var(--num)', fontWeight: 800, marginLeft: 6 }}>{count}</span>
+          </span>
+        ))}
+      </div>
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {orders.map((o) => (
           <div
@@ -1700,7 +1718,11 @@ function PackingStation() {
   const showItemScan = !paused && mode === 'packing' && state && ['IN_PROGRESS', 'DEFERRED_READY'].includes(state.session.status) && state.items.length > 0;
 
   return (
-    <div style={{ width: '100%', minHeight: '100vh', boxSizing: 'border-box', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, background: colors.bg, textAlign: 'left', fontFamily: 'var(--sans)' }}>
+    // Exactly the window's height, never taller: typing into the hidden scan input
+    // (ScanFeedbackBar, at the bottom) makes the browser scroll it into view, so a
+    // page taller than the window jumped down on every scan and the header slid off
+    // screen. Lists scroll inside their own card instead.
+    <div style={{ width: '100%', height: '100vh', overflow: 'hidden', boxSizing: 'border-box', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, background: colors.bg, textAlign: 'left', fontFamily: 'var(--sans)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', color: colors.text }}>

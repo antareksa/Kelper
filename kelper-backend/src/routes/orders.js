@@ -89,6 +89,40 @@ router.get('/search', (req, res) => {
   });
 });
 
+// Order menu's list (client-requested 2026-10-15): every order a Packing Station
+// processed in [from, to) (unix seconds), by the time its latest packing session
+// started. Clicking one opens /search's detail. Total = the order's items at the
+// price frozen for it (order_items.price_snapshot, else today's Harga); left out
+// for a Packing Station admin, who sees no prices anywhere.
+router.get('/list', (req, res) => {
+  const shopId = Number(req.query.shop_id);
+  const from = Number(req.query.from);
+  const to = Number(req.query.to);
+  if (!shopId || !Number.isFinite(from) || !Number.isFinite(to)) {
+    return res.status(400).json({ error: 'shop_id, from and to are required' });
+  }
+  const LIMIT = 2000;
+  const rows = db
+    .prepare(`
+      SELECT o.order_sn, o.status, o.buyer_name, o.shipping_carrier, o.is_instant, o.tracking_no,
+             ps.status AS session_status, ps.operator_name, ps.station_id, ps.started_at, ps.completed_at,
+             (SELECT COALESCE(SUM(oi.qty), 0) FROM order_items oi WHERE oi.order_sn = o.order_sn) AS item_qty,
+             (SELECT SUM(oi.qty * COALESCE(oi.price_snapshot, p.price)) FROM order_items oi
+                LEFT JOIN products p ON p.sku = oi.sku WHERE oi.order_sn = o.order_sn) AS total
+      FROM orders o
+      JOIN packing_sessions ps ON ps.id = (SELECT MAX(id) FROM packing_sessions WHERE order_sn = o.order_sn)
+      WHERE o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%' AND ps.started_at >= ? AND ps.started_at < ?
+      ORDER BY ps.started_at DESC
+      LIMIT ?
+    `)
+    .all(shopId, from, to, LIMIT + 1);
+  const hidePrices = req.adminRole === 'packing';
+  res.json({
+    truncated: rows.length > LIMIT,
+    orders: rows.slice(0, LIMIT).map((r) => ({ ...r, is_instant: !!r.is_instant, total: hidePrices ? undefined : r.total })),
+  });
+});
+
 router.get('/queue-counts', (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id is required' });

@@ -55,7 +55,7 @@ function getSession(token) {
 const PACKING_ROLE_ALLOWED = [
   [null, /^\/packing\//],
   [null, /^\/operators\//],
-  ['GET', /^\/orders\/(search|sync-status|queue-counts)$/],
+  ['GET', /^\/orders\/(search|list|sync-status|queue-counts)$/],
   ['GET', /^\/reports\/operator-performance$/],
   ['GET', /^\/shop\/info$/],
   // List Barang, stock only: the stock-only list, editing one SKU's stock, and

@@ -181,15 +181,10 @@ export function StockInput({ sku, value, onSaved }) {
   );
 }
 
-// Client-requested (2026-09-28): manually-entered HPP and Harga, same
-// "save on blur/Enter, empty clears to null" pattern as StockInput above —
-// shared here since both fields (/products/:sku/hpp,
-// /products/:sku/price) have identical validation (non-negative integer or
-// null) and behavior, just a different column. Harga used to just display
-// Shopee's synced price read-only; it's now the client's own number, which
-// is what the Dashboard's Omzet/Laba are computed from (see
-// routes/dashboard.js's buildSkuPriceMap) — Shopee's price is no longer
-// used for that at all, only this one.
+// Manually-entered HPP (client-requested 2026-09-28), same "save on blur/Enter,
+// empty clears to null" pattern as StockInput above. Harga used the same input
+// until 2026-10-15; it now shows Shopee's price read-only (backend
+// catalogSync.js copies it in on every catalog sync).
 function CurrencyInput({ sku, field, value, onSaved }) {
   const [draft, setDraft] = useState(value == null ? '' : String(value));
   const [saving, setSaving] = useState(false);
@@ -320,7 +315,7 @@ function BarcodeInput({ sku, value, onSaved }) {
   );
 }
 
-function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppSaved, onPriceSaved, onBarcodeSaved, onBundleSaved }) {
+function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppSaved, onBarcodeSaved, onBundleSaved }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -454,7 +449,8 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                     <BarcodeInput sku={v.sku} value={v.barcode} onSaved={(next) => onBarcodeSaved(v.sku, next)} />
                   </div>
                   <div>
-                    <CurrencyInput sku={v.sku} field="price" value={v.price} onSaved={(next) => onPriceSaved(v.sku, next)} />
+                    {/* Shopee's price, read-only since 2026-10-15 (backend catalogSync.js) */}
+                    <span title="Harga dari Shopee" style={{ color: v.price == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.price)}</span>
                   </div>
                   <div style={{ color: v.profit == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.profit)}</div>
                   <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>
@@ -537,18 +533,6 @@ function ListBarang() {
     setCatalog((prev) => prev.map((p) => ({
       ...p,
       variants: p.variants.map((v) => (v.sku === sku ? { ...v, barcode: next } : v)),
-    })));
-  }
-
-  function handlePriceSaved(sku, next) {
-    setCatalog((prev) => prev.map((p) => ({
-      ...p,
-      variants: p.variants.map((v) => {
-        if (v.sku !== sku) return v;
-        const profit = v.hpp != null && next != null ? next - v.hpp : null;
-        const profitPct = profit != null && next ? Math.round((profit / next) * 1000) / 10 : null;
-        return { ...v, price: next, profit, profitPct };
-      }),
     })));
   }
 
@@ -773,7 +757,7 @@ function ListBarang() {
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor Item Data dari Excel: SKU, Nama Item, GTIN, HPP, Harga, Item Bundle?, List Item (GTIN)"
+          title="Impor Item Data dari Excel: SKU, Nama Item, GTIN, HPP, Item Bundle?, List Item (GTIN). Kolom Harga diabaikan: Harga diambil dari Shopee."
         >
           <IconUpload size={15} />
           {uploading ? 'Mengimpor...' : 'Unggah Item Data'}
@@ -836,7 +820,6 @@ function ListBarang() {
                     onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
                     onStockSaved={handleStockSaved}
                     onHppSaved={handleHppSaved}
-                    onPriceSaved={handlePriceSaved}
                     onBarcodeSaved={handleBarcodeSaved}
                     onBundleSaved={loadCatalog}
                   />

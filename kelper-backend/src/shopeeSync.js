@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
 const { syncAdsCampaigns, maybeRunWeekly } = require('./roasAuto');
+const { refreshCatalogIfDue } = require('./catalogSync');
 const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance, getItemExtraInfo } = require('./shopee/client');
 const { getAffiliatePerformance } = require('./shopee/amsClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
@@ -24,9 +25,13 @@ const insertOrder = db.prepare(`
   INSERT OR IGNORE INTO orders (order_sn, shop_id, status, created_at)
   VALUES (?, ?, 'READY_TO_PACK', ?)
 `);
+// price_snapshot: the SKU's Harga (= its Shopee price, see catalogSync.js) at the
+// moment the order arrives -- the price on that date, so a later price change
+// never rewrites this order's Omzet/Laba (client-requested 2026-10-15; until then
+// the price was frozen at the pickup scan, see routes/packing.js).
 const insertItem = db.prepare(`
-  INSERT INTO order_items (order_sn, sku, product_name, qty)
-  VALUES (?, ?, ?, ?)
+  INSERT INTO order_items (order_sn, sku, product_name, qty, price_snapshot)
+  VALUES (?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
 `);
 
 // Fetches the shop's logistics channels once per call and returns the set of
@@ -171,7 +176,7 @@ async function fillMissingOrderDetails(accessToken, shopId) {
           for (const item of pkg.item_list || []) {
             const sku = item.model_sku || item.item_sku || `ITEM-${item.item_id}`;
             const productName = resolveProductName(item.item_id, item.model_id) || sku;
-            insertItem.run(pkg.order_sn, sku, productName, item.model_quantity);
+            insertItem.run(pkg.order_sn, sku, productName, item.model_quantity, sku);
           }
         }
       });
@@ -201,7 +206,7 @@ async function fillMissingOrderDetails(accessToken, shopId) {
       for (const item of order.item_list || []) {
         const sku = item.model_sku || item.item_sku || `ITEM-${item.item_id}`;
         const productName = item.model_name ? `${item.item_name} - ${item.model_name}` : item.item_name;
-        insertItem.run(order.order_sn, sku, productName, item.model_quantity_purchased);
+        insertItem.run(order.order_sn, sku, productName, item.model_quantity_purchased, sku);
       }
 
       const pkg = order.package_list?.[0];
@@ -1017,6 +1022,12 @@ function startShopeeSync() {
         await fetchPageViews(shopId);
       } catch (err) {
         console.error(`[server] Page View fetch failed for shop ${shopId}: ${err.message}`);
+      }
+      // The Shopee catalog, and with it Harga (catalogSync.js): about every hour.
+      try {
+        await refreshCatalogIfDue(shopId);
+      } catch (err) {
+        console.error(`[server] catalog refresh failed for shop ${shopId}: ${err.message}`);
       }
       // Ad campaigns for the weekly ROAS adjustment (roasAuto.js): refreshed about
       // every 30 min, and the weekly run from Monday 00:05 WIB.

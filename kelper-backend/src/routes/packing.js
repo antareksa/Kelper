@@ -741,20 +741,19 @@ function confirmOrderPickedUp(orderSn) {
     for (const it of db.prepare('SELECT sku, qty FROM order_items WHERE order_sn = ?').all(orderSn)) consumeStockQty.run(it.qty, pickedUpAt, it.sku);
   }
 
-  // Client-requested (2026-09-28): freeze this order's per-item price/hpp
-  // at whatever's currently set in List Barang (products.price/hpp) right
-  // now — this is the exact moment the order starts counting toward a
-  // day's Omzet/Laba (see dashboard.js's DASHBOARD_DATA_SOURCE), so it's
-  // also the moment its price/hpp gets locked in. A later edit to a SKU's
-  // price in List Barang then only affects orders scanned AFTER that edit,
-  // never rewrites this one's already-reported numbers. price_snapshot
-  // IS NULL guards against clobbering an existing snapshot if this ever
-  // somehow ran twice for the same order.
+  // Client-requested (2026-09-28): freeze this order's per-item HPP at
+  // whatever's currently set in List Barang right now — this is the exact
+  // moment the order starts counting toward a day's Omzet/Laba (see
+  // dashboard.js's DASHBOARD_DATA_SOURCE), so a later HPP edit only affects
+  // orders scanned AFTER it. The price is normally frozen earlier, when the
+  // order arrived (shopeeSync.js's insertItem, 2026-10-15); it is only filled
+  // here for an older order that has none yet. Neither overwrites an existing
+  // snapshot, in case this ever runs twice for the same order.
   db.prepare(`
     UPDATE order_items
-    SET price_snapshot = (SELECT price FROM products WHERE products.sku = order_items.sku),
-        hpp_snapshot = (SELECT hpp FROM products WHERE products.sku = order_items.sku)
-    WHERE order_sn = ? AND price_snapshot IS NULL
+    SET price_snapshot = COALESCE(price_snapshot, (SELECT price FROM products WHERE products.sku = order_items.sku)),
+        hpp_snapshot = COALESCE(hpp_snapshot, (SELECT hpp FROM products WHERE products.sku = order_items.sku))
+    WHERE order_sn = ?
   `).run(orderSn);
 
   // No Shopee API call needed here (researched 2026-09-26, against

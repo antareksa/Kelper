@@ -43,6 +43,10 @@ const OMZET_PRICE_SOURCE = 'catalog'; // 'catalog' | 'shopee_blend'
 // isn't reflected for those). Ads/affiliate/visitor metrics still have no
 // data source at all (see the `blocked` list further down).
 //
+// Client-requested (2026-10-15): products.price follows Shopee again — every
+// catalog sync copies each SKU's Shopee price into it (see catalogSync.js), and
+// it can no longer be set by hand. The text below is the 2026-09-28 history.
+//
 // Client-requested (2026-09-28): price comes ONLY from products.price now
 // — the client's own manually-entered/editable price (see List Barang and
 // routes/products.js's /:sku/price), never shopee_item_models.price. No
@@ -62,7 +66,9 @@ function buildSkuPriceMap() {
 // snapshotted — pre-feature history, or DASHBOARD_DATA_SOURCE === 'shopee'
 // orders that were never scanned in Shipping Mode at all.
 function priceInfoForItem(item, skuPrices) {
-  if (item.price_snapshot != null) return { price: item.price_snapshot, hpp: item.hpp_snapshot };
+  // The price is frozen when the order arrives, the HPP only at the pickup scan, so
+  // an order not scanned yet has a price snapshot but no HPP one: use today's HPP.
+  if (item.price_snapshot != null) return { price: item.price_snapshot, hpp: item.hpp_snapshot ?? skuPrices.get(item.sku)?.hpp ?? null };
   return skuPrices.get(item.sku);
 }
 
