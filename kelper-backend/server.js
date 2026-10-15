@@ -19,6 +19,7 @@ const productsRoutes = require('./src/routes/products');
 const bundlesRoutes = require('./src/routes/bundles');
 const dashboardRoutes = require('./src/routes/dashboard');
 const reportsRoutes = require('./src/routes/reports');
+const adsRoutes = require('./src/routes/ads');
 const webhookRoutes = require('./src/routes/webhook');
 const { startShopeeSync } = require('./src/shopeeSync');
 const { requireAdminAuth } = require('./src/adminSession');
@@ -67,6 +68,7 @@ app.use('/products', requireAdminAuth, productsRoutes);
 app.use('/bundles', requireAdminAuth, bundlesRoutes);
 app.use('/dashboard', requireAdminAuth, dashboardRoutes);
 app.use('/reports', requireAdminAuth, reportsRoutes);
+app.use('/ads', requireAdminAuth, adsRoutes);
 
 // Production serves the frontend's built static bundle directly from this
 // same process/port — there's no separate `vite dev` running in production

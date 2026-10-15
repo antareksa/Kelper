@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { getValidAccessToken, getValidBrandAccessToken } = require('./shopee/tokenStore');
+const { syncAdsCampaigns, maybeRunWeekly } = require('./roasAuto');
 const { getOrderList, getOrderDetail, getPackageDetail, getChannelList, downloadShippingDocument, getEscrowDetail, getAllCpcAdsHourlyPerformance, getItemExtraInfo } = require('./shopee/client');
 const { getAffiliatePerformance } = require('./shopee/amsClient');
 const { bookShipment, learnPackageNumber } = require('./shopee/shipping');
@@ -1016,6 +1017,15 @@ function startShopeeSync() {
         await fetchPageViews(shopId);
       } catch (err) {
         console.error(`[server] Page View fetch failed for shop ${shopId}: ${err.message}`);
+      }
+      // Ad campaigns for the weekly ROAS adjustment (roasAuto.js): refreshed about
+      // every 30 min, and the weekly run from Monday 00:05 WIB.
+      try {
+        const adsError = await syncAdsCampaigns(shopId);
+        if (adsError) console.error(`[server] ad campaign sync failed for shop ${shopId}: ${adsError}`);
+        await maybeRunWeekly(shopId);
+      } catch (err) {
+        console.error(`[server] ROAS auto-adjust failed for shop ${shopId}: ${err.message}`);
       }
     }
 

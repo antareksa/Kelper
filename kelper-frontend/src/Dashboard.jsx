@@ -7,15 +7,17 @@ import StockList from './StockList';
 import OrderSearch from './OrderSearch';
 import OperatorPerformance from './OperatorPerformance';
 import ShopeeConfigPage from './ShopeeConfigPage';
+import IklanRoas from './IklanRoas';
 import { useShopeeConnection } from './useShopeeConnection';
 import { SHOP_ID } from './shopConfig';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory, IconBolt } from './Icons';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken, getAdminRole, setAdminRole } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
+const IKLAN_TAB = { path: '/iklan', label: 'Iklan', Icon: IconBolt };
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
@@ -28,6 +30,7 @@ const PACKING_SUB_ITEMS = [
 const DashboardIcon = DASHBOARD_TAB.Icon;
 const ItemsIcon = ITEMS_TAB.Icon;
 const OrderIcon = ORDER_TAB.Icon;
+const IklanIcon = IKLAN_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
 
 function Dashboard() {
@@ -285,6 +288,14 @@ function Dashboard() {
                     {DASHBOARD_TAB.label}
                   </button>
 
+                  <button
+                    onClick={() => navigate(IKLAN_TAB.path)}
+                    style={navItemStyle(location.pathname === IKLAN_TAB.path)}
+                  >
+                    <IklanIcon size={16} />
+                    {IKLAN_TAB.label}
+                  </button>
+
                 </>
               )}
 
@@ -424,6 +435,7 @@ function Dashboard() {
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
             <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}
             <Route path="/order" element={<OrderSearch />} />
+            <Route path="/iklan" element={isPacking ? <Navigate to={homePath} replace /> : <IklanRoas />} />
             <Route path="/packing-station" element={<Navigate to="/packing-station/order-lists" replace />} />
             <Route path="/packing-station/active-station" element={<PackingStationDashboard view="active" />} />
             <Route path="/packing-station/order-lists" element={<PackingStationDashboard view="lists" />} />

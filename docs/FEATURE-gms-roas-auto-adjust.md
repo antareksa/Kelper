@@ -1,6 +1,8 @@
 # Feature: Weekly Per-Item GMS ROAS Auto-Adjust
 
-**Status:** Planning only — nothing built yet. All decisions settled 2026-10-15 (see *Settled*). This doc captures what's been researched and decided so far, and what's still open before implementation can start.
+**Status:** Built 2026-10-15 (dev; needs deploy). Backend `kelper-backend/src/roasAuto.js` + `src/routes/ads.js` (`/ads/*`), page `kelper-frontend/src/IklanRoas.jsx` (sidebar **Iklan**, full admins only). Starts in **Preview** mode: the Monday run only logs; switch to **Aktif** on the page to really change targets.
+
+> **Correction (2026-10-15, from Shopee's own API docs):** `edit_gms_product_campaign` / `create_gms_product_campaign` / `edit_gms_item_product_campaign` are Shopee's single **shop-wide** GMV Max campaign (items are added to it), not per-item campaigns. The per-item "GMV Max ROAS" campaigns in Seller Centre are product-level ads, edited with **`v2.ads.edit_manual_product_ads`** (`edit_action`: `change_roas_target` with `roas_target`, `pause`, `resume`; a new `reference_id` per request). That is what the build uses. Managed campaigns: `ad_type = manual` (product chosen by hand), exactly one item, `bidding_method = auto` with `roas_target > 0`.
 
 ## Client requirement (as given)
 
@@ -74,7 +76,7 @@ for each campaign (from the sync above) with exactly 1 item in item_id_list:
 
   new_target = clamp(new_target, 1, 10)
   if new_target != current_target:
-      edit_gms_product_campaign(campaign_id, edit_action=change_roas_target, roas_target=new_target)
+      edit_manual_product_ads(campaign_id, edit_action=change_roas_target, roas_target=new_target)
   log every decision (changed or skipped, with the numbers) for the Dashboard
 ```
 
@@ -97,7 +99,7 @@ shown as "dilewati: lebih dari 1 produk".
 - **Multi-item campaigns:** skip for now.
 - **Two toggles per item** on the Dashboard list:
   - **Iklan ON/OFF** - pauses / resumes the item's real Shopee campaign
-    (`edit_gms_product_campaign`, pause / resume). Shown from the live
+    (`edit_manual_product_ads`, pause / resume). Shown from the live
     `campaign_status`, so a pause done in Seller Centre shows too.
   - **Auto ROAS ON/OFF** - the weekly rule leaves this item's target alone (the ad
     keeps running; the target can be set by hand in Seller Centre).
@@ -113,7 +115,16 @@ shown as "dilewati: lebih dari 1 produk".
 
 None blocking. x, y, floor and ceiling should still be settings, not hard-coded.
 
-## Implementation needs (once the above is settled)
+## How it was built (2026-10-15)
+
+- **Sync** (every ~30 min in the enrichment loop): `get_product_level_campaign_id_list` -> `get_product_level_campaign_setting_info` (types 1,3) -> table `ads_campaigns`; `get_product_campaign_daily_performance` for the last 15 days -> `ads_campaign_daily` (expense, GMV). A campaign seen not `ongoing` marks that day `paused_seen`.
+- **Weekly run**: first enrichment pass from Monday 00:05 WIB. Re-syncs first; if Shopee fails, it is logged and retried every 30 min (the week is only marked done once fresh data is in, and before any change, so a crash never applies a step twice).
+- **Laba** per item = sum over the item's SKUs (item SKU, model SKUs, `ITEM-<id>`), the Dashboard's way (pickup-scan day, price/HPP snapshot). Ad spend includes the Dashboard's ads tax %.
+- Also skipped: a campaign that started inside the two compared weeks ("campaign baru").
+- Tables: `ads_campaigns`, `ads_campaign_daily`, `ads_item_settings` (Auto ROAS per item), `roas_auto_log` (every decision and toggle, with username).
+- Settings (page): mode off / preview / live, band %, step, floor, ceiling.
+
+## Implementation needs (original plan)
 
 - A new weekly rollup of Laba per-SKU (the daily numbers already exist; this is a new aggregation only).
 - A local settings surface for `x` (10), `y` (0.5), `floor` (1), `ceiling` (10), plus an on/off switch.

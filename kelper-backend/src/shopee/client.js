@@ -269,6 +269,49 @@ function getAllCpcAdsHourlyPerformance(accessToken, shopId, performanceDate) {
   return shopGet('/api/v2/ads/get_all_cpc_ads_hourly_performance', accessToken, shopId, { performance_date: performanceDate });
 }
 
+// Product-level ad campaigns (one per item when the product is chosen by hand) --
+// used by roasAuto.js. adType '' = all. Shopee pages these with offset/limit.
+function getProductLevelCampaignIdList(accessToken, shopId, { offset = 0, limit = 100 } = {}) {
+  return shopGet('/api/v2/ads/get_product_level_campaign_id_list', accessToken, shopId, {
+    ad_type: '',
+    offset: String(offset),
+    limit: String(limit),
+  });
+}
+
+// Settings per campaign, at most 100 ids per call. infoTypes: 1 common info
+// (status, item_id_list, ...), 2 manual bidding, 3 auto bidding (roas_target),
+// 4 auto product ads.
+function getProductLevelCampaignSettingInfo(accessToken, shopId, campaignIds, infoTypes = '1,3') {
+  return shopGet('/api/v2/ads/get_product_level_campaign_setting_info', accessToken, shopId, {
+    info_type_list: infoTypes,
+    campaign_id_list: campaignIds.join(','),
+  });
+}
+
+// Daily metrics (expense, broad/direct GMV, ...) per campaign, at most 100 ids
+// and one month per call. Dates in DD-MM-YYYY.
+function getProductCampaignDailyPerformance(accessToken, shopId, startDate, endDate, campaignIds) {
+  return shopGet('/api/v2/ads/get_product_campaign_daily_performance', accessToken, shopId, {
+    start_date: startDate,
+    end_date: endDate,
+    campaign_id_list: campaignIds.join(','),
+  });
+}
+
+// Edits a product-level campaign: edit_action 'pause' | 'resume' |
+// 'change_roas_target' (with roas_target), among others. NOT
+// edit_gms_product_campaign, which is the shop-wide GMV Max campaign.
+// reference_id must be new for every request (Shopee refuses a repeat).
+function editManualProductAds(accessToken, shopId, campaignId, editAction, extra = {}) {
+  return shopPost('/api/v2/ads/edit_manual_product_ads', accessToken, shopId, {
+    reference_id: crypto.randomUUID(),
+    campaign_id: Number(campaignId),
+    edit_action: editAction,
+    ...extra,
+  });
+}
+
 function getTrackingNumber(accessToken, shopId, orderSn) {
   return shopGet('/api/v2/logistics/get_tracking_number', accessToken, shopId, { order_sn: orderSn });
 }
@@ -354,6 +397,10 @@ module.exports = {
   getPackageDetail,
   getEscrowDetail,
   getAllCpcAdsHourlyPerformance,
+  getProductLevelCampaignIdList,
+  getProductLevelCampaignSettingInfo,
+  getProductCampaignDailyPerformance,
+  editManualProductAds,
   getItemList,
   getItemBaseInfo,
   getItemExtraInfo,

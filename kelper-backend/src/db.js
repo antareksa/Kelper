@@ -526,4 +526,66 @@ db.exec(`
   );
 `);
 
+// Client-requested (2026-10-15): weekly per-item ROAS target adjustment (see
+// roasAuto.js and docs/FEATURE-gms-roas-auto-adjust.md).
+//  ads_campaigns: the shop's product-level ad campaigns as last read from
+//    Shopee (refreshed about every 30 min). item_ids is a JSON array; the
+//    automation only manages a campaign with exactly one item.
+//  ads_campaign_daily: per campaign and WIB day, the ad spend and GMV, and
+//    paused_seen = KELPER saw the campaign not running at some point that day
+//    (a week with the ad off is not compared).
+//  ads_item_settings: the Auto ROAS switch per item (per item, not campaign, so
+//    it survives the campaign being recreated). No row = on.
+//  roas_auto_log: every weekly decision (changed or skipped, with the numbers)
+//    and every toggle press, for the Dashboard.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ads_campaigns (
+    campaign_id INTEGER PRIMARY KEY,
+    shop_id INTEGER NOT NULL,
+    ad_name TEXT,
+    ad_type TEXT,
+    bidding_method TEXT,
+    campaign_status TEXT,
+    roas_target REAL,
+    item_ids TEXT NOT NULL DEFAULT '[]',
+    start_time INTEGER,
+    synced_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ads_campaign_daily (
+    campaign_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    expense REAL,
+    broad_gmv REAL,
+    direct_gmv REAL,
+    paused_seen INTEGER NOT NULL DEFAULT 0,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (campaign_id, date)
+  );
+
+  CREATE TABLE IF NOT EXISTS ads_item_settings (
+    item_id INTEGER PRIMARY KEY,
+    auto_roas INTEGER NOT NULL DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS roas_auto_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    shop_id INTEGER,
+    campaign_id INTEGER,
+    item_id INTEGER,
+    kind TEXT NOT NULL,
+    mode TEXT,
+    action TEXT NOT NULL,
+    old_target REAL,
+    new_target REAL,
+    this_week REAL,
+    last_week REAL,
+    change_pct REAL,
+    reason TEXT,
+    username TEXT,
+    error TEXT
+  );
+`);
+
 module.exports = db;
