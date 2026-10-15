@@ -1,6 +1,6 @@
 # Feature: Weekly Per-Item GMS ROAS Auto-Adjust
 
-**Status:** Planning only — nothing built yet. This doc captures what's been researched and decided so far, and what's still open before implementation can start.
+**Status:** Planning only — nothing built yet. All decisions settled 2026-10-15 (see *Settled*). This doc captures what's been researched and decided so far, and what's still open before implementation can start.
 
 ## Client requirement (as given)
 
@@ -50,42 +50,61 @@ So not every campaign is naturally a clean 1-item-per-campaign fit:
 
 ## Weekly rule (pseudocode)
 
+Runs every **Monday 00:05 WIB**. "This week" = the Monday-Sunday that just ended,
+"last week" = the Monday-Sunday before it (both full, closed weeks).
+
 ```
-for each managed SKU, discovered via the sync above (sku, campaign_id, current_roas_target):
-  this_week_laba  = sum of per-item Laba, last 7 days
-  last_week_laba  = sum of per-item Laba, the 7 days before that
-  threshold       = last_week_laba * (1 + x / 100)
+for each campaign (from the sync above) with exactly 1 item in item_id_list:
+  item            = that item_id (all its models/SKUs together; a bundle listing is its own item)
+  current_target  = auto_bidding_info.roas_target, read from Shopee just now
 
-  if this_week_laba > threshold:
-      new_target = current_roas_target - y   # "decrease" = more aggressive bidding
-  elif this_week_laba < threshold:
-      new_target = current_roas_target + y   # "increase" = more conservative bidding
-  else:
-      new_target = current_roas_target        # unchanged
+  this_week  = item Laba (Dashboard basis) - campaign expense   over this week
+  last_week  = item Laba (Dashboard basis) - campaign expense   over last week
+  (expense from get_product_campaign_daily_performance)
 
-  new_target = clamp(new_target, floor, ceiling)
+  if last week has no data:              skip (log "tidak ada data minggu lalu")
+  change = (this_week - last_week) / |last_week| * 100
 
-  if new_target != current_roas_target:
-      call edit_gms_product_campaign(campaign_id, edit_action=change_roas_target, roas_target=new_target)
+  if change >  +10%:   new_target = current_target - 0.5   # good week: spend more
+  elif change < -10%:  new_target = current_target + 0.5   # bad week: spend less
+  else:                skip (within +/-10%)
+
+  new_target = clamp(new_target, 1, 10)
+  if new_target != current_target:
+      edit_gms_product_campaign(campaign_id, edit_action=change_roas_target, roas_target=new_target)
+  log every decision (changed or skipped, with the numbers) for the Dashboard
 ```
 
-`current_roas_target` is read directly from Shopee (`get_product_level_campaign_setting_info`) immediately before each weekly adjustment, not from a locally-cached value — avoids any drift if a campaign was ever touched outside KELPER.
+Campaigns with 0 or more than 1 item (auto product selection) are **skipped** and
+shown as "dilewati: lebih dari 1 produk".
 
-## Settled
+## Settled (2026-10-15)
 
-- **Floor/ceiling values:** floor = **1**, ceiling = **10** — `roas_target` is clamped to `[1, 10]` after every weekly adjustment.
+- **Direction:** confirmed by the client - it is meant to balance: Laba up -> lower the
+  target (spend more), Laba down -> raise it (spend less).
+- **Laba basis:** item Laba **minus that campaign's ad spend**. Plain Laba ignores ad
+  cost, so with growing sales it would only ever lower the target down to the floor
+  while real profit turns into a loss.
+- **Band (x):** 10%. More than +10% -> lower, more than -10% -> raise, otherwise no change.
+- **Step (y):** 0.5 (e.g. 4.5 -> 5.0).
+- **Floor / ceiling:** 1 / 10.
+- **Schedule:** Monday 00:05 WIB, comparing the two full weeks before it (a run at
+  23:59 Sunday would miss late pickups and late ad data).
+- **No data for last week:** skip that item.
+- **Multi-item campaigns:** skip for now.
+- **Proteksi ROAS:** the user confirmed weekly target changes are safe for it. The
+  ROAS-protection rebate is NOT added back into the Laba figure (assumption; revisit if
+  the client wants it).
 
-## Open questions (must be settled before building)
+## Open questions
 
-1. **Direction of adjustment.** As written, a *good* week (profit beat last week by x%) *decreases* the ROAS target — which in Shopee's GMV Max Custom ROAS model means bidding *more* aggressively (spend more, lower required return per ad-rupiah). A *bad* week *increases* it (more conservative, likely less spend). This is a legitimate "double down on what's working" strategy, but it's worth one explicit confirmation since it's the opposite of an instinctive "profit's down, cut ad spend" read — and it's real money being moved automatically.
-2. **x and y values** — not yet specified (presumably configurable, not hardcoded).
-3. **Week boundary** — which day does the week start on (WIB)? Needs to match whatever cadence the client thinks in.
-4. **What happens on a week with no prior week's data yet** (first week for a newly-added SKU) — skip, or treat as "no change"?
-5. **Multi-item (auto product selection) campaigns** — confirm these should simply be excluded from the automation, per the constraint above, rather than handled some other way.
+None blocking. x, y, floor and ceiling should still be settings, not hard-coded.
 
 ## Implementation needs (once the above is settled)
 
 - A new weekly rollup of Laba per-SKU (the daily numbers already exist; this is a new aggregation only).
-- A local settings surface for `x`, `y`, `floor`, `ceiling`.
+- A local settings surface for `x` (10), `y` (0.5), `floor` (1), `ceiling` (10), plus an on/off switch.
+- A Dashboard list: item | campaign | current target | last decision (changed / skipped + why) | status, and a log of every change.
+- Item Laba per Shopee `item_id` (sum over its models' SKUs) - today Laba is per SKU.
 - A new scheduled job — nothing in KELPER currently runs on anything but the existing 5-second sync loop or manual SSH scripts; a weekly trigger is new infrastructure.
 - The campaign discovery sync (`get_product_level_campaign_id_list` + `get_product_level_campaign_setting_info`) and the actual adjustment call (`edit_gms_product_campaign`, `change_roas_target`) — both confirmed working per the docs.
