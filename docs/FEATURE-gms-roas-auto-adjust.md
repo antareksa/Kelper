@@ -62,6 +62,9 @@ for each campaign (from the sync above) with exactly 1 item in item_id_list:
   last_week  = item Laba (Dashboard basis) - campaign expense   over last week
   (expense from get_product_campaign_daily_performance)
 
+  if Auto ROAS is OFF for this item:      skip (log "auto ROAS off")
+  if the campaign is paused now:         skip (log "iklan off")
+  if paused during either week:          skip (log "iklan sempat off")
   if last week has no data:              skip (log "tidak ada data minggu lalu")
   change = (this_week - last_week) / |last_week| * 100
 
@@ -92,6 +95,16 @@ shown as "dilewati: lebih dari 1 produk".
   23:59 Sunday would miss late pickups and late ad data).
 - **No data for last week:** skip that item.
 - **Multi-item campaigns:** skip for now.
+- **Two toggles per item** on the Dashboard list:
+  - **Iklan ON/OFF** - pauses / resumes the item's real Shopee campaign
+    (`edit_gms_product_campaign`, pause / resume). Shown from the live
+    `campaign_status`, so a pause done in Seller Centre shows too.
+  - **Auto ROAS ON/OFF** - the weekly rule leaves this item's target alone (the ad
+    keeps running; the target can be set by hand in Seller Centre).
+- **Paused weeks are skipped:** if the campaign was paused for any part of either
+  week being compared, the item is skipped that Monday (a week without ads would
+  give a misleading jump). Detected from days with no expense in the daily
+  performance data / the stored status history.
 - **Proteksi ROAS:** the user confirmed weekly target changes are safe for it. The
   ROAS-protection rebate is NOT added back into the Laba figure (assumption; revisit if
   the client wants it).
@@ -104,7 +117,7 @@ None blocking. x, y, floor and ceiling should still be settings, not hard-coded.
 
 - A new weekly rollup of Laba per-SKU (the daily numbers already exist; this is a new aggregation only).
 - A local settings surface for `x` (10), `y` (0.5), `floor` (1), `ceiling` (10), plus an on/off switch.
-- A Dashboard list: item | campaign | current target | last decision (changed / skipped + why) | status, and a log of every change.
+- A Dashboard list: item | campaign | Iklan toggle | Auto ROAS toggle | current target | last decision (changed / skipped + why), and a log of every change (including who toggled what).
 - Item Laba per Shopee `item_id` (sum over its models' SKUs) - today Laba is per SKU.
 - A new scheduled job — nothing in KELPER currently runs on anything but the existing 5-second sync loop or manual SSH scripts; a weekly trigger is new infrastructure.
 - The campaign discovery sync (`get_product_level_campaign_id_list` + `get_product_level_campaign_setting_info`) and the actual adjustment call (`edit_gms_product_campaign`, `change_roas_target`) — both confirmed working per the docs.
