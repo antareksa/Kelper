@@ -34,6 +34,11 @@ const DASHBOARD_DATA_SOURCE = 'internal'; // 'internal' | 'shopee'
 // only, same as before.
 const OMZET_PRICE_SOURCE = 'catalog'; // 'catalog' | 'shopee_blend'
 
+// Biaya Layanan Promo XTRA as % of the selling price (2026-10-16): Shopee only
+// gives it summed with Gratis Ongkir XTRA, see sumOrdersInRange. 4.5 matches
+// the client's Rincian Penghasilan (3.428 on 76.180). Editable in Settings.
+const DEFAULT_PROMO_XTRA_PCT = 4.5;
+
 // order/get_order_detail (the endpoint that would normally carry real
 // per-order sale price) has been confirmed broken for this shop, so the old
 // 'shopee_blend' OMZET_PRICE_SOURCE falls back to an ESTIMATE for orders
@@ -142,7 +147,8 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
   const orders = DASHBOARD_DATA_SOURCE === 'internal'
     ? db
         .prepare(`
-          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
+          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
+                 oi.seller_order_processing_fee, oi.withholding_tax
           FROM orders o
           JOIN (
             SELECT order_sn, MAX(completed_at) AS completed_at
@@ -156,7 +162,8 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
         .all(shopId, startTs, endTs)
     : db
         .prepare(`
-          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee
+          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
+                 oi.seller_order_processing_fee, oi.withholding_tax
           FROM orders o
           LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
           WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
@@ -178,6 +185,7 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
   let laba = 0;
   let layanan = 0;
   let biayaPesanan = 0;
+  const promoXtraPct = Number(getSetting('promoXtraPercentage', String(DEFAULT_PROMO_XTRA_PCT)));
   for (const order of orders) {
     const orderItems = itemsByOrder.get(order.order_sn) || [];
     const useEscrowForOmzet = OMZET_PRICE_SOURCE === 'shopee_blend' && order.escrow_amount != null;
@@ -201,9 +209,23 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
 
     // Layanan/Biaya Pesanan: always real-escrow-only, independent of
     // OMZET_PRICE_SOURCE — there's no catalog-price equivalent for a fee.
+    // Client-requested grouping (2026-10-16): Layanan = Biaya Layanan Promo
+    // XTRA only; Biaya Pesanan = every other fee (Administrasi, Proses
+    // Pesanan, Pembayaran, Gratis Ongkir XTRA, PPh 22); Biaya Promosi (the
+    // ads top-up) is left out, it is already in Iklan. Shopee's service_fee
+    // holds Gratis Ongkir XTRA + Promo XTRA as ONE number, so the Promo XTRA
+    // part is estimated as promoXtraPercentage of the selling price (capped
+    // at service_fee) and the rest of service_fee goes to Biaya Pesanan --
+    // the two together still add up to Shopee's exact fees.
     if (order.escrow_amount != null) {
-      layanan += (order.service_fee ?? 0) + (order.commission_fee ?? 0);
-      biayaPesanan += order.seller_transaction_fee ?? 0;
+      const serviceFee = order.service_fee ?? 0;
+      const promoXtra = Math.min(serviceFee, Math.round((order.order_selling_price ?? 0) * promoXtraPct / 100));
+      layanan += promoXtra;
+      biayaPesanan += (order.commission_fee ?? 0)
+        + (order.seller_order_processing_fee ?? 0)
+        + (order.seller_transaction_fee ?? 0)
+        + (order.withholding_tax ?? 0)
+        + (serviceFee - promoXtra);
     }
   }
   return { orderCount: orders.length, omzet, laba, layanan, biayaPesanan };
@@ -474,14 +496,23 @@ router.get('/summary', (req, res) => {
 // tax percentage, stored in the same `settings` key/value table Packing
 // Station's settings use (see settings.js), so an admin's edit persists
 // across deploys instead of being reverted by the next git pull.
+// promoXtraPercentage (2026-10-16): see sumOrdersInRange's Layanan split.
+function dashboardSettings() {
+  return {
+    adsTaxPercentage: Number(getSetting('adsTaxPercentage', '0')),
+    promoXtraPercentage: Number(getSetting('promoXtraPercentage', String(DEFAULT_PROMO_XTRA_PCT))),
+  };
+}
+
 router.get('/settings', (req, res) => {
-  res.json({ adsTaxPercentage: Number(getSetting('adsTaxPercentage', '0')) });
+  res.json(dashboardSettings());
 });
 
 router.post('/settings', (req, res) => {
-  const { adsTaxPercentage } = req.body || {};
+  const { adsTaxPercentage, promoXtraPercentage } = req.body || {};
   if (adsTaxPercentage != null) setSetting('adsTaxPercentage', Math.max(0, Number(adsTaxPercentage)));
-  res.json({ adsTaxPercentage: Number(getSetting('adsTaxPercentage', '0')) });
+  if (promoXtraPercentage != null) setSetting('promoXtraPercentage', Math.max(0, Number(promoXtraPercentage)));
+  res.json(dashboardSettings());
 });
 
 module.exports = router;

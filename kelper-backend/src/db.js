@@ -521,6 +521,21 @@ if (!affiliatePerformanceCols.includes('commission')) {
   db.exec('ALTER TABLE affiliate_performance_daily ADD COLUMN commission REAL');
 }
 
+// Client-requested (2026-10-16): Biaya Pesanan = every Shopee fee on the
+// order except Biaya Layanan Promo XTRA (Layanan) and Biaya Promosi (ads
+// top-up), so the escrow fields for Biaya Proses Pesanan and PPh 22 are kept
+// too. raw_income is the whole order_income object, so a later regrouping
+// needs no refetch. A row without raw_income predates this and is fetched
+// again (see shopeeSync.js's fillMissingIncomeData).
+const orderIncomeCols = db.prepare('PRAGMA table_info(order_income)').all().map((c) => c.name);
+for (const [col, def] of [
+  ['seller_order_processing_fee', 'REAL'],
+  ['withholding_tax', 'REAL'],
+  ['raw_income', 'TEXT'],
+]) {
+  if (!orderIncomeCols.includes(col)) db.exec(`ALTER TABLE order_income ADD COLUMN ${col} ${def}`);
+}
+
 // Client-requested (2026-10-03): which single products make up each bundle
 // listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
 // bundle_sku is a Shopee listing, component_sku a single product -- so the

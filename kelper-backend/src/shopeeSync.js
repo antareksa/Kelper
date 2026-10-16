@@ -522,8 +522,9 @@ async function detectRetryShipOrders(accessToken, shopId) {
 
 const insertIncome = db.prepare(`
   INSERT OR REPLACE INTO order_income
-    (order_sn, order_selling_price, escrow_amount, service_fee, commission_fee, seller_transaction_fee, fetched_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
+    (order_sn, order_selling_price, escrow_amount, service_fee, commission_fee, seller_transaction_fee,
+     seller_order_processing_fee, withholding_tax, raw_income, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 // Phase 3 — real financials: once an order has actually shipped (label
@@ -544,12 +545,15 @@ const insertIncome = db.prepare(`
 // populated, and Layanan/Biaya Pesanan stayed 0 on the Dashboard forever.
 // 'DONE' is the actual "shipped and pickup-confirmed" signal the comment
 // above already described.
+//
+// A row saved before raw_income existed (2026-10-16) lacks Biaya Proses
+// Pesanan and PPh 22, so it counts as missing and is fetched once more.
 async function fillMissingIncomeData(accessToken, shopId) {
   const pending = db
     .prepare(`
       SELECT order_sn FROM orders
       WHERE shop_id = ? AND status = 'DONE' AND order_sn NOT LIKE 'MOCK-%'
-        AND NOT EXISTS (SELECT 1 FROM order_income WHERE order_income.order_sn = orders.order_sn)
+        AND NOT EXISTS (SELECT 1 FROM order_income WHERE order_income.order_sn = orders.order_sn AND raw_income IS NOT NULL)
     `)
     .all(shopId);
 
@@ -571,6 +575,9 @@ async function fillMissingIncomeData(accessToken, shopId) {
       income.service_fee ?? null,
       income.commission_fee ?? null,
       income.seller_transaction_fee ?? null,
+      income.seller_order_processing_fee ?? null,
+      income.withholding_tax ?? null,
+      JSON.stringify(income),
       now()
     );
   }

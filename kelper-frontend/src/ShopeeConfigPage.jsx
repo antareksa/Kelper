@@ -4,24 +4,52 @@ import ShopeeBrandAuth from './ShopeeBrandAuth';
 import { colors, card } from './theme';
 import { API_BASE, apiFetch } from './apiBase';
 
-// Dashboard configuration (client-requested 2026-09-22) — currently just Ads
-// tax percentage, a multiplier added on top of raw Shopee ad spend before
-// it's shown as Iklan on the Dashboard. Lives here (the general Settings
-// page, reached via the sidebar's "Settings" button) rather than a separate
-// route, since there's only this one field so far.
+// Dashboard configuration (client-requested 2026-09-22): Ads tax percentage,
+// a multiplier added on top of raw Shopee ad spend before it's shown as
+// Iklan; and (2026-10-16) Promo XTRA percentage, the share of the selling
+// price counted as Layanan (Shopee only gives Promo XTRA summed with Gratis
+// Ongkir XTRA, see the backend's dashboard.js). Lives here (the general
+// Settings page, reached via the sidebar's "Settings" button) rather than a
+// separate route, since there are only these two fields.
+const FIELDS = [
+  {
+    key: 'adsTaxPercentage',
+    label: 'Persentase pajak iklan (%)',
+    help: 'Ditambahkan di atas pengeluaran Iklan mentah dari Shopee sebelum ditampilkan di Dashboard.',
+  },
+  {
+    key: 'promoXtraPercentage',
+    label: 'Biaya Layanan Promo XTRA (% dari harga jual)',
+    help: 'Dihitung sebagai Layanan. Shopee menggabungkan Promo XTRA dengan Gratis Ongkir XTRA, jadi sisanya masuk Biaya Pesanan.',
+  },
+];
+
+const inputStyle = {
+  width: 100,
+  padding: '8px 10px',
+  boxSizing: 'border-box',
+  background: colors.cardAlt,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 6,
+  color: colors.text,
+  fontSize: 13,
+};
+
 function DashboardSettings() {
   const [settings, setSettings] = useState(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  function applySettings(data) {
+    setSettings(data);
+    setDraft(Object.fromEntries(FIELDS.map((f) => [f.key, String(data[f.key])])));
+  }
 
   useEffect(() => {
     apiFetch(`${API_BASE}/dashboard/settings`)
       .then((res) => res.json())
-      .then((data) => {
-        setSettings(data);
-        setDraft(String(data.adsTaxPercentage));
-      })
+      .then(applySettings)
       .catch(() => {});
   }, []);
 
@@ -32,12 +60,10 @@ function DashboardSettings() {
       const res = await apiFetch(`${API_BASE}/dashboard/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adsTaxPercentage: Number(draft) }),
+        body: JSON.stringify(Object.fromEntries(FIELDS.map((f) => [f.key, Number(draft[f.key])]))),
       });
       if (res.ok) {
-        const data = await res.json();
-        setSettings(data);
-        setDraft(String(data.adsTaxPercentage));
+        applySettings(await res.json());
         setSaved(true);
       }
     } finally {
@@ -45,54 +71,43 @@ function DashboardSettings() {
     }
   }
 
-  const changed = settings && Number(draft) !== settings.adsTaxPercentage;
+  const changed = settings && FIELDS.some((f) => Number(draft[f.key]) !== settings[f.key]);
 
   return (
     <div style={{ ...card(), flex: 1, minWidth: 260 }}>
       <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Pengaturan Dashboard</div>
-      <label style={{ display: 'block', fontSize: 12, color: colors.textDim, marginBottom: 4 }}>
-        Persentase pajak iklan (%)
-      </label>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <input
-          type="number"
-          min="0"
-          step="0.1"
-          disabled={!settings}
-          value={draft}
-          onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
-          style={{
-            width: 100,
-            padding: '8px 10px',
-            boxSizing: 'border-box',
-            background: colors.cardAlt,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 6,
-            color: colors.text,
-            fontSize: 13,
-          }}
-        />
-        <button
-          onClick={handleSave}
-          disabled={!changed || saving}
-          style={{
-            padding: '8px 16px',
-            borderRadius: 6,
-            border: 'none',
-            fontWeight: 600,
-            fontSize: 13,
-            cursor: !changed || saving ? 'default' : 'pointer',
-            background: colors.text,
-            color: colors.bg,
-            opacity: !changed || saving ? 0.5 : 1,
-          }}
-        >
-          {saving ? 'Menyimpan...' : 'Simpan'}
-        </button>
-      </div>
-      <p style={{ fontSize: 11.5, color: colors.textFaint, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
-        Persentase ini ditambahkan di atas pengeluaran Iklan mentah dari Shopee sebelum ditampilkan di Dashboard.
-      </p>
+      {FIELDS.map((f) => (
+        <div key={f.key} style={{ marginBottom: 14 }}>
+          <label style={{ display: 'block', fontSize: 12, color: colors.textDim, marginBottom: 4 }}>{f.label}</label>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            disabled={!settings}
+            value={draft[f.key] ?? ''}
+            onChange={(e) => { setDraft({ ...draft, [f.key]: e.target.value }); setSaved(false); }}
+            style={inputStyle}
+          />
+          <p style={{ fontSize: 11.5, color: colors.textFaint, marginTop: 6, marginBottom: 0, lineHeight: 1.5 }}>{f.help}</p>
+        </div>
+      ))}
+      <button
+        onClick={handleSave}
+        disabled={!changed || saving}
+        style={{
+          padding: '8px 16px',
+          borderRadius: 6,
+          border: 'none',
+          fontWeight: 600,
+          fontSize: 13,
+          cursor: !changed || saving ? 'default' : 'pointer',
+          background: colors.text,
+          color: colors.bg,
+          opacity: !changed || saving ? 0.5 : 1,
+        }}
+      >
+        {saving ? 'Menyimpan...' : 'Simpan'}
+      </button>
       {saved && <p style={{ fontSize: 12, color: colors.green, marginTop: 8, marginBottom: 0 }}>Tersimpan.</p>}
     </div>
   );
