@@ -41,6 +41,8 @@ function touch(sessionId) {
 // dashboard stock entered yet (NULL) stays NULL either way — nothing to
 // consume, per the "unknown is never treated as zero" rule — and consumption
 // never goes below zero.
+const { withStockLog } = require('../stockLog');
+
 const consumeStockQty = db.prepare(`
   UPDATE products SET stock = MAX(stock - ?, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
 `);
@@ -354,7 +356,10 @@ router.post('/scan-item', (req, res) => {
     INSERT INTO scan_progress (session_id, sku, scanned_qty) VALUES (?, ?, 1)
     ON CONFLICT(session_id, sku) DO UPDATE SET scanned_qty = scanned_qty + 1
   `).run(session_id, sku);
-  if (state.session.stock_consumed_at_scan) consumeStock.run(now(), sku); // old-rule session only
+  if (state.session.stock_consumed_at_scan) { // old-rule session only
+    const at = now();
+    withStockLog(sku, 'scan', state.session.order_sn, at, () => consumeStock.run(at, sku));
+  }
   touch(session_id);
 
   const updated = getSessionWithOrder(session_id);
@@ -372,7 +377,11 @@ router.post('/undo-last-scan', (req, res) => {
   }
   db.prepare('UPDATE scan_progress SET scanned_qty = scanned_qty - 1 WHERE session_id = ? AND sku = ?').run(session_id, sku);
   // Only a session that took stock per scan has anything to give back.
-  if (db.prepare('SELECT stock_consumed_at_scan AS f FROM packing_sessions WHERE id = ?').get(session_id)?.f) restoreStock.run(now(), sku);
+  const undoSession = db.prepare('SELECT stock_consumed_at_scan AS f, order_sn FROM packing_sessions WHERE id = ?').get(session_id);
+  if (undoSession?.f) {
+    const at = now();
+    withStockLog(sku, 'unscan', undoSession.order_sn, at, () => restoreStock.run(at, sku));
+  }
   touch(session_id);
   res.json(getSessionWithOrder(session_id));
 });
@@ -752,7 +761,9 @@ function confirmOrderPickedUp(orderSn) {
   // Skipped for a session that already took it per scan (those older sessions
   // took the parts per scan, the way they began).
   if (!session.stock_consumed_at_scan) {
-    for (const it of db.prepare('SELECT sku, qty FROM order_items WHERE order_sn = ?').all(orderSn)) consumeStockQty.run(it.qty, pickedUpAt, it.sku);
+    for (const it of db.prepare('SELECT sku, qty FROM order_items WHERE order_sn = ?').all(orderSn)) {
+      withStockLog(it.sku, 'sale', orderSn, pickedUpAt, () => consumeStockQty.run(it.qty, pickedUpAt, it.sku));
+    }
   }
 
   // Client-requested (2026-09-28): freeze this order's per-item HPP at

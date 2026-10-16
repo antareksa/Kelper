@@ -3,8 +3,10 @@ const multer = require('multer');
 const ExcelJS = require('exceljs');
 const db = require('../db');
 const { syncShopeeCatalog } = require('../catalogSync');
-const { startOfMonthWIB } = require('../wib');
+const { startOfMonthWIB, dateStringWIB, startOfDateWIB, shiftDateStringWIB } = require('../wib');
+const { getSetting } = require('../settings');
 const { isBundleSku } = require('../bundleUtil');
+const { withStockLog } = require('../stockLog');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -214,7 +216,8 @@ router.put('/:sku/stock', (req, res) => {
   if (stock !== null && (typeof stock !== 'number' || !Number.isInteger(stock) || stock < 0)) {
     return res.status(400).json({ error: 'invalid_stock', message: 'stock must be a non-negative integer or null.' });
   }
-  upsertStock.run(sku, stock, Math.floor(Date.now() / 1000));
+  const at = Math.floor(Date.now() / 1000);
+  withStockLog(sku, 'manual', req.adminUsername || null, at, () => upsertStock.run(sku, stock, at));
   res.json({ ok: true, sku, stock });
 });
 
@@ -593,7 +596,9 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
     if (bySku.has(sku)) duplicateRows.push(sku);
     bySku.set(sku, Math.round(stock));
   });
-  db.transaction(() => { for (const [sku, stock] of bySku) upsertStock.run(sku, stock, nowTs); })();
+  db.transaction(() => {
+    for (const [sku, stock] of bySku) withStockLog(sku, 'upload', req.adminUsername || null, nowTs, () => upsertStock.run(sku, stock, nowTs));
+  })();
   res.json({ ok: true, imported: bySku.size, unknownSku, unmatched: [], unreadable, duplicateRows });
 });
 
@@ -937,6 +942,85 @@ router.get('/stock-list', (req, res) => {
       }),
     }))
   );
+});
+
+// Stock Opname (client-requested 2026-10-16): per SKU, over a WIB date range
+// (?start=&end=, YYYY-MM-DD, inclusive): Stok Awal, Masuk, Keluar, Stok Akhir,
+// from stock_log (see stockLog.js).
+//  - Stok Akhir = today's stock minus every logged change after the range.
+//  - Masuk = logged increases in the range; Keluar = logged decreases.
+//  - Stok Awal = Akhir - Masuk + Keluar.
+// Before stockLogStartedAt nothing was logged: Keluar for that part comes from
+// sales history (picked-up orders, what the pickup took off), but Masuk and so
+// Stok Awal are unknown (null) for a range that starts before it, and Stok
+// Akhir too for a range that ends before it.
+router.get('/stock-opname', (req, res) => {
+  const today = dateStringWIB(0);
+  let start = req.query.start || shiftDateStringWIB(today, -1);
+  let end = req.query.end || start;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return res.status(400).json({ error: 'invalid_date', message: 'start/end must be YYYY-MM-DD' });
+  }
+  if (start > end) [start, end] = [end, start];
+  const rangeStart = startOfDateWIB(start);
+  const rangeEnd = startOfDateWIB(shiftDateStringWIB(end, 1));
+  const logStart = Number(getSetting('stockLogStartedAt', '0'));
+  const complete = rangeStart >= logStart; // Masuk / Stok Awal known for the whole range
+
+  const logged = new Map(
+    db.prepare(`
+      SELECT sku,
+             SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) AS masuk,
+             SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END) AS keluar
+      FROM stock_log WHERE created_at >= ? AND created_at < ? GROUP BY sku
+    `).all(Math.max(rangeStart, logStart), rangeEnd).map((r) => [r.sku, r])
+  );
+  const salesBeforeLog = rangeStart < logStart
+    ? new Map(
+        db.prepare(`
+          SELECT oi.sku, SUM(oi.qty) AS qty
+          FROM order_items oi
+          JOIN orders o ON o.order_sn = oi.order_sn
+          JOIN (SELECT order_sn, MAX(completed_at) AS completed_at FROM packing_sessions WHERE status = 'DONE' GROUP BY order_sn) ps
+            ON ps.order_sn = o.order_sn
+          WHERE o.order_sn NOT LIKE 'MOCK-%' AND ps.completed_at >= ? AND ps.completed_at < ?
+          GROUP BY oi.sku
+        `).all(rangeStart, Math.min(rangeEnd, logStart)).map((r) => [r.sku, r.qty])
+      )
+    : new Map();
+  const changedAfter = new Map(
+    db.prepare('SELECT sku, SUM(delta) AS delta FROM stock_log WHERE created_at >= ? GROUP BY sku').all(rangeEnd).map((r) => [r.sku, r.delta])
+  );
+
+  // Names: our own product name, else Shopee's listing (+ variant) name.
+  const shopeeName = new Map();
+  for (const m of db.prepare(`
+    SELECT COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) AS sku, i.name AS item_name, m.model_name
+    FROM shopee_item_models m JOIN shopee_items i ON i.item_id = m.item_id
+  `).all()) {
+    shopeeName.set(m.sku, m.model_name && m.model_name !== m.item_name ? `${m.item_name} - ${m.model_name}` : m.item_name);
+  }
+  const products = new Map(db.prepare('SELECT sku, name, stock FROM products').all().map((p) => [p.sku, p]));
+
+  // Every SKU with a stock on file, plus any that moved in the range.
+  const skus = new Set([...products.values()].filter((p) => p.stock != null).map((p) => p.sku));
+  for (const sku of logged.keys()) skus.add(sku);
+  for (const sku of salesBeforeLog.keys()) skus.add(sku);
+
+  const rows = [...skus]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map((sku) => {
+      const p = products.get(sku);
+      const current = p?.stock ?? null;
+      const log = logged.get(sku);
+      const keluar = (log?.keluar ?? 0) + (salesBeforeLog.get(sku) ?? 0);
+      const masuk = complete ? (log?.masuk ?? 0) : null;
+      const akhir = current != null && rangeEnd > logStart ? current - (changedAfter.get(sku) ?? 0) : null;
+      const awal = masuk != null && akhir != null ? akhir - masuk + keluar : null;
+      return { sku, name: p?.name || shopeeName.get(sku) || null, awal, masuk, keluar, akhir };
+    });
+
+  res.json({ start, end, logStartedAt: logStart || null, complete, rows });
 });
 
 module.exports = router;

@@ -62,6 +62,7 @@ const PACKING_ROLE_ALLOWED = [
   // the stock sheet upload. Not /products/catalog (it carries HPP, Harga,
   // profit and sales), and none of the other product writes.
   ['GET', /^\/products\/stock-list$/],
+  ['GET', /^\/products\/stock-opname$/], // Stock Opname: stock movement only, no prices
   ['PUT', /^\/products\/[^/]+\/stock$/],
   ['POST', /^\/products\/import-stock$/],
   ['GET', /^\/admin\/me$/],

@@ -1,4 +1,5 @@
 const db = require('./db');
+const { withStockLog } = require('./stockLog');
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -23,7 +24,10 @@ const releaseInProgress = db.transaction((session) => {
   const tookStockPerScan = db.prepare('SELECT stock_consumed_at_scan AS f FROM packing_sessions WHERE id = ?').get(session.id)?.f;
   if (tookStockPerScan) {
     for (const row of db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(session.id)) {
-      if (row.scanned_qty > 0) restoreStock.run(row.scanned_qty, now(), row.sku);
+      if (row.scanned_qty > 0) {
+        const at = now();
+        withStockLog(row.sku, 'release', session.order_sn, at, () => restoreStock.run(row.scanned_qty, at, row.sku));
+      }
     }
   }
   db.prepare('DELETE FROM scan_progress WHERE session_id = ?').run(session.id);

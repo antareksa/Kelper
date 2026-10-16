@@ -614,4 +614,23 @@ db.exec(`
   );
 `);
 
+// Client-requested (2026-10-16): Stock Opname (List Barang). One row per change
+// of a SKU's dashboard stock, see stockLog.js. stockLogStartedAt marks when
+// recording began: before it, stock that came in was never recorded (an Item
+// Stok upload just overwrote the number), so the Stock Opname page can only
+// give "Masuk"/"Stok Awal" for periods after it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT NOT NULL,
+    delta INTEGER NOT NULL,
+    stock_after INTEGER,
+    reason TEXT NOT NULL,
+    ref TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS stock_log_created ON stock_log (created_at);
+`);
+db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('stockLogStartedAt', ?)").run(String(Math.floor(Date.now() / 1000)));
+
 module.exports = db;

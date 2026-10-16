@@ -7,6 +7,7 @@ import StockList from './StockList';
 import OrderSearch from './OrderSearch';
 import OperatorPerformance from './OperatorPerformance';
 import ShopeeConfigPage from './ShopeeConfigPage';
+import StockOpname from './StockOpname';
 import IklanRoas from './IklanRoas';
 import { useShopeeConnection } from './useShopeeConnection';
 import { SHOP_ID } from './shopConfig';
@@ -18,6 +19,12 @@ const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 const IKLAN_TAB = { path: '/iklan', label: 'Iklan', Icon: IconBolt };
+
+// List Barang became a group (2026-10-16): the list itself + Stock Opname.
+const ITEMS_SUB_ITEMS = [
+  { path: '/list-barang', label: 'List Barang' },
+  { path: '/list-barang/stock-opname', label: 'Stock Opname' },
+];
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
@@ -32,6 +39,26 @@ const ItemsIcon = ITEMS_TAB.Icon;
 const OrderIcon = ORDER_TAB.Icon;
 const IklanIcon = IKLAN_TAB.Icon;
 const PackingIcon = PACKING_GROUP.Icon;
+
+function subItemStyle(active) {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    width: '100%',
+    textAlign: 'left',
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: 'none',
+    background: active ? colors.cardAlt : 'transparent',
+    color: active ? colors.text : colors.textDim,
+    fontSize: 13.5,
+    fontWeight: active ? 600 : 400,
+    cursor: 'pointer',
+    fontFamily: 'var(--sans)',
+  };
+}
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -303,11 +330,23 @@ function Dashboard() {
                   stock-only version (StockList), a full admin the whole page. */}
               <button
                 onClick={() => navigate(ITEMS_TAB.path)}
-                style={navItemStyle(location.pathname === ITEMS_TAB.path)}
+                style={navItemStyle(location.pathname.startsWith(ITEMS_TAB.path))}
               >
                 <ItemsIcon size={16} />
-                {ITEMS_TAB.label}
+                <span style={{ flex: 1 }}>{ITEMS_TAB.label}</span>
+                <span style={{ display: 'flex', transform: location.pathname.startsWith(ITEMS_TAB.path) ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
+                  <IconChevronDown size={12} />
+                </span>
               </button>
+              {location.pathname.startsWith(ITEMS_TAB.path) && (
+                <div style={{ marginLeft: 18, marginTop: 6, marginBottom: 4, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {ITEMS_SUB_ITEMS.map(({ path, label }) => (
+                    <button key={path} onClick={() => navigate(path)} style={subItemStyle(location.pathname === path)}>
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
 
               <button
@@ -434,6 +473,7 @@ function Dashboard() {
             <Route path="/" element={<Navigate to={homePath} replace />} />
             <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
+            <Route path="/list-barang/stock-opname" element={<StockOpname />} />
             <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/iklan" element={isPacking ? <Navigate to={homePath} replace /> : <IklanRoas />} />
