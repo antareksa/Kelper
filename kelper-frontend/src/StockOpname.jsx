@@ -31,6 +31,21 @@ function formatTimestamp(ts) {
 
 const num = (v) => (v == null ? '—' : v.toLocaleString('id-ID'));
 
+const buttonStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  height: 34,
+  padding: '0 12px',
+  borderRadius: 8,
+  border: `1px solid ${colors.border}`,
+  background: colors.card,
+  color: colors.text,
+  fontSize: 13,
+  cursor: 'pointer',
+  fontFamily: 'var(--sans)',
+  whiteSpace: 'nowrap',
+};
+
 const inputStyle = {
   height: 34,
   borderRadius: 8,
@@ -83,6 +98,28 @@ function StockOpname() {
   }), [rows]);
   const est = data?.estimate ? '≈ ' : ''; // figures that assume no stock came in before recording began
 
+  // Downloads the always-current stock template (client-requested 2026-10-17):
+  // every SKU in the Shopee catalog cache, SKU | Name | Stock -- Stock blank
+  // to fill in and re-upload via List Barang's Item Stok importer
+  // (/products/import-stock). Built live on each request (see
+  // /products/stock-template), so a SKU the catalog sync just added shows up
+  // the next time this is clicked, with nothing to maintain by hand.
+  async function handleDownloadTemplate() {
+    setError(null);
+    try {
+      const res = await apiFetch(`${API_BASE}/products/stock-template`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Gagal mengunduh template');
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'item-stok-template.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   return (
     <div style={{ color: colors.text }}>
       <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', marginBottom: 4 }}>Stock Opname</div>
@@ -132,6 +169,13 @@ function StockOpname() {
           <input type="checkbox" checked={movedOnly} onChange={(e) => setMovedOnly(e.target.checked)} />
           Hanya yang bergerak
         </label>
+        <button
+          onClick={handleDownloadTemplate}
+          style={buttonStyle}
+          title="Unduh template Item Stok (semua SKU terbaru, kolom Stock kosong untuk diisi lalu diunggah di List Barang)"
+        >
+          Unduh Template Stok
+        </button>
       </div>
 
       {data?.estimate && data.logStartedAt && (

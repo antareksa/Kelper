@@ -563,9 +563,13 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
 // neither the Shopee catalog nor the products table is reported (unknownSku) and
 // skipped, the same rule as the Item Data upload. This replaced the older daily
 // sheet that was matched by listing name (DESCRIPSI | STOK AKHIR).
-// A row whose stock is empty, negative or not a number (or a formula the file
-// carries no result for) is reported, never written as 0 -- an unknown count must
-// not read as sold out. A real 0 is written.
+// A blank Stock cell is skipped silently, not reported -- the "Unduh Template
+// Stok" download (see /stock-template) lists every SKU, and the expected use
+// is filling in only the ones that changed and leaving the rest blank
+// (client-requested 2026-10-17); a blank row is no longer an exceptional
+// case. A stock that IS filled in but negative or not a number is still
+// reported as unreadable, never written as 0 -- an unknown count must not
+// read as sold out. A real 0 is written.
 router.post('/import-stock', upload.single('file'), async (req, res) => {
   const sheet = await loadSheet(req, res);
   if (!sheet) return;
@@ -591,8 +595,9 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
     if (!sku) return;
     if (!known.has(sku)) { unknownSku.push(sku); return; }
     const raw = cellValue(row.getCell(stokColumn));
-    const stock = raw === null || String(raw).trim() === '' ? null : Number(raw);
-    if (stock === null || !Number.isFinite(stock) || stock < 0) { unreadable.push(`${sku} (${cellText(row.getCell(stokColumn)) || 'kosong'})`); return; }
+    if (raw === null || String(raw).trim() === '') return; // intentionally left blank -- no change for this SKU
+    const stock = Number(raw);
+    if (!Number.isFinite(stock) || stock < 0) { unreadable.push(`${sku} (${cellText(row.getCell(stokColumn))})`); return; }
     if (bySku.has(sku)) duplicateRows.push(sku);
     bySku.set(sku, Math.round(stock));
   });
@@ -746,6 +751,50 @@ router.get('/export-items', async (req, res) => {
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="item-shopee.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
+});
+
+// Stock Opname's "Unduh Template Stok" (client-requested 2026-10-17): every
+// SKU currently in the Shopee catalog cache, SKU | Name | Stock, Stock left
+// blank to fill in and re-upload via /products/import-stock (which reads
+// only SKU and Stock -- Name is for reference, ignored on upload; a blank
+// Stock cell is skipped there, not an error, so leaving most rows untouched
+// and filling in only what changed is the expected use). Built live from
+// shopee_items/shopee_item_models on every request, same join /export-items
+// uses -- not a static file, so a SKU added by the next catalog sync shows
+// up the next time this is downloaded, with no template to maintain by hand.
+router.get('/stock-template', async (req, res) => {
+  const items = db.prepare('SELECT * FROM shopee_items').all();
+  const modelsByItem = new Map();
+  for (const m of db.prepare('SELECT * FROM shopee_item_models ORDER BY model_id').all()) {
+    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+    modelsByItem.get(m.item_id).push(m);
+  }
+
+  const rows = [];
+  for (const item of items) {
+    for (const m of modelsByItem.get(item.item_id) || []) {
+      const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
+      const name = m.model_name && m.model_name !== item.name ? `${item.name} - ${m.model_name}` : item.name;
+      rows.push({ sku, name });
+    }
+  }
+  rows.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Item Stok');
+  ws.columns = [
+    { header: 'SKU', width: 18 },
+    { header: 'Name', width: 60 },
+    { header: 'Stock', width: 12 },
+  ];
+  for (const r of rows) ws.addRow([r.sku, r.name, null]);
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="item-stok-template.xlsx"');
   await wb.xlsx.write(res);
   res.end();
 });
