@@ -831,8 +831,8 @@ async function syncAndLabelOrders(shopId) {
 
 const insertAffiliatePerformance = db.prepare(`
   INSERT OR REPLACE INTO affiliate_performance_daily
-    (shop_id, date, sales_confirmed, orders_confirmed, buyers_confirmed, fetched_at)
-  VALUES (?, ?, ?, ?, ?, ?)
+    (shop_id, date, sales_confirmed, orders_confirmed, buyers_confirmed, commission, fetched_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
 // Fetches the Affiliasi total of ONE missing day per call: the newest day without a
@@ -883,6 +883,7 @@ async function fetchAffiliatePerformance(shopId) {
     let sales = 0;
     let orders = 0;
     let buyers = 0;
+    let commission = 0; // client-requested (2026-10-16): the actual cost of Affiliasi, for Laba Bersih
     for (let pageNo = 1; pageNo <= AFFILIATE_MAX_PAGES; pageNo += 1) {
       const result = await getAffiliatePerformance(accessToken, shopId, { date: day.replace(/-/g, ''), pageNo });
       if (result.error) {
@@ -896,6 +897,7 @@ async function fetchAffiliatePerformance(shopId) {
         sales += Number(affiliate.sales) || 0; // "sales" arrives as a string
         orders += Number(affiliate.orders) || 0;
         buyers += Number(affiliate.total_buyers) || 0;
+        commission += Number(affiliate.est_commission) || 0;
       }
       if (!response.has_more) break;
     }
@@ -903,7 +905,7 @@ async function fetchAffiliatePerformance(shopId) {
     // No affiliate activity that day is a genuine zero, not "not fetched yet". Storing a
     // zeroed row either way is what lets the Dashboard tell "connected, zero activity"
     // apart from "never fetched" (no row at all).
-    insertAffiliatePerformance.run(shopId, day, sales, orders, buyers, now());
+    insertAffiliatePerformance.run(shopId, day, sales, orders, buyers, commission, now());
   } catch (err) {
     affiliateFailedAt.set(`${shopId}:${day}`, now()); // a token or network failure counts too
     throw err;

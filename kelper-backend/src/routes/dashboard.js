@@ -390,7 +390,7 @@ router.get('/summary', (req, res) => {
   // Portal not connected, the fetch hadn't run yet, or a date old enough to
   // predate this feature) rather than a fabricated 0.
   const affiliateRow = db
-    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
+    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed, commission FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
     .get(shopId, selectedDate);
 
   // Page View (replaced Pengunjung, 2026-10-13): from per-item readings of Shopee's view
@@ -408,6 +408,15 @@ router.get('/summary', (req, res) => {
   // Client-requested (2026-09-22): a configurable percentage added on top of
   // raw Shopee ad spend for display — see /dashboard/settings below.
   const adsTaxPercentage = Number(getSetting('adsTaxPercentage', '0'));
+  const iklan = adsRow ? adsRow.expense * (1 + adsTaxPercentage / 100) : null;
+  const affiliasiCommission = affiliateRow?.commission ?? null;
+  // Client-requested (2026-10-16): Laba Kotor minus every real cost this
+  // Dashboard tracks. Iklan/Affiliasi commission can be null (not fetched
+  // yet for this date, or a date before the commission column existed) --
+  // treated as 0 here rather than blocking the whole figure, same tradeoff
+  // CostBreakdown already makes for its total. Layanan/Biaya Pesanan are
+  // never null once there are real orders (see sumOrdersInRange).
+  const labaBersih = today.laba - today.layanan - today.biayaPesanan - (iklan ?? 0) - (affiliasiCommission ?? 0);
 
   res.json({
     date: selectedDate,
@@ -423,7 +432,8 @@ router.get('/summary', (req, res) => {
       laba: today.laba,
       layanan: today.layanan,
       biayaPesanan: today.biayaPesanan,
-      iklan: adsRow ? adsRow.expense * (1 + adsTaxPercentage / 100) : null,
+      iklan,
+      labaBersih,
       marginPct: marginPctToday,
     },
     affiliasi: affiliateRow
@@ -432,6 +442,7 @@ router.get('/summary', (req, res) => {
           salesConfirmed: affiliateRow.sales_confirmed,
           ordersConfirmed: affiliateRow.orders_confirmed,
           buyersConfirmed: affiliateRow.buyers_confirmed,
+          commission: affiliasiCommission,
         }
       : null,
     pageViews: pageViews ? { ...pageViews, partial: isToday } : null,

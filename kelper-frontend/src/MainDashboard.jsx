@@ -108,6 +108,11 @@ function PageViewCard({ pageViews }) {
 // source (Affiliate (AMS), fetched once daily) with its own 1-day reporting
 // lag, so it's never "today". Its row is the selected date's, so the label
 // doesn't repeat the date (the date picker at the top already shows it).
+// Shows the affiliate COMMISSION (the actual cost, client-requested
+// 2026-10-16) rather than salesConfirmed (attributed revenue, already
+// counted inside Omzet/Laba Kotor -- showing it here would look like an
+// extra cost it isn't). Blocked both when nothing was fetched for this date
+// at all, and for a date fetched before the commission column existed.
 // Iklan is genuinely today's spend so far (refetched every few minutes —
 // see shopeeSync.js's fetchAdsPerformance), same as Margin/Layanan/Biaya
 // Pesanan. `blocked` only fires transiently, before the first fetch has
@@ -121,9 +126,9 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
     {
       label: 'Affiliasi',
-      value: affiliasi ? formatRupiah(affiliasi.salesConfirmed) : null,
+      value: affiliasi?.commission != null ? formatRupiah(affiliasi.commission) : null,
       color: colors.orange,
-      blocked: !affiliasi,
+      blocked: affiliasi?.commission == null,
     },
   ];
   return (
@@ -228,14 +233,15 @@ function ProductList({ products }) {
   );
 }
 
-// Ranks today's cost figures against each other — all three now have a real
+// Ranks today's cost figures against each other — all four now have a real
 // data source (see ProfitFunnel), so this went from a permanent "not
 // connected" placeholder to an actual breakdown.
-function CostBreakdown({ iklan, layanan, biayaPesanan, dateLabel }) {
+function CostBreakdown({ iklan, layanan, biayaPesanan, affiliasiCommission, dateLabel }) {
   const costs = [
     { label: 'Iklan', value: iklan },
     { label: 'Layanan', value: layanan },
     { label: 'Biaya Pesanan', value: biayaPesanan },
+    { label: 'Affiliasi', value: affiliasiCommission },
   ]
     .filter((c) => c.value != null)
     .sort((a, b) => b.value - a.value);
@@ -449,6 +455,7 @@ function MainDashboard() {
             <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
             <KpiCard label="Omzet" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
             <KpiCard label="Laba Kotor" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
+            <KpiCard label="Laba Bersih" value={formatRupiah(data.today.labaBersih)} />
             <KpiCard
               label="Persentase Profit"
               value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
@@ -469,7 +476,7 @@ function MainDashboard() {
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <ProductList products={data.topProducts} />
-        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
+        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasiCommission={data.affiliasi?.commission} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>

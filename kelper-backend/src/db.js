@@ -510,6 +510,17 @@ if (!packingSessionColsForStock.includes('stock_consumed_at_scan')) {
   db.exec('UPDATE packing_sessions SET stock_consumed_at_scan = 1');
 }
 
+// Client-requested (2026-10-16): Laba Bersih (Omzet dashboard) needs the
+// actual cost of Affiliasi, not just the attributed sales it already
+// tracked — Shopee's get_affiliate_performance answers this per affiliate
+// as est_commission, previously summed into nothing (see shopeeSync.js's
+// fetchAffiliatePerformance). NULL for any day fetched before this column
+// existed — shown as "Belum tersedia", same as a day not fetched at all.
+const affiliatePerformanceCols = db.prepare("PRAGMA table_info(affiliate_performance_daily)").all().map((c) => c.name);
+if (!affiliatePerformanceCols.includes('commission')) {
+  db.exec('ALTER TABLE affiliate_performance_daily ADD COLUMN commission REAL');
+}
+
 // Client-requested (2026-10-03): which single products make up each bundle
 // listing (e.g. KELPER-12 = 1 x KEL-01 + 1 x KEL-07). Both sides are SKUs --
 // bundle_sku is a Shopee listing, component_sku a single product -- so the
