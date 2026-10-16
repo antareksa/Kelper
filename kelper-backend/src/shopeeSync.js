@@ -14,7 +14,7 @@ const {
   getMaxReadyToCheck,
   isWithinWorkHour,
 } = require('./packingSettings');
-const { dateStringWIB, dateStringDDMMYYYYWIB } = require('./wib');
+const { dateStringWIB, dateStringDDMMYYYYWIB, startOfDayWIB } = require('./wib');
 const { priorityOrderBy } = require('./priorityOrder');
 
 function now() {
@@ -875,24 +875,42 @@ const insertAffiliatePerformance = db.prepare(`
 const AFFILIATE_MAX_PAGES = 100; // 2000 affiliates; a stop against a runaway has_more
 const AFFILIATE_BACKFILL_DAYS = 30;
 const AFFILIATE_RETRY_SECONDS = 30 * 60;
+// Client-decided (2026-10-16): a stored day is NOT final -- Affiliasi counts confirmed
+// orders, and an order is confirmed days after it was placed (and a return can lower it).
+// So the last AFFILIATE_REFRESH_DAYS days are fetched again whenever their stored figure
+// is older than AFFILIATE_REFRESH_SECONDS, oldest-fetched first, one day per call like
+// the backfill. A missing day still goes first.
+const AFFILIATE_REFRESH_DAYS = 7;
+const AFFILIATE_REFRESH_SECONDS = 3 * 60 * 60;
 const affiliateFailedAt = new Map(); // "shopId:date" -> unix seconds of the last failed attempt
 function resetAffiliateRetry() { affiliateFailedAt.clear(); } // for tests
 
 async function fetchAffiliatePerformance(shopId) {
-  const have = new Set(
+  const fetchedAt = new Map(
     db
-      .prepare('SELECT date FROM affiliate_performance_daily WHERE shop_id = ? AND date >= ?')
+      .prepare('SELECT date, fetched_at FROM affiliate_performance_daily WHERE shop_id = ? AND date >= ?')
       .all(shopId, dateStringWIB(AFFILIATE_BACKFILL_DAYS))
-      .map((r) => r.date)
+      .map((r) => [r.date, r.fetched_at])
   );
+  const recentlyFailed = (candidate) => {
+    const failedAt = affiliateFailedAt.get(`${shopId}:${candidate}`);
+    return failedAt && now() - failedAt < AFFILIATE_RETRY_SECONDS;
+  };
   let day = null;
   for (let ago = 1; ago <= AFFILIATE_BACKFILL_DAYS; ago += 1) {
     const candidate = dateStringWIB(ago);
-    if (have.has(candidate)) continue;
-    const failedAt = affiliateFailedAt.get(`${shopId}:${candidate}`);
-    if (failedAt && now() - failedAt < AFFILIATE_RETRY_SECONDS) continue;
+    if (fetchedAt.has(candidate) || recentlyFailed(candidate)) continue;
     day = candidate;
     break;
+  }
+  if (!day) {
+    let oldest = null;
+    for (let ago = 1; ago <= AFFILIATE_REFRESH_DAYS; ago += 1) {
+      const candidate = dateStringWIB(ago);
+      const at = fetchedAt.get(candidate);
+      if (at == null || now() - at < AFFILIATE_REFRESH_SECONDS || recentlyFailed(candidate)) continue;
+      if (oldest == null || at < oldest) { oldest = at; day = candidate; }
+    }
   }
   if (!day) return;
 
@@ -969,6 +987,7 @@ async function fetchPageViews(shopId) {
 }
 
 const ADS_REFETCH_INTERVAL_SECONDS = 5 * 60;
+let adsYesterdayAttemptAt = 0; // a failed fetch of yesterday waits ADS_REFETCH_INTERVAL_SECONDS too
 const insertAdsPerformance = db.prepare(`
   INSERT OR REPLACE INTO ads_performance_daily (shop_id, date, expense, fetched_at)
   VALUES (?, ?, ?, ?)
@@ -997,6 +1016,28 @@ async function fetchAdsPerformance(shopId) {
 
   const totalExpense = (result.response || []).reduce((sum, hour) => sum + (hour.expense || 0), 0);
   insertAdsPerformance.run(shopId, today, totalExpense, now());
+
+  await refetchAdsYesterday(shopId, accessToken);
+}
+
+// Client-decided (2026-10-16): the last fetch of a day happens up to
+// ADS_REFETCH_INTERVAL_SECONDS before midnight, so the spend of those last minutes was
+// never counted. Yesterday is fetched once more after midnight; a row fetched after
+// 00:00 WIB is final.
+async function refetchAdsYesterday(shopId, accessToken) {
+  const yesterday = dateStringWIB(1);
+  const row = db.prepare('SELECT fetched_at FROM ads_performance_daily WHERE shop_id = ? AND date = ?').get(shopId, yesterday);
+  if (!row || row.fetched_at >= startOfDayWIB(0)) return; // no row: there was no spend tracked that day
+  if (now() - adsYesterdayAttemptAt < ADS_REFETCH_INTERVAL_SECONDS) return;
+  adsYesterdayAttemptAt = now();
+
+  const result = await getAllCpcAdsHourlyPerformance(accessToken, shopId, dateStringDDMMYYYYWIB(1));
+  if (result.error) {
+    console.error(`[server] get_all_cpc_ads_hourly_performance (yesterday) failed for shop ${shopId}: ${result.message || result.error}`);
+    return;
+  }
+  const totalExpense = (result.response || []).reduce((sum, hour) => sum + (hour.expense || 0), 0);
+  insertAdsPerformance.run(shopId, yesterday, totalExpense, now());
 }
 
 // Runs inside the Dashboard Station's server process (see server.js) — the

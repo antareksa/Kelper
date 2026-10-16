@@ -46,16 +46,22 @@ function formatDateDDMMYYYY(dateStr) {
   return `${d}/${m}/${y}`;
 }
 
+// "16/10/2026" for one day, "01/10/2026 - 15/10/2026" for a range; "Hari Ini" for today alone.
+function rangeLabel(data) {
+  if (data.start === data.end) return data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.start);
+  return `${formatDateDDMMYYYY(data.start)} - ${formatDateDDMMYYYY(data.end)}`;
+}
+
 // pct is a plain percentage-change number (e.g. 12.3 or -4.5); suffix lets
 // the margin card (a percentage-POINT delta, not a percentage change) read
 // correctly instead of implying a second layer of percent-of-percent math.
-function trendLabel(pct, suffix = '% dari hari sebelumnya') {
+function trendLabel(pct, suffix = '% dari hari sebelumnya', emptyText = 'Tidak ada pembanding (hari sebelumnya kosong)') {
   // Not "no data for this day" — the day's own number above this line is
   // real. This only means the PREVIOUS day had 0, so there's nothing to
   // divide by for a % comparison (see pctChange). Worded around "kemarin"
   // on purpose — that read as if the selected day itself was missing data,
   // which is what caused the confusion this label exists to fix.
-  if (pct == null) return 'Tidak ada pembanding (hari sebelumnya kosong)';
+  if (pct == null) return emptyText;
   return `${pct > 0 ? '+' : ''}${pct}${suffix}`;
 }
 
@@ -79,7 +85,7 @@ function KpiCard({ label, value, trend, spark }) {
       <div style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
       <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
         {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
-        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix) : 'Tidak ada pembanding'}</span>
+        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix, trend.emptyText) : 'Tidak ada pembanding'}</span>
       </div>
       {spark && spark.length >= 2 ? <Sparkline data={spark} color={sparkColor} height={30} /> : <div style={{ height: 30 }} />}
     </div>
@@ -89,7 +95,7 @@ function KpiCard({ label, value, trend, spark }) {
 // Page View (replaced Pengunjung, 2026-10-13): the day's views of the shop's product pages,
 // summed over all items. It counts page views, not unique visitors. For today it is the
 // count since midnight so far.
-function PageViewCard({ pageViews }) {
+function PageViewCard({ pageViews, dayCount }) {
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
       <CardHeader label="Jumlah Pengunjung" />
@@ -97,7 +103,11 @@ function PageViewCard({ pageViews }) {
         {pageViews ? pageViews.pageViews.toLocaleString('id-ID') : '—'}
       </div>
       <div style={{ fontSize: 11.5, marginTop: 4, marginBottom: 12, color: colors.textFaint, lineHeight: 1.4 }}>
-        {pageViews ? (pageViews.partial ? 'Sejak 00:00 sampai sekarang' : 'Total halaman produk dilihat hari itu') : 'Belum ada data untuk tanggal ini'}
+        {pageViews
+          ? pageViews.partial
+            ? dayCount === 1 ? 'Sejak 00:00 sampai sekarang' : 'Sampai sekarang'
+            : dayCount === 1 ? 'Total halaman produk dilihat hari itu' : 'Total halaman produk dilihat dalam periode ini'
+          : 'Belum ada data untuk tanggal ini'}
       </div>
       <div style={{ height: 30 }} />
     </div>
@@ -163,13 +173,14 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   );
 }
 
-// Real intraday cumulative Omzet/Laba for today, bucketed by WIB hour —
-// replaces the old hardcoded placeholder curve.
-function LineChart({ omzetSeries, labaSeries, dateLabel }) {
+// Omzet/Laba estimate: for one day the running total per WIB hour; for a
+// range each day's own total (see the backend's chart.unit).
+function LineChart({ omzetSeries, labaSeries, dateLabel, unit }) {
+  const title = `Omzet vs Laba ${dateLabel} (${unit === 'day' ? 'per hari' : 'per jam'})`;
   if (!omzetSeries || omzetSeries.length === 0) {
     return (
       <div style={card({ flex: 1 })}>
-        <CardHeader label={`Omzet vs Laba ${dateLabel} (per jam)`} />
+        <CardHeader label={title} />
         <div style={{ padding: '30px 0', textAlign: 'center', color: colors.textDim, fontSize: 13 }}>Belum ada order.</div>
       </div>
     );
@@ -188,7 +199,7 @@ function LineChart({ omzetSeries, labaSeries, dateLabel }) {
 
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label={`Omzet vs Laba ${dateLabel} (per jam)`} />
+      <CardHeader label={title} />
       <div style={{ position: 'relative' }}>
         <svg viewBox="0 0 300 100" preserveAspectRatio="none" style={{ width: '100%', height: 140, display: 'block' }}>
           <line x1="0" y1="92" x2="300" y2="92" stroke={colors.border} strokeWidth="1" strokeDasharray="2 4" />
@@ -207,10 +218,10 @@ function LineChart({ omzetSeries, labaSeries, dateLabel }) {
   );
 }
 
-function ProductList({ products }) {
+function ProductList({ products, dateLabel }) {
   return (
     <div style={card({ flex: 1 })}>
-      <CardHeader label="Produk Paling Menguntungkan (30 Hari Terakhir)" />
+      <CardHeader label={`Produk Paling Menguntungkan ${dateLabel}`} />
       {products.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '20px 0', color: colors.textDim, fontSize: 13 }}>Belum ada data penjualan.</div>
       ) : (
@@ -370,15 +381,18 @@ function PriceDiffList({ diffs }) {
 function MainDashboard() {
   const shopName = useShopName();
   const today = todayDateStringWIB();
-  const [selectedDate, setSelectedDate] = useState(yesterdayDateStringWIB());
+  // Client-requested (2026-10-16): a date range, both ends yesterday by default
+  // (the latest fully complete day).
+  const [startDate, setStartDate] = useState(yesterdayDateStringWIB());
+  const [endDate, setEndDate] = useState(yesterdayDateStringWIB());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
 
-  async function load(dateToLoad) {
+  async function load(start, end) {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}&date=${dateToLoad}`);
+      const res = await apiFetch(`${API_BASE}/dashboard/summary?shop_id=${SHOP_ID}&start=${start}&end=${end}`);
       if (res.ok) {
         setData(await res.json());
         setLastRefreshAt(Date.now());
@@ -389,14 +403,13 @@ function MainDashboard() {
   }
 
   useEffect(() => {
-    load(selectedDate);
-    // Only auto-refresh while looking at today — a past date's numbers never
-    // change on their own, so polling it every minute would just be wasted
-    // requests.
-    if (selectedDate !== today) return undefined;
-    const interval = setInterval(() => load(selectedDate), REFRESH_MS);
+    load(startDate, endDate);
+    // Only auto-refresh while the range reaches today — a past range's numbers
+    // never change on their own, so polling it would just be wasted requests.
+    if (endDate < today) return undefined;
+    const interval = setInterval(() => load(startDate, endDate), REFRESH_MS);
     return () => clearInterval(interval);
-  }, [selectedDate]);
+  }, [startDate, endDate]);
 
   if (loading && !data) {
     return <div style={{ color: colors.textDim, padding: 40, textAlign: 'center' }}>Memuat data dashboard...</div>;
@@ -405,31 +418,53 @@ function MainDashboard() {
     return <div style={{ color: colors.red, padding: 40, textAlign: 'center' }}>Gagal memuat data dashboard.</div>;
   }
 
+  // A one-day range compares with the day before; a longer one with the
+  // period of the same length right before it.
+  const periodWord = data.dayCount > 1 ? 'periode' : 'hari';
+  const trendText = {
+    suffix: `% dari ${periodWord} sebelumnya`,
+    emptyText: `Tidak ada pembanding (${periodWord} sebelumnya kosong)`,
+  };
+
   return (
     <div style={{ color: colors.text }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa {formatDateDDMMYYYY(data.date)}</div>
+          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Performa {rangeLabel(data)}</div>
           <div style={{ fontSize: 12, color: colors.textDim }}>{shopName || 'Toko belum terhubung'} — terakhir diperbarui {formatTime(lastRefreshAt)}</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Picking a start after the end (or an end before the start) moves
+              the other end along, so the range is never backwards. */}
           <input
             type="date"
-            value={selectedDate}
+            aria-label="Tanggal Mulai"
+            value={startDate}
             max={today}
-            onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
-            style={{
-              background: colors.cardAlt,
-              border: `1px solid ${colors.border}`,
-              color: colors.text,
-              padding: '6px 12px',
-              borderRadius: 8,
-              fontFamily: 'var(--sans)',
-              cursor: 'pointer',
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              setStartDate(v);
+              if (v > endDate) setEndDate(v);
             }}
+            style={dateInputStyle}
+          />
+          <span style={{ color: colors.textDim, fontSize: 13 }}>s/d</span>
+          <input
+            type="date"
+            aria-label="Tanggal Selesai"
+            value={endDate}
+            max={today}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              setEndDate(v);
+              if (v < startDate) setStartDate(v);
+            }}
+            style={dateInputStyle}
           />
           <button
-            onClick={() => load(selectedDate)}
+            onClick={() => load(startDate, endDate)}
             style={{
               background: colors.cardAlt,
               border: `1px solid ${colors.border}`,
@@ -447,21 +482,21 @@ function MainDashboard() {
 
       {!data.hasData ? (
         <div style={{ ...card(), textAlign: 'center', padding: '32px 0', color: colors.textDim, fontSize: 14, marginBottom: 12 }}>
-          Data tidak tersedia untuk tanggal {formatDateDDMMYYYY(data.date)}.
+          Data tidak tersedia untuk {data.start === data.end ? 'tanggal' : 'periode'} {rangeLabel(data)}.
         </div>
       ) : (
         <>
           <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-            <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct }} spark={data.series.orderCount} />
-            <KpiCard label="Omzet" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct }} spark={data.series.omzet} />
-            <KpiCard label="Laba Kotor" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct }} spark={data.series.laba} />
+            <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct, ...trendText }} spark={data.series.orderCount} />
+            <KpiCard label="Omzet" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct, ...trendText }} spark={data.series.omzet} />
+            <KpiCard label="Laba Kotor" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct, ...trendText }} spark={data.series.laba} />
             <KpiCard label="Laba Bersih" value={formatRupiah(data.today.labaBersih)} />
             <KpiCard
               label="Persentase Profit"
               value={data.today.marginPct != null ? `${data.today.marginPct}%` : '—'}
-              trend={{ pct: data.trend.marginPctDelta, suffix: ' poin dari hari sebelumnya' }}
+              trend={{ pct: data.trend.marginPctDelta, suffix: ` poin dari ${periodWord} sebelumnya`, emptyText: trendText.emptyText }}
             />
-            <PageViewCard pageViews={data.pageViews} />
+            <PageViewCard pageViews={data.pageViews} dayCount={data.dayCount} />
           </div>
 
           <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
@@ -469,14 +504,14 @@ function MainDashboard() {
           </div>
 
           <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-            <LineChart omzetSeries={data.todayHourly.omzet} labaSeries={data.todayHourly.laba} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
+            <LineChart omzetSeries={data.chart.omzet} labaSeries={data.chart.laba} unit={data.chart.unit} dateLabel={rangeLabel(data)} />
           </div>
         </>
       )}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <ProductList products={data.topProducts} />
-        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasiCommission={data.affiliasi?.commission} dateLabel={data.isToday ? 'Hari Ini' : formatDateDDMMYYYY(data.date)} />
+        <ProductList products={data.topProducts} dateLabel={rangeLabel(data)} />
+        <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasiCommission={data.affiliasi?.commission} dateLabel={rangeLabel(data)} />
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
@@ -492,5 +527,15 @@ function MainDashboard() {
     </div>
   );
 }
+
+const dateInputStyle = {
+  background: colors.cardAlt,
+  border: `1px solid ${colors.border}`,
+  color: colors.text,
+  padding: '6px 12px',
+  borderRadius: 8,
+  fontFamily: 'var(--sans)',
+  cursor: 'pointer',
+};
 
 export default MainDashboard;

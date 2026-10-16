@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { startOfDayWIB, dateStringWIB, startOfDateWIB, shiftDateStringWIB } = require('../wib');
+const { dateStringWIB, startOfDateWIB, shiftDateStringWIB } = require('../wib');
 const { getSetting, setSetting } = require('../settings');
 
 const router = express.Router();
@@ -256,52 +256,63 @@ function pageViewsFor(shopId, date) {
   return counted === 0 ? null : { date, pageViews: total };
 }
 
+// Max length of a Dashboard date range, in days. One SQL pass per day for the series.
+const MAX_RANGE_DAYS = 366;
+
+// Every YYYY-MM-DD from start to end, inclusive.
+function datesInRange(start, end) {
+  const dates = [];
+  for (let d = start; d <= end; d = shiftDateStringWIB(d, 1)) dates.push(d);
+  return dates;
+}
+
+// Client-requested (2026-10-16): the Dashboard shows a date RANGE (?start=&end=, both
+// YYYY-MM-DD WIB, inclusive). ?date= alone still means that one day. Every figure is the
+// total over the range; the trend compares with the period of the same length right
+// before it.
 router.get('/summary', (req, res) => {
   const { shop_id: shopId, date } = req.query;
   if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
   const todayDateStr = dateStringWIB(0);
-  const selectedDate = date || todayDateStr;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
-    return res.status(400).json({ error: 'invalid_date', message: 'date must be YYYY-MM-DD' });
+  let startDate = req.query.start || date || todayDateStr;
+  let endDate = req.query.end || date || startDate;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return res.status(400).json({ error: 'invalid_date', message: 'start/end must be YYYY-MM-DD' });
   }
-  const isToday = selectedDate === todayDateStr;
+  if (startDate > endDate) [startDate, endDate] = [endDate, startDate];
+  const rangeDates = datesInRange(startDate, endDate);
+  if (rangeDates.length > MAX_RANGE_DAYS) {
+    return res.status(400).json({ error: 'range_too_long', message: `a range can be at most ${MAX_RANGE_DAYS} days` });
+  }
+  const dayCount = rangeDates.length;
+  // The range reaches today: its figures are still growing (live view, partial Page View).
+  const isToday = endDate >= todayDateStr;
 
   const skuPrices = buildSkuPriceMap();
-
-  // 7 days (WIB) ending on the selected date, oldest first, for the
-  // sparklines + selected-day/day-before trend. Defaults to today when no
-  // date is picked, same range as before the date picker existed.
-  const days = [];
-  for (let daysAgo = 6; daysAgo >= 0; daysAgo -= 1) {
-    const dateStr = shiftDateStringWIB(selectedDate, -daysAgo);
-    const start = startOfDateWIB(dateStr);
-    const end = startOfDateWIB(shiftDateStringWIB(dateStr, 1));
-    days.push(sumOrdersInRange(shopId, skuPrices, start, end));
-  }
-  const today = days[days.length - 1];
-  const yesterday = days[days.length - 2];
+  const rangeStart = startOfDateWIB(startDate);
+  const rangeEnd = startOfDateWIB(shiftDateStringWIB(endDate, 1));
+  const today = sumOrdersInRange(shopId, skuPrices, rangeStart, rangeEnd);
+  const yesterday = sumOrdersInRange(shopId, skuPrices, startOfDateWIB(shiftDateStringWIB(startDate, -dayCount)), rangeStart);
   const marginPctToday = today.omzet ? Math.round((today.laba / today.omzet) * 1000) / 10 : null;
   const marginPctYesterday = yesterday.omzet ? Math.round((yesterday.laba / yesterday.omzet) * 1000) / 10 : null;
 
-  // Whether the selected day has real orders. On its own this no longer decides whether
+  // Sparklines: one point per day of the range, at least the 7 days ending on its last
+  // day (a one-day range would otherwise be a single dot).
+  const seriesDates = dayCount >= 7 ? rangeDates : datesInRange(shiftDateStringWIB(endDate, -6), endDate);
+  const days = seriesDates.map((d) => sumOrdersInRange(shopId, skuPrices, startOfDateWIB(d), startOfDateWIB(shiftDateStringWIB(d, 1))));
+
+  // Whether the selected range has real orders. On its own this no longer decides whether
   // the page shows anything: see hasData in the response below.
   const hasOrders = today.orderCount > 0;
 
-  // Intraday cumulative Omzet/Laba for the selected day, bucketed by WIB
-  // hour. For today, only up to the current hour (live, keeps updating as
-  // the day goes); for a past day, the full 24 hours. Deliberately kept as
-  // the catalog-price estimate even for shipped orders (unlike
-  // sumOrdersInRange above) — it's a per-hour shape/trend visual, not a KPI
-  // number, and the UI already labels it "Estimasi". Blending real vs.
-  // estimated math per hour bucket wasn't worth the extra complexity for a
-  // chart nobody reads a single value off of.
-  const dayStart = startOfDateWIB(selectedDate);
-  const dayEnd = startOfDateWIB(shiftDateStringWIB(selectedDate, 1));
-  const dayItems = DASHBOARD_DATA_SOURCE === 'internal'
+  // Omzet/Laba chart, catalog-price estimate (the UI labels it "Estimasi"): for a one-day
+  // range the running total per WIB hour (today: up to the current hour); for a longer
+  // range each day's own total, one point per day.
+  const rangeItems = DASHBOARD_DATA_SOURCE === 'internal'
     ? db
         .prepare(`
-          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, ps.completed_at AS ts
+          SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot, ps.completed_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           JOIN (
@@ -312,42 +323,40 @@ router.get('/summary', (req, res) => {
           ) ps ON ps.order_sn = o.order_sn
           WHERE ${REAL_ORDER_FILTER} AND ps.completed_at >= ? AND ps.completed_at < ?
         `)
-        .all(shopId, dayStart, dayEnd)
+        .all(shopId, rangeStart, rangeEnd)
     : db
         .prepare(`
-          SELECT oi.sku, oi.qty, oi.price_snapshot, oi.hpp_snapshot, o.created_at AS ts
+          SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot, o.created_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
           WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
         `)
-        .all(shopId, dayStart, dayEnd);
-  const lastHour = isToday ? Math.min(23, Math.floor((Math.floor(Date.now() / 1000) - dayStart) / 3600)) : 23;
-  const hourlyOmzet = new Array(lastHour + 1).fill(0);
-  const hourlyLaba = new Array(lastHour + 1).fill(0);
-  for (const item of dayItems) {
+        .all(shopId, rangeStart, rangeEnd);
+  const chartUnit = dayCount === 1 ? 'hour' : 'day';
+  const lastHour = endDate === todayDateStr ? Math.min(23, Math.floor((Math.floor(Date.now() / 1000) - rangeStart) / 3600)) : 23;
+  const buckets = chartUnit === 'hour' ? lastHour + 1 : dayCount;
+  const chartOmzet = new Array(buckets).fill(0);
+  const chartLaba = new Array(buckets).fill(0);
+  for (const item of rangeItems) {
     const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
-    const hour = Math.min(lastHour, Math.floor((item.ts - dayStart) / 3600));
-    hourlyOmzet[hour] += info.price * item.qty;
-    if (info.hpp != null) hourlyLaba[hour] += (info.price - info.hpp) * item.qty;
+    const bucket = chartUnit === 'hour'
+      ? Math.min(lastHour, Math.floor((item.ts - rangeStart) / 3600))
+      : Math.min(dayCount - 1, Math.floor((item.ts - rangeStart) / 86400)); // WIB has no DST: every day is 86400 s
+    chartOmzet[bucket] += info.price * item.qty;
+    if (info.hpp != null) chartLaba[bucket] += (info.price - info.hpp) * item.qty;
   }
-  for (let h = 1; h < hourlyOmzet.length; h += 1) {
-    hourlyOmzet[h] += hourlyOmzet[h - 1];
-    hourlyLaba[h] += hourlyLaba[h - 1];
+  if (chartUnit === 'hour') {
+    for (let h = 1; h < chartOmzet.length; h += 1) {
+      chartOmzet[h] += chartOmzet[h - 1];
+      chartLaba[h] += chartLaba[h - 1];
+    }
   }
 
-  // Top products by estimated gross profit over the last 30 days (a single
-  // day rarely has enough distinct SKUs sold for a meaningful ranking).
-  const recentItems = db
-    .prepare(`
-      SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot
-      FROM order_items oi
-      JOIN orders o ON o.order_sn = oi.order_sn
-      WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ?
-    `)
-    .all(shopId, startOfDayWIB(29));
+  // Top products by estimated gross profit over the selected range (was: always the
+  // last 30 days, before the range picker).
   const bySku = new Map();
-  for (const item of recentItems) {
+  for (const item of rangeItems) {
     const info = priceInfoForItem(item, skuPrices);
     if (!info || info.price == null) continue;
     const entry = bySku.get(item.sku) || { sku: item.sku, name: item.product_name, qty: 0, profit: null, revenue: 0 };
@@ -404,34 +413,36 @@ router.get('/summary', (req, res) => {
   const leastStock = db.prepare(`${stockRankSelect} ORDER BY p.stock ASC LIMIT 5`).all(shopId);
 
   // Affiliasi comes from a completely separate source (Shopee's AMS
-  // get_affiliate_performance, fetched once daily — see
-  // shopeeSync.js's fetchAffiliatePerformance) with its own 1-day reporting
-  // lag, so it's never available for "today" itself. Looked up by the exact
-  // selected date (not "latest fetched") now that the date picker can move
-  // away from today — null when nothing was fetched for that date (Brand
-  // Portal not connected, the fetch hadn't run yet, or a date old enough to
-  // predate this feature) rather than a fabricated 0.
-  const affiliateRow = db
-    .prepare('SELECT date, sales_confirmed, orders_confirmed, buyers_confirmed, commission FROM affiliate_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, selectedDate);
+  // get_affiliate_performance, one row per day -- see shopeeSync.js's
+  // fetchAffiliatePerformance) with a 1-day reporting lag, so today never has
+  // a row. Summed over the range's days that have one; null when none has
+  // (AMS not connected, not fetched yet, or a date older than this feature)
+  // rather than a fabricated 0. Commission is null when no row has it (rows
+  // fetched before that column existed).
+  const placeholders = rangeDates.map(() => '?').join(',');
+  const affiliateRows = db
+    .prepare(`SELECT sales_confirmed, orders_confirmed, buyers_confirmed, commission FROM affiliate_performance_daily WHERE shop_id = ? AND date IN (${placeholders})`)
+    .all(shopId, ...rangeDates);
+  const sumOf = (rows, key) => rows.reduce((total, r) => total + (r[key] ?? 0), 0);
+  const commissionRows = affiliateRows.filter((r) => r.commission != null);
+  const affiliasiCommission = commissionRows.length ? sumOf(commissionRows, 'commission') : null;
 
   // Page View (replaced Pengunjung, 2026-10-13): from per-item readings of Shopee's view
-  // counter, see pageViewsFor. For today it is "so far today"; null before any reading.
-  const pageViews = pageViewsFor(shopId, selectedDate);
+  // counter, see pageViewsFor; the range's total is the sum of its days that have
+  // readings. null before any reading.
+  const pageViewDays = rangeDates.map((d) => pageViewsFor(shopId, d)).filter(Boolean);
+  const pageViews = pageViewDays.length ? { pageViews: pageViewDays.reduce((t, d) => t + d.pageViews, 0), partial: isToday } : null;
 
-  // Iklan, unlike Affiliasi/Pengunjung, genuinely is "today" when today is
-  // selected — see shopeeSync.js's fetchAdsPerformance (refetched every few
-  // minutes, not once daily). For a past date it's whatever was last
-  // recorded under that date before the day rolled over.
-  const adsRow = db
-    .prepare('SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date = ?')
-    .get(shopId, selectedDate);
+  // Iklan, unlike Affiliasi, does have "today" (refetched every few minutes, see
+  // shopeeSync.js's fetchAdsPerformance). Summed over the range's days with a row.
+  const adsRows = db
+    .prepare(`SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date IN (${placeholders})`)
+    .all(shopId, ...rangeDates);
 
   // Client-requested (2026-09-22): a configurable percentage added on top of
   // raw Shopee ad spend for display — see /dashboard/settings below.
   const adsTaxPercentage = Number(getSetting('adsTaxPercentage', '0'));
-  const iklan = adsRow ? adsRow.expense * (1 + adsTaxPercentage / 100) : null;
-  const affiliasiCommission = affiliateRow?.commission ?? null;
+  const iklan = adsRows.length ? sumOf(adsRows, 'expense') * (1 + adsTaxPercentage / 100) : null;
   // Client-requested (2026-10-16): Laba Kotor minus every real cost this
   // Dashboard tracks. Iklan/Affiliasi commission can be null (not fetched
   // yet for this date, or a date before the commission column existed) --
@@ -441,13 +452,16 @@ router.get('/summary', (req, res) => {
   const labaBersih = today.laba - today.layanan - today.biayaPesanan - (iklan ?? 0) - (affiliasiCommission ?? 0);
 
   res.json({
-    date: selectedDate,
+    date: endDate, // the range's last day (kept for older callers)
+    start: startDate,
+    end: endDate,
+    dayCount,
     isToday,
     // The page shows the day when it has real orders OR an Affiliasi / Iklan / Page View figure was
     // recorded for it (changed 2026-10-13). Before, a day with no completed orders hid
     // everything, so an Affiliasi or ad-spend figure that existed for it was never shown.
     // Only a day with nothing of any kind still says "Data tidak tersedia".
-    hasData: hasOrders || !!affiliateRow || !!adsRow || !!pageViews,
+    hasData: hasOrders || affiliateRows.length > 0 || adsRows.length > 0 || !!pageViews,
     today: {
       orderCount: today.orderCount,
       omzet: today.omzet,
@@ -458,16 +472,16 @@ router.get('/summary', (req, res) => {
       labaBersih,
       marginPct: marginPctToday,
     },
-    affiliasi: affiliateRow
+    affiliasi: affiliateRows.length
       ? {
-          date: affiliateRow.date,
-          salesConfirmed: affiliateRow.sales_confirmed,
-          ordersConfirmed: affiliateRow.orders_confirmed,
-          buyersConfirmed: affiliateRow.buyers_confirmed,
+          daysWithData: affiliateRows.length,
+          salesConfirmed: sumOf(affiliateRows, 'sales_confirmed'),
+          ordersConfirmed: sumOf(affiliateRows, 'orders_confirmed'),
+          buyersConfirmed: sumOf(affiliateRows, 'buyers_confirmed'),
           commission: affiliasiCommission,
         }
       : null,
-    pageViews: pageViews ? { ...pageViews, partial: isToday } : null,
+    pageViews,
     trend: {
       orderCountPct: pctChange(today.orderCount, yesterday.orderCount),
       omzetPct: pctChange(today.omzet, yesterday.omzet),
@@ -475,11 +489,12 @@ router.get('/summary', (req, res) => {
       marginPctDelta: marginPctToday != null && marginPctYesterday != null ? Math.round((marginPctToday - marginPctYesterday) * 10) / 10 : null,
     },
     series: {
+      dates: seriesDates,
       orderCount: days.map((d) => d.orderCount),
       omzet: days.map((d) => d.omzet),
       laba: days.map((d) => d.laba),
     },
-    todayHourly: { omzet: hourlyOmzet, laba: hourlyLaba },
+    chart: { unit: chartUnit, omzet: chartOmzet, laba: chartLaba },
     topProducts,
     leaking,
     mostStock,
