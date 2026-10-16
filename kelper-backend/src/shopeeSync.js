@@ -533,11 +533,22 @@ const insertIncome = db.prepare(`
 // guess. Fetched exactly once per order (see order_income's own comment in
 // db.js for why) — an order stuck on READY_TO_PACK/AWAITING_LABEL_SCAN
 // never reaches this query, so it isn't retried into existence early.
+//
+// Bug fix (2026-10-16): this used to filter on orders.status =
+// 'READY_FOR_PICKUP' — but that string is only ever a packing_sessions
+// status (set when the label is confirmed, see packing.js's /confirm-print
+// and /force-ready-for-pickup); orders.status itself never holds it, it
+// goes straight from READY_TO_PACK/DEFERRED/LOCKED to DONE the moment
+// Shipping Mode confirms pickup (see packing.js's confirmOrderPickedUp).
+// So this query never matched a single order, order_income was never
+// populated, and Layanan/Biaya Pesanan stayed 0 on the Dashboard forever.
+// 'DONE' is the actual "shipped and pickup-confirmed" signal the comment
+// above already described.
 async function fillMissingIncomeData(accessToken, shopId) {
   const pending = db
     .prepare(`
       SELECT order_sn FROM orders
-      WHERE shop_id = ? AND status = 'READY_FOR_PICKUP' AND order_sn NOT LIKE 'MOCK-%'
+      WHERE shop_id = ? AND status = 'DONE' AND order_sn NOT LIKE 'MOCK-%'
         AND NOT EXISTS (SELECT 1 FROM order_income WHERE order_income.order_sn = orders.order_sn)
     `)
     .all(shopId);
