@@ -468,6 +468,9 @@ function OrderLists() {
     settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
     settings.workHourStartHour !== settingsDraft.workHourStartHour ||
     settings.workHourEndHour !== settingsDraft.workHourEndHour ||
+    settings.saturdayStartHour !== settingsDraft.saturdayStartHour ||
+    settings.saturdayEndHour !== settingsDraft.saturdayEndHour ||
+    settings.sundayOff !== settingsDraft.sundayOff ||
     settings.workHourEnabled !== settingsDraft.workHourEnabled ||
     settings.readyToCheckStuckSeconds !== settingsDraft.readyToCheckStuckSeconds ||
     (settings.priorityCarriers ?? '') !== (settingsDraft.priorityCarriers ?? '')
@@ -578,7 +581,7 @@ function OrderLists() {
           />
         </div>
         <div>
-          <label style={settingsLabelStyle}>Jam Kerja Mulai</label>
+          <label style={settingsLabelStyle}>Jam Kerja Mulai (Sen-Jum)</label>
           <input
             type="number"
             min="0"
@@ -590,7 +593,7 @@ function OrderLists() {
           />
         </div>
         <div>
-          <label style={settingsLabelStyle}>Jam Kerja Selesai</label>
+          <label style={settingsLabelStyle}>Jam Kerja Selesai (Sen-Jum)</label>
           <input
             type="number"
             min="0"
@@ -600,6 +603,52 @@ function OrderLists() {
             onChange={handleSettingsNumberChange('workHourEndHour')}
             style={settingsInputStyle}
           />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Sabtu Mulai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.saturdayStartHour ?? ''}
+            onChange={handleSettingsNumberChange('saturdayStartHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Sabtu Selesai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.saturdayEndHour ?? ''}
+            onChange={handleSettingsNumberChange('saturdayEndHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          {/* Sunday off (2026-10-16): the whole day counts as outside work hour. */}
+          <label style={settingsLabelStyle}>Minggu</label>
+          <button
+            type="button"
+            disabled={!settingsDraft}
+            onClick={() => setSettingsDraft((s) => ({ ...s, sundayOff: !s.sundayOff }))}
+            style={{
+              padding: '9px 14px',
+              borderRadius: 8,
+              border: 'none',
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: !settingsDraft ? 'default' : 'pointer',
+              background: settingsDraft?.sundayOff ? colors.redDim : colors.greenDim,
+              color: settingsDraft?.sundayOff ? colors.red : colors.green,
+              opacity: !settingsDraft ? 0.5 : 1,
+            }}
+          >
+            {settingsDraft?.sundayOff ? 'Libur' : 'Masuk (jam Sen-Jum)'}
+          </button>
         </div>
         <div>
           {/* Renamed from just "Jam Kerja" — that read as "are we currently

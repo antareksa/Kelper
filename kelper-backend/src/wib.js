@@ -16,6 +16,11 @@ function getWIBHour() {
   return nowInWIB().getUTCHours();
 }
 
+// Current day of the week in WIB (0 = Sunday ... 6 = Saturday).
+function getWIBDay() {
+  return nowInWIB().getUTCDay();
+}
+
 // Unix seconds for 00:00 WIB, `daysAgo` days back (0 = today).
 function startOfDayWIB(daysAgo = 0) {
   const wib = nowInWIB();
@@ -71,6 +76,7 @@ function shiftDateStringWIB(dateStr, days) {
 
 module.exports = {
   getWIBHour,
+  getWIBDay,
   startOfTodayWIB,
   startOfDayWIB,
   startOfMonthWIB,

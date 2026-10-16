@@ -1,5 +1,5 @@
 const { getSetting, setSetting } = require('./settings');
-const { getWIBHour } = require('./wib');
+const { getWIBHour, getWIBDay } = require('./wib');
 
 // Client-requested (2026-09-22) Packing Station configuration, editable from
 // the Order Lists screen. Shared between shopeeSync.js (which enforces them
@@ -38,6 +38,13 @@ const DEFAULTS = {
   // window reopens.
   workHourStartHour: 8,
   workHourEndHour: 16,
+  // Client-requested (2026-10-16): Saturday has its own shorter work hour,
+  // and Sunday is a day off -- the whole day counts as outside work hour
+  // (nothing booked; normal orders can still be packed with a temp barcode,
+  // their real resi is booked Monday morning).
+  saturdayStartHour: 8,
+  saturdayEndHour: 13,
+  sundayOff: true,
   // Kill switch for the work-hour restriction itself — lets an admin turn
   // work-hour enforcement off entirely (bookings happen any time, like
   // before this feature existed) to check the rest of the flow without
@@ -100,6 +107,20 @@ function getWorkHourEndHour() {
   return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.workHourEndHour;
 }
 
+function getSaturdayStartHour() {
+  const v = Number(getSetting('saturdayStartHour', String(DEFAULTS.saturdayStartHour)));
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.saturdayStartHour;
+}
+
+function getSaturdayEndHour() {
+  const v = Number(getSetting('saturdayEndHour', String(DEFAULTS.saturdayEndHour)));
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.saturdayEndHour;
+}
+
+function getSundayOff() {
+  return getSetting('sundayOff', String(DEFAULTS.sundayOff)) === 'true';
+}
+
 function getWorkHourEnabled() {
   return getSetting('workHourEnabled', String(DEFAULTS.workHourEnabled)) === 'true';
 }
@@ -117,7 +138,10 @@ function getReadyToCheckStuckSeconds() {
 // of the flow without waiting for the clock.
 function isWithinWorkHour() {
   if (!getWorkHourEnabled()) return true;
+  const day = getWIBDay();
+  if (day === 0 && getSundayOff()) return false;
   const hour = getWIBHour();
+  if (day === 6) return hour >= getSaturdayStartHour() && hour < getSaturdayEndHour();
   return hour >= getWorkHourStartHour() && hour < getWorkHourEndHour();
 }
 
@@ -129,19 +153,25 @@ function getPackingSettings() {
     maxReadyToCheck: getMaxReadyToCheck(),
     workHourStartHour: getWorkHourStartHour(),
     workHourEndHour: getWorkHourEndHour(),
+    saturdayStartHour: getSaturdayStartHour(),
+    saturdayEndHour: getSaturdayEndHour(),
+    sundayOff: getSundayOff(),
     workHourEnabled: getWorkHourEnabled(),
     readyToCheckStuckSeconds: getReadyToCheckStuckSeconds(),
     priorityCarriers: getPriorityCarriersText(),
   };
 }
 
-function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
+function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, saturdayStartHour, saturdayEndHour, sundayOff, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
   if (orderDelayMinutes != null) setSetting('orderDelayMinutes', Math.max(0, Number(orderDelayMinutes)));
   if (instantOrderDelayMinutes != null) setSetting('instantOrderDelayMinutes', Math.max(0, Number(instantOrderDelayMinutes)));
   if (maxConcurrentBookings != null) setSetting('maxConcurrentBookings', Math.max(0, Number(maxConcurrentBookings)));
   if (maxReadyToCheck != null) setSetting('maxReadyToCheck', Math.max(0, Number(maxReadyToCheck)));
   if (workHourStartHour != null) setSetting('workHourStartHour', Math.min(23, Math.max(0, Number(workHourStartHour))));
   if (workHourEndHour != null) setSetting('workHourEndHour', Math.min(23, Math.max(0, Number(workHourEndHour))));
+  if (saturdayStartHour != null) setSetting('saturdayStartHour', Math.min(23, Math.max(0, Number(saturdayStartHour))));
+  if (saturdayEndHour != null) setSetting('saturdayEndHour', Math.min(23, Math.max(0, Number(saturdayEndHour))));
+  if (sundayOff != null) setSetting('sundayOff', sundayOff ? 'true' : 'false');
   if (workHourEnabled != null) setSetting('workHourEnabled', workHourEnabled ? 'true' : 'false');
   if (readyToCheckStuckSeconds != null) setSetting('readyToCheckStuckSeconds', Math.max(1, Number(readyToCheckStuckSeconds)));
   if (typeof priorityCarriers === 'string') setSetting('priorityCarriers', priorityCarriers.trim().slice(0, 300));
