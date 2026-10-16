@@ -172,7 +172,7 @@ function StockOpname() {
         <button
           onClick={handleDownloadTemplate}
           style={buttonStyle}
-          title="Unduh template Item Stok (semua SKU terbaru, kolom Stock kosong untuk diisi lalu diunggah di List Barang)"
+          title="Unduh template Item Stok: semua SKU terbaru. Isi kolom Stok Total dengan stok TOTAL sekarang (bukan jumlah yang masuk), kosongkan yang tidak berubah, lalu unggah di List Barang."
         >
           Unduh Template Stok
         </button>

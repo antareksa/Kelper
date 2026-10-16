@@ -63,6 +63,7 @@ const PACKING_ROLE_ALLOWED = [
   // profit and sales), and none of the other product writes.
   ['GET', /^\/products\/stock-list$/],
   ['GET', /^\/products\/stock-opname$/], // Stock Opname: stock movement only, no prices
+  ['GET', /^\/products\/stock-template$/], // Stock Opname's Unduh Template Stok: SKU and name only
   ['PUT', /^\/products\/[^/]+\/stock$/],
   ['POST', /^\/products\/import-stock$/],
   ['GET', /^\/admin\/me$/],

@@ -575,7 +575,8 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
   if (!sheet) return;
 
   const skuColumn = findColumn(sheet, 1, /^sku$/i);
-  const stokColumn = findColumn(sheet, 1, /^(stok|stock)$/i);
+  // "Stok Total" is the header of the Unduh Template Stok file (2026-10-17).
+  const stokColumn = findColumn(sheet, 1, /^(stok|stock)( total)?$/i);
   if (!skuColumn || !stokColumn) {
     return res.status(400).json({
       error: 'stock_column_missing',
@@ -787,10 +788,13 @@ router.get('/stock-template', async (req, res) => {
   ws.columns = [
     { header: 'SKU', width: 18 },
     { header: 'Name', width: 60 },
-    { header: 'Stock', width: 12 },
+    // The number filled in REPLACES the stock (it is the new total, not what came in):
+    // header and note say so, since "Stock" alone read as "amount to add".
+    { header: 'Stok Total', width: 12 },
   ];
   for (const r of rows) ws.addRow([r.sku, r.name, null]);
   ws.getRow(1).font = { bold: true };
+  ws.getCell('C1').note = 'Isi stok TOTAL sekarang (bukan jumlah yang masuk). Contoh: stok 94, datang 41 -> isi 135. Kosongkan = tidak diubah.';
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
