@@ -1,8 +1,9 @@
 // Stock Opname (client-requested 2026-10-16), a List Barang submenu: per SKU
 // over a date range, Stok Awal + Masuk - Keluar = Stok Akhir. Read-only; the
 // numbers come from the stock log (see the backend's stockLog.js and
-// products.js /stock-opname). Recording began at deploy, so for a range that
-// starts earlier Masuk and Stok Awal are unknown ("—").
+// products.js /stock-opname). Recording began at deploy; for a range that
+// reaches back before it, the backend assumes nothing came in then and flags
+// the figures as an estimate.
 
 import { useEffect, useMemo, useState } from 'react';
 import { colors, card } from './theme';
@@ -77,9 +78,10 @@ function StockOpname() {
   }, [data, search, movedOnly]);
 
   const totals = useMemo(() => ({
-    masuk: data?.complete ? rows.reduce((t, r) => t + (r.masuk ?? 0), 0) : null,
+    masuk: rows.reduce((t, r) => t + r.masuk, 0),
     keluar: rows.reduce((t, r) => t + r.keluar, 0),
-  }), [rows, data]);
+  }), [rows]);
+  const est = data?.estimate ? '≈ ' : ''; // figures that assume no stock came in before recording began
 
   return (
     <div style={{ color: colors.text }}>
@@ -132,10 +134,11 @@ function StockOpname() {
         </label>
       </div>
 
-      {data && !data.complete && data.logStartedAt && (
+      {data?.estimate && data.logStartedAt && (
         <p style={{ fontSize: 12.5, color: colors.orange, margin: '0 0 12px', lineHeight: 1.5 }}>
-          Pencatatan stok masuk dimulai {formatTimestamp(data.logStartedAt)}. Untuk periode yang dimulai sebelum itu,
-          Masuk dan Stok Awal tidak diketahui (—); Keluar tetap dihitung dari penjualan.
+          Estimasi (≈): pencatatan stok masuk dimulai {formatTimestamp(data.logStartedAt)}. Untuk waktu sebelum itu,
+          stok masuk dianggap 0 (unggah Item Stok atau ubah manual saat itu tidak tercatat); Keluar dihitung dari penjualan.
+          Angka tepat bila saat itu tidak ada stok masuk.
         </p>
       )}
       {error && <p style={{ color: colors.red, fontSize: 13, marginBottom: 12 }}>{error}</p>}
@@ -160,14 +163,14 @@ function StockOpname() {
                 <div key={r.sku} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 10, alignItems: 'center', padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
                   <div style={{ fontFamily: 'ui-monospace, monospace', color: colors.blue }}>{r.sku}</div>
                   <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name || '—'}</div>
-                  <div style={{ textAlign: 'right', fontFamily: 'var(--num)', color: colors.textDim }}>{num(r.awal)}</div>
+                  <div style={{ textAlign: 'right', fontFamily: 'var(--num)', color: colors.textDim }}>{r.awal == null ? '—' : est + num(r.awal)}</div>
                   <div style={{ textAlign: 'right', fontFamily: 'var(--num)', color: r.masuk > 0 ? colors.green : colors.textDim }}>
-                    {r.masuk > 0 ? `+${num(r.masuk)}` : num(r.masuk)}
+                    {est}{r.masuk > 0 ? `+${num(r.masuk)}` : num(r.masuk)}
                   </div>
                   <div style={{ textAlign: 'right', fontFamily: 'var(--num)', color: r.keluar > 0 ? colors.red : colors.textDim }}>
                     {r.keluar > 0 ? `−${num(r.keluar)}` : '0'}
                   </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'var(--num)', fontWeight: 600 }}>{num(r.akhir)}</div>
+                  <div style={{ textAlign: 'right', fontFamily: 'var(--num)', fontWeight: 600 }}>{r.akhir == null ? '—' : est + num(r.akhir)}</div>
                 </div>
               ))}
             </div>
@@ -180,7 +183,7 @@ function StockOpname() {
               {' · '}{rows.length} SKU
             </span>
             <span style={{ fontFamily: 'var(--num)' }}>
-              Total masuk {totals.masuk == null ? '—' : `+${num(totals.masuk)}`} · Total keluar −{num(totals.keluar)}
+              Total masuk {est}+{num(totals.masuk)} · Total keluar −{num(totals.keluar)}
             </span>
           </div>
         )}

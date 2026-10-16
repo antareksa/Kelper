@@ -950,10 +950,12 @@ router.get('/stock-list', (req, res) => {
 //  - Stok Akhir = today's stock minus every logged change after the range.
 //  - Masuk = logged increases in the range; Keluar = logged decreases.
 //  - Stok Awal = Akhir - Masuk + Keluar.
-// Before stockLogStartedAt nothing was logged: Keluar for that part comes from
-// sales history (picked-up orders, what the pickup took off), but Masuk and so
-// Stok Awal are unknown (null) for a range that starts before it, and Stok
-// Akhir too for a range that ends before it.
+// Before stockLogStartedAt nothing was logged: for that part Keluar comes from
+// sales history (picked-up orders) and Masuk is ASSUMED 0 (client-decided
+// 2026-10-16) -- an Item Stok upload back then just overwrote the number, so
+// what came in is unknowable. Any figure that leans on that assumption is
+// flagged (estimate: true; the page marks it "estimasi"). Exact if no stock
+// was uploaded or edited by hand in that time.
 router.get('/stock-opname', (req, res) => {
   const today = dateStringWIB(0);
   let start = req.query.start || shiftDateStringWIB(today, -1);
@@ -965,7 +967,7 @@ router.get('/stock-opname', (req, res) => {
   const rangeStart = startOfDateWIB(start);
   const rangeEnd = startOfDateWIB(shiftDateStringWIB(end, 1));
   const logStart = Number(getSetting('stockLogStartedAt', '0'));
-  const complete = rangeStart >= logStart; // Masuk / Stok Awal known for the whole range
+  const estimate = rangeStart < logStart; // the range reaches back before recording began
 
   const logged = new Map(
     db.prepare(`
@@ -975,7 +977,9 @@ router.get('/stock-opname', (req, res) => {
       FROM stock_log WHERE created_at >= ? AND created_at < ? GROUP BY sku
     `).all(Math.max(rangeStart, logStart), rangeEnd).map((r) => [r.sku, r])
   );
-  const salesBeforeLog = rangeStart < logStart
+  // Picked-up quantity per SKU in [from, to): what a pickup took off, for the
+  // time before the log.
+  const salesBetween = (from, to) => (from < to
     ? new Map(
         db.prepare(`
           SELECT oi.sku, SUM(oi.qty) AS qty
@@ -985,12 +989,16 @@ router.get('/stock-opname', (req, res) => {
             ON ps.order_sn = o.order_sn
           WHERE o.order_sn NOT LIKE 'MOCK-%' AND ps.completed_at >= ? AND ps.completed_at < ?
           GROUP BY oi.sku
-        `).all(rangeStart, Math.min(rangeEnd, logStart)).map((r) => [r.sku, r.qty])
+        `).all(from, to).map((r) => [r.sku, r.qty])
       )
-    : new Map();
+    : new Map());
+  const salesBeforeLog = salesBetween(rangeStart, Math.min(rangeEnd, logStart));
+  // Stock now, walked back to the end of the range: undo every change after it --
+  // the logged ones, and (before the log) the sales, with nothing assumed to have come in.
   const changedAfter = new Map(
-    db.prepare('SELECT sku, SUM(delta) AS delta FROM stock_log WHERE created_at >= ? GROUP BY sku').all(rangeEnd).map((r) => [r.sku, r.delta])
+    db.prepare('SELECT sku, SUM(delta) AS delta FROM stock_log WHERE created_at >= ? GROUP BY sku').all(Math.max(rangeEnd, logStart)).map((r) => [r.sku, r.delta])
   );
+  const soldAfterBeforeLog = salesBetween(rangeEnd, logStart);
 
   // Names: our own product name, else Shopee's listing (+ variant) name.
   const shopeeName = new Map();
@@ -1006,6 +1014,7 @@ router.get('/stock-opname', (req, res) => {
   const skus = new Set([...products.values()].filter((p) => p.stock != null).map((p) => p.sku));
   for (const sku of logged.keys()) skus.add(sku);
   for (const sku of salesBeforeLog.keys()) skus.add(sku);
+  for (const sku of soldAfterBeforeLog.keys()) skus.add(sku);
 
   const rows = [...skus]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
@@ -1014,13 +1023,13 @@ router.get('/stock-opname', (req, res) => {
       const current = p?.stock ?? null;
       const log = logged.get(sku);
       const keluar = (log?.keluar ?? 0) + (salesBeforeLog.get(sku) ?? 0);
-      const masuk = complete ? (log?.masuk ?? 0) : null;
-      const akhir = current != null && rangeEnd > logStart ? current - (changedAfter.get(sku) ?? 0) : null;
-      const awal = masuk != null && akhir != null ? akhir - masuk + keluar : null;
+      const masuk = log?.masuk ?? 0;
+      const akhir = current != null ? current - (changedAfter.get(sku) ?? 0) + (soldAfterBeforeLog.get(sku) ?? 0) : null;
+      const awal = akhir != null ? akhir - masuk + keluar : null;
       return { sku, name: p?.name || shopeeName.get(sku) || null, awal, masuk, keluar, akhir };
     });
 
-  res.json({ start, end, logStartedAt: logStart || null, complete, rows });
+  res.json({ start, end, logStartedAt: logStart || null, estimate, rows });
 });
 
 module.exports = router;
