@@ -12,6 +12,16 @@ const DEFAULTS = {
   // commits to a shipment. Shopee's own standard cancellation window is 1
   // hour, hence the default.
   orderDelayMinutes: 60,
+  // Client-requested (2026-10-16): a separate, independently configurable
+  // delay for INSTANT orders only. Some instant-type couriers (e.g. SPX
+  // Instant Prioritas) auto-arrange the real-world pickup with Shopee the
+  // moment the order is placed — see shopee/shipping.js's "already
+  // auto-arranged by courier" handling — so holding them to the same
+  // cancellation-window delay as normal orders can mean the courier shows
+  // up before KELPER has even booked/labeled the order internally. Defaults
+  // to the same value as orderDelayMinutes so behavior doesn't change until
+  // this is explicitly lowered.
+  instantOrderDelayMinutes: 60,
   // Caps how many orders bookAndLabelPendingOrders will book with Shopee at
   // the same time. 0 = unlimited (book every pending order concurrently, the
   // original behavior).
@@ -52,8 +62,13 @@ function getOrderDelayMinutes() {
   return Number.isFinite(v) && v >= 0 ? v : DEFAULTS.orderDelayMinutes;
 }
 
-function getOrderDelaySeconds() {
-  return getOrderDelayMinutes() * 60;
+function getInstantOrderDelayMinutes() {
+  const v = Number(getSetting('instantOrderDelayMinutes', String(DEFAULTS.instantOrderDelayMinutes)));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULTS.instantOrderDelayMinutes;
+}
+
+function getOrderDelaySeconds(isInstant) {
+  return (isInstant ? getInstantOrderDelayMinutes() : getOrderDelayMinutes()) * 60;
 }
 
 function getMaxConcurrentBookings() {
@@ -109,6 +124,7 @@ function isWithinWorkHour() {
 function getPackingSettings() {
   return {
     orderDelayMinutes: getOrderDelayMinutes(),
+    instantOrderDelayMinutes: getInstantOrderDelayMinutes(),
     maxConcurrentBookings: getMaxConcurrentBookings(),
     maxReadyToCheck: getMaxReadyToCheck(),
     workHourStartHour: getWorkHourStartHour(),
@@ -119,8 +135,9 @@ function getPackingSettings() {
   };
 }
 
-function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
+function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
   if (orderDelayMinutes != null) setSetting('orderDelayMinutes', Math.max(0, Number(orderDelayMinutes)));
+  if (instantOrderDelayMinutes != null) setSetting('instantOrderDelayMinutes', Math.max(0, Number(instantOrderDelayMinutes)));
   if (maxConcurrentBookings != null) setSetting('maxConcurrentBookings', Math.max(0, Number(maxConcurrentBookings)));
   if (maxReadyToCheck != null) setSetting('maxReadyToCheck', Math.max(0, Number(maxReadyToCheck)));
   if (workHourStartHour != null) setSetting('workHourStartHour', Math.min(23, Math.max(0, Number(workHourStartHour))));
@@ -133,6 +150,7 @@ function setPackingSettings({ orderDelayMinutes, maxConcurrentBookings, maxReady
 
 module.exports = {
   getOrderDelayMinutes,
+  getInstantOrderDelayMinutes,
   getOrderDelaySeconds,
   getMaxConcurrentBookings,
   getMaxReadyToCheck,

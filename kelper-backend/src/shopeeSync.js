@@ -341,9 +341,14 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
 //     this WIB window (default 08:00-16:00) — outside it, this is a no-op
 //     entirely, and orders simply wait unlabeled (still claimable/packable —
 //     see routes/packing.js's next-order).
-//   - orderDelayMinutes: an order created less than this many minutes ago is
-//     left alone entirely (shown as "Waiting List" — see routes/packing.js)
-//     so the buyer has a real window to cancel before a shipment is committed.
+//   - orderDelayMinutes (instantOrderDelayMinutes for instant orders): an
+//     order created less than this many minutes ago is left alone entirely
+//     (shown as "Waiting List" — see routes/packing.js) so the buyer has a
+//     real window to cancel before a shipment is committed. Separate knobs
+//     since some instant couriers auto-arrange the real pickup with Shopee
+//     immediately (see shopee/shipping.js), so holding them to the normal
+//     delay can leave the courier arriving before KELPER has even booked
+//     the order (client-reported 2026-10-16).
 //   - maxReadyToCheck: if the "Ready to Check" pool is already at/over this
 //     cap, only book enough eligible orders — instant orders first, then the
 //     oldest (client-requested 2026-10-04) — to fill the
@@ -357,7 +362,11 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   // Waiting List and is booked when the window reopens.
   if (!isWithinWorkHour()) return;
 
-  const cutoff = now() - getOrderDelaySeconds();
+  // Client-requested (2026-10-16): instant orders use their own,
+  // independently configurable delay (instantOrderDelayMinutes) instead of
+  // the normal orderDelayMinutes — see packingSettings.js.
+  const normalCutoff = now() - getOrderDelaySeconds(false);
+  const instantCutoff = now() - getOrderDelaySeconds(true);
   // Excludes orders that already have a packing_sessions row (in particular
   // one flagOrderAsException just created) — once flagged to Masalah, an
   // order must wait for manual resolution, not get silently picked up and
@@ -368,11 +377,12 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
   let pending = db
     .prepare(`
       SELECT o.order_sn FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0 AND o.created_at <= ?
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0
+        AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ${ob.sql}
     `)
-    .all(shopId, cutoff, ...ob.params);
+    .all(shopId, instantCutoff, normalCutoff, ...ob.params);
 
   const maxReadyToCheck = getMaxReadyToCheck();
   if (maxReadyToCheck > 0) {

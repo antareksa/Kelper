@@ -463,6 +463,7 @@ function OrderLists() {
 
   const settingsChanged = settings && settingsDraft && (
     settings.orderDelayMinutes !== settingsDraft.orderDelayMinutes ||
+    settings.instantOrderDelayMinutes !== settingsDraft.instantOrderDelayMinutes ||
     settings.maxConcurrentBookings !== settingsDraft.maxConcurrentBookings ||
     settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
     settings.workHourStartHour !== settingsDraft.workHourStartHour ||
@@ -538,6 +539,17 @@ function OrderLists() {
             disabled={!settingsDraft}
             value={settingsDraft?.orderDelayMinutes ?? ''}
             onChange={handleSettingsNumberChange('orderDelayMinutes')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Delay Instant (menit)</label>
+          <input
+            type="number"
+            min="0"
+            disabled={!settingsDraft}
+            value={settingsDraft?.instantOrderDelayMinutes ?? ''}
+            onChange={handleSettingsNumberChange('instantOrderDelayMinutes')}
             style={settingsInputStyle}
           />
         </div>

@@ -270,7 +270,11 @@ router.post('/next-order', async (req, res) => {
   // label_ready is irrelevant and the delay (getOrderDelaySeconds) is the
   // only gate — that's the whole point of letting an order be packed with
   // just a temp barcode.
-  const cutoff = now() - getOrderDelaySeconds();
+  // Client-requested (2026-10-16): instant orders use their own,
+  // independently configurable delay (instantOrderDelayMinutes) instead of
+  // the normal orderDelayMinutes — see packingSettings.js.
+  const normalCutoff = now() - getOrderDelaySeconds(false);
+  const instantCutoff = now() - getOrderDelaySeconds(true);
   // Client-requested (2026-10-07): INSTANT orders are only worked during work
   // hour. Outside the window none is handed to a station -- whatever its label
   // state -- and none is booked (shopeeSync.js); it waits in the Waiting List
@@ -287,18 +291,19 @@ router.post('/next-order', async (req, res) => {
   // /print-resi below).
   // Priority (client-requested 2026-10-12): instant, then a priority expedition,
   // then fewer pieces to scan, then the oldest -- see priorityOrder.js.
-  const allowed = afterHoursFreshAllowed(shop_id, cutoff); // null = no after-hours cap
+  const allowed = afterHoursFreshAllowed(shop_id, normalCutoff); // null = no after-hours cap
   const ob = priorityOrderBy('o');
   const pick = allowed
     ? (allowed.length ? { order_sn: allowed[0] } : undefined) // the visible set is already in priority order
     : db.prepare(`
         SELECT o.order_sn AS order_sn
         FROM orders o
-        WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+        WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+          AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
           AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
         ${ob.sql}
         LIMIT 1
-      `).get(shop_id, cutoff, withinWorkHour ? 1 : 0, ...ob.params);
+      `).get(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, ...ob.params);
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
@@ -1014,17 +1019,19 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
-  const cutoff = now() - getOrderDelaySeconds();
+  const normalCutoff = now() - getOrderDelaySeconds(false);
+  const instantCutoff = now() - getOrderDelaySeconds(true);
   const withinWorkHour = isWithinWorkHour();
 
   const waitingDelay = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant
       FROM orders
-      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at > ?
+      WHERE shop_id = ? AND status = 'READY_TO_PACK'
+        AND created_at > CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff);
+    .all(shop_id, instantCutoff, normalCutoff);
 
   // "Processing" = an order whose book-ship call with Shopee is running right
   // now — true for a brand-new order the same way it's true for a Pack Besok
@@ -1038,7 +1045,9 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   const eligibleUnlabeled = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
-      WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND label_ready = 0 AND ? = 1
+      WHERE shop_id = ? AND status = 'READY_TO_PACK'
+        AND created_at <= CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END
+        AND label_ready = 0 AND ? = 1
         -- Without this, a Pack Besok order (packing_sessions.status =
         -- DEFERRED_READY) would match here too — orders.status stays
         -- READY_TO_PACK for the whole Pack Besok flow, only the session's
@@ -1052,7 +1061,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
       ORDER BY created_at ASC
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
+    .all(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at }) }));
 
   const processing = eligibleUnlabeled.filter((row) => isBookingInFlight(row.order_sn));
@@ -1069,9 +1078,9 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
           WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND COALESCE(is_instant, 0) = 1
             AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
         `)
-        .all(shop_id, cutoff)
+        .all(shop_id, instantCutoff)
         .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) }));
-  const afterHoursAllowed = afterHoursFreshAllowed(shop_id, cutoff);
+  const afterHoursAllowed = afterHoursFreshAllowed(shop_id, normalCutoff);
   const overCap = [];
   const waitingList = [
     ...waitingDelay.map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) })),
@@ -1084,7 +1093,8 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at,
         o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ?
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+        AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
         AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
         -- Any existing packing_sessions row (not just an active one) means
         -- this order is already represented by a different bucket/branch —
@@ -1102,7 +1112,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
     `)
-    .all(shop_id, cutoff, withinWorkHour ? 1 : 0, shop_id)
+    .all(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, shop_id)
     .filter((row) => {
       // Past the cap (see afterHoursFreshAllowed): a fresh order that did not
       // make the first N waits in the Waiting List instead.
@@ -1114,7 +1124,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       // Fallback for a row labeled before label_ready_at existed (or, for the
       // fresh/unlabeled-outside-work-hour case, one that was never booked at
       // all) — entered the pool when it cleared its own delay.
-      const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds();
+      const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds(row.is_instant);
       return { ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
     })
     .sort(priorityCompare()); // the order stations are handed these in (priorityOrder.js)
@@ -1320,7 +1330,7 @@ function resolveOrderBucket(orderSn) {
 
   const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ?').get(orderSn);
   const withinWorkHour = isWithinWorkHour();
-  const cutoff = now() - getOrderDelaySeconds();
+  const cutoff = now() - getOrderDelaySeconds(order.is_instant);
 
   if (session) {
     if (session.status === 'DEFERRED_READY') {
