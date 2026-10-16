@@ -388,15 +388,16 @@ function Dashboard() {
                   moved to its own /config/shopee page instead of taking up
                   permanent sidebar space, since it's a status page you check
                   occasionally, not something needed on every screen. */}
-              {!isPacking && (
-                <button
-                  onClick={() => navigate('/config/shopee')}
-                  style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
-                >
-                  <IconSettings size={16} />
-                  Pengaturan
-                </button>
-              )}
+              {/* Shown to the Packing Station admin too (2026-10-16): the
+                  Packing Station settings live here now; that login sees
+                  only those (see ShopeeConfigPage). */}
+              <button
+                onClick={() => navigate('/config/shopee')}
+                style={{ ...sideItemStyle, background: location.pathname === '/config/shopee' ? colors.cardAlt : 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)', textAlign: 'left' }}
+              >
+                <IconSettings size={16} />
+                Pengaturan
+              </button>
               <button
                 onClick={handleLogout}
                 style={{ ...sideItemStyle, background: 'none', border: 'none', cursor: 'pointer', width: '100%', fontFamily: 'var(--sans)' }}
@@ -442,7 +443,7 @@ function Dashboard() {
             <Route path="/packing-station/daftar" element={<PackingStationDashboard view="daftar" />} />
             <Route path="/packing-station/cancel-masalah" element={<PackingStationDashboard view="cancelMasalah" />} />
             <Route path="/packing-station/kinerja-operator" element={<OperatorPerformance />} />
-            <Route path="/config/shopee" element={isPacking ? <Navigate to={homePath} replace /> : <ShopeeConfigPage />} />
+            <Route path="/config/shopee" element={<ShopeeConfigPage />} />
             <Route path="*" element={<Navigate to={homePath} replace />} />
           </Routes>
         </div>

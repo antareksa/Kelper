@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import ShopeeAuth from './ShopeeAuth';
 import ShopeeBrandAuth from './ShopeeBrandAuth';
 import { colors, card } from './theme';
-import { API_BASE, apiFetch } from './apiBase';
+import PackingStationSettings from './PackingStationSettings';
+import { API_BASE, apiFetch, getAdminRole } from './apiBase';
 
 // Dashboard configuration (client-requested 2026-09-22): Ads tax percentage,
 // a multiplier added on top of raw Shopee ad spend before it's shown as
@@ -117,13 +118,20 @@ function DashboardSettings() {
 // Affiliate (AMS) app for Affiliasi) — moved here from the sidebar's
 // bottom-left so checking/managing them doesn't take up permanent space in
 // every other screen; this is purely a status/control page, nothing else.
+// Packing Station configuration joined this page (2026-10-16). A 'packing'
+// (Packing Station admin) login sees only that part: the Shopee connections
+// and Dashboard settings are admin-only on the backend too.
 function ShopeeConfigPage() {
+  const isPacking = getAdminRole() === 'packing';
   return (
     <div style={{ color: colors.text }}>
       <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', marginBottom: 16 }}>
-        Konfigurasi Shopee
+        Pengaturan
       </div>
 
+      {isPacking ? (
+        <PackingStationSettings />
+      ) : (
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ ...card(), flex: 1, minWidth: 260 }}>
           <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Koneksi Utama (Order Sync)</div>
@@ -136,7 +144,10 @@ function ShopeeConfigPage() {
         </div>
 
         <DashboardSettings />
+
+        <PackingStationSettings />
       </div>
+      )}
     </div>
   );
 }

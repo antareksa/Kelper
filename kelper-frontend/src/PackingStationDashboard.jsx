@@ -289,6 +289,43 @@ function useOrderDetailModal(onChanged) {
   };
 }
 
+const DAY_NAMES = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const pad2 = (h) => String(h).padStart(2, '0');
+
+// Today's work hour as the backend applies it (see packingSettings.js's
+// isWithinWorkHour): Saturday and Sunday have their own rule. The day is
+// taken in WIB, not the viewer's own clock.
+function todaysHoursText(w) {
+  if (!w.workHourEnabled) return 'Batas jam kerja nonaktif';
+  const day = new Date(Date.now() + 7 * 3600 * 1000).getUTCDay();
+  if (day === 0 && w.sundayOff) return 'Minggu: libur';
+  const [start, end] = day === 6 ? [w.saturdayStartHour, w.saturdayEndHour] : [w.workHourStartHour, w.workHourEndHour];
+  return `${DAY_NAMES[day]}: ${pad2(start)}:00 - ${pad2(end)}:00 WIB`;
+}
+
+// Live "is it work hour now" label on Order Lists (2026-10-16); the settings
+// form itself is in Pengaturan.
+function WorkHourStatus({ workHour }) {
+  const inside = workHour?.currentlyWithinWorkHour;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div
+        style={{
+          padding: '9px 14px',
+          borderRadius: 8,
+          fontWeight: 700,
+          fontSize: 13,
+          background: workHour == null ? colors.cardAlt : inside ? colors.greenDim : colors.orangeDim,
+          color: workHour == null ? colors.textDim : inside ? colors.green : colors.orange,
+        }}
+      >
+        {workHour == null ? 'Memeriksa jam kerja...' : inside ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
+      </div>
+      {workHour && <div style={{ fontSize: 12, color: colors.textDim }}>{todaysHoursText(workHour)}</div>}
+    </div>
+  );
+}
+
 function OrderLists() {
   const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], latePickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
@@ -308,25 +345,14 @@ function OrderLists() {
     openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
   } = useOrderDetailModal(load);
 
-  // Packing Station configuration (client-requested 2026-09-22): Delay
-  // (minutes an order sits in Waiting List before it's eligible for
-  // booking/shipping), Max Process Order (concurrent Shopee bookings), Max
-  // Ready to Check (cap on the booked-but-unclaimed pool). Loaded once, then
-  // only re-fetched after a successful save — no need to poll settings on
-  // the same 3s cadence as the order lists themselves.
-  const [settings, setSettings] = useState(null);
-  const [settingsDraft, setSettingsDraft] = useState(null);
-  const [savingSettings, setSavingSettings] = useState(false);
-  // Separate from settings/settingsDraft on purpose: this is a live clock
-  // readout ("is it work hour right now"), not part of the editable form —
-  // it needs to keep refreshing on the same cadence as the order lists
-  // without ever overwriting settingsDraft mid-edit.
-  const [currentlyWithinWorkHour, setCurrentlyWithinWorkHour] = useState(null);
+  // Live work-hour readout ("is it work hour right now" + today's hours);
+  // the settings form itself moved to Pengaturan (PackingStationSettings.jsx).
+  // Refreshed on the same cadence as the order lists.
+  const [workHour, setWorkHour] = useState(null);
 
   useEffect(() => {
     load();
     loadSyncStatus();
-    loadSettings();
     loadWorkHourStatus();
     const interval = setInterval(() => {
       load();
@@ -354,60 +380,13 @@ function OrderLists() {
     }
   }
 
-  async function loadSettings() {
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/settings`);
-      if (res.ok) {
-        const data = await res.json();
-        setSettings(data);
-        setSettingsDraft(data);
-      }
-    } catch {
-      // best-effort — form just stays disabled/empty until this succeeds
-    }
-  }
-
   async function loadWorkHourStatus() {
     try {
       const res = await apiFetch(`${API_BASE}/packing/settings`);
-      if (res.ok) setCurrentlyWithinWorkHour((await res.json()).currentlyWithinWorkHour);
+      if (res.ok) setWorkHour(await res.json());
     } catch {
       // best-effort — badge just keeps showing whatever was last known
     }
-  }
-
-  async function saveSettings() {
-    setSavingSettings(true);
-    try {
-      const res = await apiFetch(`${API_BASE}/packing/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settingsDraft),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings(data);
-        setSettingsDraft(data);
-        setCurrentlyWithinWorkHour(data.currentlyWithinWorkHour);
-      }
-    } finally {
-      setSavingSettings(false);
-    }
-  }
-
-  // A number input controlled by `value={draft ?? ''}` with a plain
-  // Number(e.target.value) onChange can never actually go empty: clearing
-  // the field fires onChange with '', Number('') is 0, and the next render
-  // forces the DOM back to "0" — so a user trying to retype 60 as 22 ends
-  // up with the old digit still there ("022"), since the field can never
-  // pass through a genuinely empty state. Keeping '' as its own draft value
-  // (instead of coercing it to 0 immediately) lets the field actually clear;
-  // Number(e.target.value) still runs for any real digit input.
-  function handleSettingsNumberChange(key) {
-    return (e) => {
-      const v = e.target.value;
-      setSettingsDraft((s) => ({ ...s, [key]: v === '' ? '' : Number(v) }));
-    };
   }
 
   async function toggleSync() {
@@ -460,21 +439,6 @@ function OrderLists() {
     { key: 'latePickup', title: 'Pickup Terlambat' },
     { key: 'readyTomorrow', title: 'Diproses Besok' },
   ];
-
-  const settingsChanged = settings && settingsDraft && (
-    settings.orderDelayMinutes !== settingsDraft.orderDelayMinutes ||
-    settings.instantOrderDelayMinutes !== settingsDraft.instantOrderDelayMinutes ||
-    settings.maxConcurrentBookings !== settingsDraft.maxConcurrentBookings ||
-    settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
-    settings.workHourStartHour !== settingsDraft.workHourStartHour ||
-    settings.workHourEndHour !== settingsDraft.workHourEndHour ||
-    settings.saturdayStartHour !== settingsDraft.saturdayStartHour ||
-    settings.saturdayEndHour !== settingsDraft.saturdayEndHour ||
-    settings.sundayOff !== settingsDraft.sundayOff ||
-    settings.workHourEnabled !== settingsDraft.workHourEnabled ||
-    settings.readyToCheckStuckSeconds !== settingsDraft.readyToCheckStuckSeconds ||
-    (settings.priorityCarriers ?? '') !== (settingsDraft.priorityCarriers ?? '')
-  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
@@ -530,207 +494,8 @@ function OrderLists() {
         )}
       </div>
 
-      <div style={{ ...card(), display: 'flex', alignItems: 'flex-end', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
-        <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5, alignSelf: 'center', marginRight: 4 }}>
-          Konfigurasi Packing Station
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Delay (menit)</label>
-          <input
-            type="number"
-            min="0"
-            disabled={!settingsDraft}
-            value={settingsDraft?.orderDelayMinutes ?? ''}
-            onChange={handleSettingsNumberChange('orderDelayMinutes')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Delay Instant (menit)</label>
-          <input
-            type="number"
-            min="0"
-            disabled={!settingsDraft}
-            value={settingsDraft?.instantOrderDelayMinutes ?? ''}
-            onChange={handleSettingsNumberChange('instantOrderDelayMinutes')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Maks Proses Order</label>
-          <input
-            type="number"
-            min="0"
-            placeholder="0 = tanpa batas"
-            disabled={!settingsDraft}
-            value={settingsDraft?.maxConcurrentBookings ?? ''}
-            onChange={handleSettingsNumberChange('maxConcurrentBookings')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Maks Siap Dicek</label>
-          <input
-            type="number"
-            min="0"
-            placeholder="0 = tanpa batas"
-            disabled={!settingsDraft}
-            value={settingsDraft?.maxReadyToCheck ?? ''}
-            onChange={handleSettingsNumberChange('maxReadyToCheck')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Jam Kerja Mulai (Sen-Jum)</label>
-          <input
-            type="number"
-            min="0"
-            max="23"
-            disabled={!settingsDraft}
-            value={settingsDraft?.workHourStartHour ?? ''}
-            onChange={handleSettingsNumberChange('workHourStartHour')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Jam Kerja Selesai (Sen-Jum)</label>
-          <input
-            type="number"
-            min="0"
-            max="23"
-            disabled={!settingsDraft}
-            value={settingsDraft?.workHourEndHour ?? ''}
-            onChange={handleSettingsNumberChange('workHourEndHour')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Sabtu Mulai</label>
-          <input
-            type="number"
-            min="0"
-            max="23"
-            disabled={!settingsDraft}
-            value={settingsDraft?.saturdayStartHour ?? ''}
-            onChange={handleSettingsNumberChange('saturdayStartHour')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Sabtu Selesai</label>
-          <input
-            type="number"
-            min="0"
-            max="23"
-            disabled={!settingsDraft}
-            value={settingsDraft?.saturdayEndHour ?? ''}
-            onChange={handleSettingsNumberChange('saturdayEndHour')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          {/* Sunday off (2026-10-16): the whole day counts as outside work hour. */}
-          <label style={settingsLabelStyle}>Minggu</label>
-          <button
-            type="button"
-            disabled={!settingsDraft}
-            onClick={() => setSettingsDraft((s) => ({ ...s, sundayOff: !s.sundayOff }))}
-            style={{
-              padding: '9px 14px',
-              borderRadius: 8,
-              border: 'none',
-              fontWeight: 600,
-              fontSize: 13,
-              cursor: !settingsDraft ? 'default' : 'pointer',
-              background: settingsDraft?.sundayOff ? colors.redDim : colors.greenDim,
-              color: settingsDraft?.sundayOff ? colors.red : colors.green,
-              opacity: !settingsDraft ? 0.5 : 1,
-            }}
-          >
-            {settingsDraft?.sundayOff ? 'Libur' : 'Masuk (jam Sen-Jum)'}
-          </button>
-        </div>
-        <div>
-          {/* Renamed from just "Jam Kerja" — that read as "are we currently
-              in work hours", which is a different question from what this
-              toggle actually controls (whether the restriction is enforced
-              at all). The live answer to "are we in work hours right now"
-              is the separate read-only badge below instead. */}
-          <label style={settingsLabelStyle}>Batasi Jam Kerja</label>
-          <button
-            type="button"
-            disabled={!settingsDraft}
-            onClick={() => setSettingsDraft((s) => ({ ...s, workHourEnabled: !s.workHourEnabled }))}
-            style={{
-              padding: '9px 14px',
-              borderRadius: 8,
-              border: 'none',
-              fontWeight: 600,
-              fontSize: 13,
-              cursor: !settingsDraft ? 'default' : 'pointer',
-              background: settingsDraft?.workHourEnabled ? colors.greenDim : colors.redDim,
-              color: settingsDraft?.workHourEnabled ? colors.green : colors.red,
-              opacity: !settingsDraft ? 0.5 : 1,
-            }}
-          >
-            {settingsDraft?.workHourEnabled ? 'Aktif' : 'Nonaktif'}
-          </button>
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Batas Waktu Macet (detik)</label>
-          <input
-            type="number"
-            min="1"
-            disabled={!settingsDraft}
-            value={settingsDraft?.readyToCheckStuckSeconds ?? ''}
-            onChange={handleSettingsNumberChange('readyToCheckStuckSeconds')}
-            style={settingsInputStyle}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Prioritas Ekspedisi</label>
-          <input
-            type="text"
-            placeholder="mis. SPX, J&T (kosong = tanpa)"
-            title="Pisahkan dengan koma; urutan = prioritas. Cukup sebagian nama, mis. SPX untuk SPX Express dan SPX Hemat. Urutan pembagian order: 1. Instant, 2. ekspedisi ini, 3. item lebih sedikit, 4. paling lama."
-            disabled={!settingsDraft}
-            value={settingsDraft?.priorityCarriers ?? ''}
-            onChange={(e) => setSettingsDraft((s) => ({ ...s, priorityCarriers: e.target.value }))}
-            style={{ ...settingsInputStyle, width: 210 }}
-          />
-        </div>
-        <div>
-          <label style={settingsLabelStyle}>Status Sekarang</label>
-          <div
-            style={{
-              padding: '9px 14px',
-              borderRadius: 8,
-              fontWeight: 600,
-              fontSize: 13,
-              background: currentlyWithinWorkHour ? colors.greenDim : colors.orangeDim,
-              color: currentlyWithinWorkHour ? colors.green : colors.orange,
-            }}
-          >
-            {currentlyWithinWorkHour === null ? 'Memeriksa...' : currentlyWithinWorkHour ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
-          </div>
-        </div>
-        <button
-          onClick={saveSettings}
-          disabled={!settingsChanged || savingSettings}
-          style={{
-            padding: '9px 16px',
-            borderRadius: 8,
-            border: 'none',
-            fontWeight: 600,
-            fontSize: 13,
-            cursor: !settingsChanged || savingSettings ? 'default' : 'pointer',
-            background: colors.text,
-            color: colors.bg,
-            opacity: !settingsChanged || savingSettings ? 0.5 : 1,
-          }}
-        >
-          {savingSettings ? 'Menyimpan...' : 'Simpan'}
-        </button>
+      <div style={{ ...card(), display: 'flex', alignItems: 'center', gap: 20, flexShrink: 0, flexWrap: 'wrap' }}>
+        <WorkHourStatus workHour={workHour} />
         <button
           onClick={handleMoveAllToReadyForPickup}
           disabled={bulkBusy !== null}
@@ -1273,24 +1038,6 @@ const inputStyle = {
   border: `1px solid ${colors.border}`,
   borderRadius: 6,
   color: colors.text,
-};
-
-const settingsLabelStyle = {
-  display: 'block',
-  fontSize: 11.5,
-  color: colors.textDim,
-  marginBottom: 4,
-};
-
-const settingsInputStyle = {
-  width: 130,
-  padding: '8px 10px',
-  boxSizing: 'border-box',
-  background: colors.cardAlt,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 6,
-  color: colors.text,
-  fontSize: 13,
 };
 
 const buttonStyle = {
