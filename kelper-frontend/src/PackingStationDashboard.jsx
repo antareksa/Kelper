@@ -24,6 +24,22 @@ function formatDateTime(ts) {
   return `${pad(d.getDate())} ${pad(d.getMonth() + 1)} ${d.getFullYear()} - ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// "6j 16m", "45m", "2h 3j" — used for the Order Detail popup's delay line
+// (client-requested 2026-10-17), so it's obvious at a glance whether an
+// order's own cancellation delay is still running, already cleared long
+// ago (meaning something else — the after-hours cap, work hour — is what's
+// really holding it in Waiting List), or was admin-skipped.
+function formatDuration(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (days > 0) return `${days}h ${hours}j`;
+  if (hours > 0) return `${hours}j ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
 // Order tags (client-requested 2026-09-25): Instant Shipping, Order from
 // Yesterday, Stuck in Ready to Check — computed server-side (see
 // routes/packing.js's computeTags) since "from yesterday"/"stuck" both need
@@ -93,6 +109,16 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
               <div>
                 <div>DITERIMA - {formatDateTime(detail.created_at)}</div>
                 <div>PENGIRIMAN - {detail.shipping_carrier || '—'}</div>
+                {detail.delayClearsAt != null && (
+                  <div>
+                    DELAY -{' '}
+                    {detail.delaySkippedAt
+                      ? `Dilewati admin pada ${formatTime(detail.delaySkippedAt)}`
+                      : Date.now() / 1000 < detail.delayClearsAt
+                      ? `Tersisa ${formatDuration(detail.delayClearsAt - Date.now() / 1000)} lagi`
+                      : `Sudah lewat ${formatDuration(Date.now() / 1000 - detail.delayClearsAt)} yang lalu`}
+                  </div>
+                )}
               </div>
               <div>STATUS SAAT INI - {detail.bucket}{detail.forced ? ' (DIPAKSA)' : ''}</div>
             </div>

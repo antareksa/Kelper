@@ -1396,7 +1396,8 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
   // reasons an order can be Waiting List (instant outside work hour, over
   // the after-hours cap), where skipping the delay wouldn't change anything
   // since it's already past it.
-  const cutoff = now() - getOrderDelaySeconds(order.is_instant);
+  const delaySeconds = getOrderDelaySeconds(order.is_instant);
+  const cutoff = now() - delaySeconds;
   const canSkipDelay = !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
 
   res.json({
@@ -1406,6 +1407,12 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
     bucket,
     canManage: rank >= 2,
     canSkipDelay,
+    // Client-requested (2026-10-17): when the delay cleared (or clears), so
+    // the popup can show "sudah X lalu" / "tersisa X lagi" instead of
+    // leaving it to guesswork whether the delay is even still the reason an
+    // order is in Waiting List (it often isn't -- see canSkipDelay above).
+    delayClearsAt: order.created_at + delaySeconds,
+    delaySkippedAt: order.delay_skip_at || null,
     forced: session?.forced === 1,
     exceptionReason: session?.status === 'EXCEPTION' ? session.exception_reason : null,
     items: items.map((it) => ({ ...it, scanned_qty: progressBySku[it.sku] || 0 })),
