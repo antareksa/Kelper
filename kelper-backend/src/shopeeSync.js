@@ -378,7 +378,7 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
     .prepare(`
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0
-        AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
+        AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ${ob.sql}
     `)

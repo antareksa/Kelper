@@ -633,4 +633,17 @@ db.exec(`
 `);
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('stockLogStartedAt', ?)").run(String(Math.floor(Date.now() / 1000)));
 
+// Client-requested (2026-10-17): an admin can force an order in Waiting List
+// past its buyer-cancellation delay (orderDelayMinutes/instantOrderDelayMinutes)
+// from the Order Detail popup, without waiting it out. NULL = not skipped
+// (the normal case). Every query that gates an order on its delay cutoff
+// treats a non-NULL delay_skip_at as "already past the delay", regardless of
+// the order's real created_at -- see routes/packing.js's resolveOrderBucket
+// and shopeeSync.js's bookAndLabelPendingOrders. Does not bypass any other
+// gate (work hour, the after-hours Ready to Check cap) -- only the delay.
+const orderColsForDelaySkip = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
+if (!orderColsForDelaySkip.includes('delay_skip_at')) {
+  db.exec('ALTER TABLE orders ADD COLUMN delay_skip_at INTEGER');
+}
+
 module.exports = db;

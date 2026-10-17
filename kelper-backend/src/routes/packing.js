@@ -224,7 +224,8 @@ function afterHoursFreshAllowed(shopId, cutoff) {
   return db
     .prepare(`
       SELECT o.order_sn FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.created_at <= ? AND COALESCE(o.is_instant, 0) = 0
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+        AND (o.delay_skip_at IS NOT NULL OR o.created_at <= ?) AND COALESCE(o.is_instant, 0) = 0
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ${ob.sql}
       LIMIT ?
@@ -301,7 +302,7 @@ router.post('/next-order', async (req, res) => {
         SELECT o.order_sn AS order_sn
         FROM orders o
         WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
-          AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
+          AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
           AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
         ${ob.sql}
         LIMIT 1
@@ -1039,6 +1040,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT order_sn, buyer_name, created_at, is_instant
       FROM orders
       WHERE shop_id = ? AND status = 'READY_TO_PACK'
+        AND delay_skip_at IS NULL
         AND created_at > CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END
       ORDER BY created_at ASC
     `)
@@ -1057,7 +1059,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
       WHERE shop_id = ? AND status = 'READY_TO_PACK'
-        AND created_at <= CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END
+        AND (delay_skip_at IS NOT NULL OR created_at <= CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END)
         AND label_ready = 0 AND ? = 1
         -- Without this, a Pack Besok order (packing_sessions.status =
         -- DEFERRED_READY) would match here too — orders.status stays
@@ -1086,7 +1088,8 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     : db
         .prepare(`
           SELECT order_sn, buyer_name, created_at, is_instant FROM orders o
-          WHERE shop_id = ? AND status = 'READY_TO_PACK' AND created_at <= ? AND COALESCE(is_instant, 0) = 1
+          WHERE shop_id = ? AND status = 'READY_TO_PACK'
+            AND (delay_skip_at IS NOT NULL OR created_at <= ?) AND COALESCE(is_instant, 0) = 1
             AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
         `)
         .all(shop_id, instantCutoff)
@@ -1101,11 +1104,11 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const readyToCheck = db
     .prepare(`
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, NULL AS internal_barcode, NULL AS session_started_at,
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, o.delay_skip_at, NULL AS internal_barcode, NULL AS session_started_at,
         o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
-        AND o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END
+        AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
         AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
         -- Any existing packing_sessions row (not just an active one) means
         -- this order is already represented by a different bucket/branch —
@@ -1117,7 +1120,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       -- A Pack Besok order that's now labeled: claimable, but only via its
       -- own barcode scan (resume-besok), not a generic NEXT_ORDER pick —
       -- internal_barcode is included so ops can see which code to look for.
-      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, ps.internal_barcode, ps.started_at AS session_started_at,
+      SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, o.delay_skip_at, ps.internal_barcode, ps.started_at AS session_started_at,
         o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
@@ -1134,8 +1137,10 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .map((row) => {
       // Fallback for a row labeled before label_ready_at existed (or, for the
       // fresh/unlabeled-outside-work-hour case, one that was never booked at
-      // all) — entered the pool when it cleared its own delay.
-      const enteredAt = row.label_ready_at ?? row.created_at + getOrderDelaySeconds(row.is_instant);
+      // all) — entered the pool when it cleared its own delay, or when an
+      // admin force-skipped the delay (routes/packing.js's /skip-delay),
+      // whichever gives the real entry time.
+      const enteredAt = row.label_ready_at ?? row.delay_skip_at ?? row.created_at + getOrderDelaySeconds(row.is_instant);
       return { ...row, tags: computeTags({ isInstant: row.is_instant, isDropoff: row.is_dropoff, sessionStartedAt: row.session_started_at, readyToCheckEnteredAt: enteredAt }) };
     })
     .sort(priorityCompare()); // the order stations are handed these in (priorityOrder.js)
@@ -1357,7 +1362,7 @@ function resolveOrderBucket(orderSn) {
     return { order, session, bucket: 'Problem Order', rank: 2 };
   }
 
-  if (order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
+  if (!order.delay_skip_at && order.created_at > cutoff) return { order, session: null, bucket: 'Waiting List', rank: 0 };
   if (order.is_instant && !withinWorkHour) return { order, session: null, bucket: 'Waiting List', rank: 0 };
   if (!order.label_ready && withinWorkHour) {
     return { order, session: null, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Waiting List', rank: 1 };
@@ -1385,16 +1390,52 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
       )
     : {};
 
+  // Client-requested (2026-10-17): offers "Lewati Delay" in the popup only
+  // when the order is still sitting in Waiting List specifically because its
+  // own cancellation-window delay hasn't cleared yet -- not for the OTHER
+  // reasons an order can be Waiting List (instant outside work hour, over
+  // the after-hours cap), where skipping the delay wouldn't change anything
+  // since it's already past it.
+  const cutoff = now() - getOrderDelaySeconds(order.is_instant);
+  const canSkipDelay = !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
+
   res.json({
     order_sn: order.order_sn,
     created_at: order.created_at,
     shipping_carrier: order.shipping_carrier,
     bucket,
     canManage: rank >= 2,
+    canSkipDelay,
     forced: session?.forced === 1,
     exceptionReason: session?.status === 'EXCEPTION' ? session.exception_reason : null,
     items: items.map((it) => ({ ...it, scanned_qty: progressBySku[it.sku] || 0 })),
   });
+});
+
+// "Lewati Delay" (client-requested 2026-10-17) — an admin override from the
+// Order Detail popup for an order sitting in Waiting List only because its
+// own buyer-cancellation delay (orderDelayMinutes/instantOrderDelayMinutes)
+// hasn't cleared yet. Sets delay_skip_at instead of rewriting created_at, so
+// the order's real arrival time (and priority ordering/Dashboard
+// attribution, which both key off created_at) is untouched -- every cutoff
+// comparison in shopeeSync.js/this file treats a non-NULL delay_skip_at as
+// "already past the delay" on its own. Does NOT bypass any other gate (work
+// hour, the after-hours Ready to Check cap): an instant order outside work
+// hour, for instance, still waits for the window regardless of this flag.
+// Re-validates with resolveOrderBucket server-side rather than trusting the
+// popup's own canSkipDelay, same pattern as every other action here.
+router.post('/skip-delay', requireAdminAuth, (req, res) => {
+  const { order_sn } = req.body;
+  const resolved = resolveOrderBucket(order_sn);
+  if (!resolved) return res.status(404).json({ error: 'order_not_found' });
+  const { order, session, bucket } = resolved;
+  if (session || bucket !== 'Waiting List' || order.delay_skip_at) {
+    return res.status(409).json({ error: 'not_delay_gated', message: 'Order ini bukan sedang menunggu delay.' });
+  }
+
+  db.prepare('UPDATE orders SET delay_skip_at = ? WHERE order_sn = ?').run(now(), order_sn);
+  console.log(`[server] ${order_sn}: delay skipped by admin (${req.adminUsername || 'unknown'})`);
+  res.json({ ok: true, order_sn });
 });
 
 // Admin override for a genuinely stuck order — forces it straight to Ready

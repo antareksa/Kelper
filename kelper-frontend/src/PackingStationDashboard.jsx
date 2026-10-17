@@ -70,8 +70,11 @@ function OrderTags({ tags }) {
 // order row in any Order Lists bucket. The Cancel/Force buttons only render
 // once the order is at least Ready to Check (detail.canManage, computed
 // server-side by resolveOrderBucket) — nothing to manage on an order that
-// hasn't even started its flow yet.
-function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForceReady, onForcePickup, onCancelOrder, onClose }) {
+// hasn't even started its flow yet. "Lewati Delay" (client-requested
+// 2026-10-17) is the one exception: it shows for a Waiting List order still
+// inside its own cancellation delay (detail.canSkipDelay), letting an admin
+// force it straight past that one gate — see routes/packing.js's /skip-delay.
+function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForceReady, onForcePickup, onCancelOrder, onSkipDelay, onClose }) {
   return (
     <div
       onClick={onClose}
@@ -121,6 +124,11 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
+                {detail.canSkipDelay && (
+                  <button onClick={onSkipDelay} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.orange, color: colors.orange, opacity: actionBusy ? 0.6 : 1 }}>
+                    Lewati Delay
+                  </button>
+                )}
                 {detail.canManage && (
                   <>
                     <button onClick={onForceReady} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.green, color: colors.green, opacity: actionBusy ? 0.6 : 1 }}>
@@ -282,10 +290,15 @@ function useOrderDetailModal(onChanged) {
     runAction('/packing/confirm-pickup', `Apakah Anda yakin? Ini akan menandai order ${selectedOrderSn} sebagai sudah diambil, sama seperti scan labelnya di Mode Pengiriman.`);
   const handleCancelOrder = () =>
     runAction('/packing/cancel-order', `Apakah Anda yakin? Ini akan membatalkan order ${selectedOrderSn} di Shopee secara nyata, dan tidak bisa dikembalikan.`);
+  // Only the delay gate is skipped -- work hour and the after-hours cap (if
+  // any) still apply, so the order might land in Processing or stay Waiting
+  // List for one of those other reasons instead.
+  const handleSkipDelay = () =>
+    runAction('/packing/skip-delay', `Apakah Anda yakin? Ini akan melewati sisa delay order ${selectedOrderSn} dan langsung memprosesnya.`);
 
   return {
     selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
-    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder, handleSkipDelay,
   };
 }
 
@@ -342,7 +355,7 @@ function OrderLists() {
   // definition is fine.
   const {
     selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
-    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder, handleSkipDelay,
   } = useOrderDetailModal(load);
 
   // Live work-hour readout ("is it work hour right now" + today's hours);
@@ -584,6 +597,7 @@ function OrderLists() {
           onForceReady={handleForceReady}
           onForcePickup={handleForcePickup}
           onCancelOrder={handleCancelOrder}
+          onSkipDelay={handleSkipDelay}
           onClose={closeOrderDetail}
         />
       )}
@@ -701,7 +715,7 @@ function CancelMasalahList() {
   const [loading, setLoading] = useState(true);
   const {
     selectedOrderSn, orderDetail, detailLoading, detailError, actionBusy,
-    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder,
+    openOrderDetail, closeOrderDetail, handleForceReady, handleForcePickup, handleCancelOrder, handleSkipDelay,
   } = useOrderDetailModal(load);
 
   useEffect(() => {
@@ -823,6 +837,7 @@ function CancelMasalahList() {
           onForceReady={handleForceReady}
           onForcePickup={handleForcePickup}
           onCancelOrder={handleCancelOrder}
+          onSkipDelay={handleSkipDelay}
           onClose={closeOrderDetail}
         />
       )}
