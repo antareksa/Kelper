@@ -449,9 +449,8 @@ router.get('/summary', (req, res) => {
   // never null once there are real orders (see sumOrdersInRange).
   const labaBersih = today.laba - today.layanan - today.biayaPesanan - (iklan ?? 0) - (affiliasiCommission ?? 0);
 
-  // Persentase Profit, client-requested (2026-10-20): (Omzet - Laba Bersih) / Omzet,
-  // i.e. the share of Omzet that went to HPP + every cost above. The previous
-  // period's Laba Bersih is built the same way for the trend.
+  // Persentase Profit, client-requested (2026-10-20): Laba Bersih / Omzet (net
+  // margin). The previous period's Laba Bersih is built the same way for the trend.
   const prevDates = datesInRange(shiftDateStringWIB(startDate, -dayCount), shiftDateStringWIB(startDate, -1));
   const prevPlaceholders = prevDates.map(() => '?').join(',');
   const prevAdsRows = db
@@ -463,7 +462,7 @@ router.get('/summary', (req, res) => {
     'commission'
   );
   const prevLabaBersih = yesterday.laba - yesterday.layanan - yesterday.biayaPesanan - prevIklan - prevCommission;
-  const profitPct = (omzet, bersih) => (omzet ? Math.round(((omzet - bersih) / omzet) * 1000) / 10 : null);
+  const profitPct = (omzet, bersih) => (omzet ? Math.round((bersih / omzet) * 1000) / 10 : null);
   const marginPctToday = profitPct(today.omzet, labaBersih);
   const marginPctYesterday = profitPct(yesterday.omzet, prevLabaBersih);
 
