@@ -294,8 +294,6 @@ router.get('/summary', (req, res) => {
   const rangeEnd = startOfDateWIB(shiftDateStringWIB(endDate, 1));
   const today = sumOrdersInRange(shopId, skuPrices, rangeStart, rangeEnd);
   const yesterday = sumOrdersInRange(shopId, skuPrices, startOfDateWIB(shiftDateStringWIB(startDate, -dayCount)), rangeStart);
-  const marginPctToday = today.omzet ? Math.round((today.laba / today.omzet) * 1000) / 10 : null;
-  const marginPctYesterday = yesterday.omzet ? Math.round((yesterday.laba / yesterday.omzet) * 1000) / 10 : null;
 
   // Sparklines: one point per day of the range, at least the 7 days ending on its last
   // day (a one-day range would otherwise be a single dot).
@@ -450,6 +448,24 @@ router.get('/summary', (req, res) => {
   // CostBreakdown already makes for its total. Layanan/Biaya Pesanan are
   // never null once there are real orders (see sumOrdersInRange).
   const labaBersih = today.laba - today.layanan - today.biayaPesanan - (iklan ?? 0) - (affiliasiCommission ?? 0);
+
+  // Persentase Profit, client-requested (2026-10-20): (Omzet - Laba Bersih) / Omzet,
+  // i.e. the share of Omzet that went to HPP + every cost above. The previous
+  // period's Laba Bersih is built the same way for the trend.
+  const prevDates = datesInRange(shiftDateStringWIB(startDate, -dayCount), shiftDateStringWIB(startDate, -1));
+  const prevPlaceholders = prevDates.map(() => '?').join(',');
+  const prevAdsRows = db
+    .prepare(`SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date IN (${prevPlaceholders})`)
+    .all(shopId, ...prevDates);
+  const prevIklan = sumOf(prevAdsRows, 'expense') * (1 + adsTaxPercentage / 100);
+  const prevCommission = sumOf(
+    db.prepare(`SELECT commission FROM affiliate_performance_daily WHERE shop_id = ? AND date IN (${prevPlaceholders})`).all(shopId, ...prevDates),
+    'commission'
+  );
+  const prevLabaBersih = yesterday.laba - yesterday.layanan - yesterday.biayaPesanan - prevIklan - prevCommission;
+  const profitPct = (omzet, bersih) => (omzet ? Math.round(((omzet - bersih) / omzet) * 1000) / 10 : null);
+  const marginPctToday = profitPct(today.omzet, labaBersih);
+  const marginPctYesterday = profitPct(yesterday.omzet, prevLabaBersih);
 
   res.json({
     date: endDate, // the range's last day (kept for older callers)
