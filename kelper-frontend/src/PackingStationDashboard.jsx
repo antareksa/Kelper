@@ -148,8 +148,8 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
               )}
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {detail.canSkipDelay && (
                   <button onClick={onSkipDelay} disabled={actionBusy} style={{ ...modalButtonStyle, borderColor: colors.orange, color: colors.orange, opacity: actionBusy ? 0.6 : 1 }}>
                     Lewati Delay
@@ -223,6 +223,8 @@ function ActiveStation() {
             borderLeft: `3px solid ${s.current_order_sn ? colors.green : colors.blue}`,
             display: 'flex',
             justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
           }}
         >
           <div>
@@ -551,7 +553,7 @@ function OrderLists() {
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+      <div className="kp-columns" style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
         {columns.map(({ key, title }) => {
         const rows = lists[key];
         return (
@@ -669,7 +671,7 @@ function OrderListsViewOnly() {
   ];
 
   return (
-    <div style={{ display: 'flex', gap: 12, height: '100%' }}>
+    <div className="kp-columns" style={{ display: 'flex', gap: 12, height: '100%' }}>
       {columns.map(({ key, title }) => {
         const rows = lists[key];
         return (
@@ -791,7 +793,7 @@ function CancelMasalahList() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
-      <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+      <div className="kp-columns" style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
         {columns.map(({ key, title }) => {
           const rows = data[key];
           return (
@@ -1022,7 +1024,7 @@ function Daftar() {
       <div style={card()}>
         <label style={{ color: colors.textDim, fontSize: 13 }}>Nama</label>
         <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           <button onClick={handleRegister} style={buttonStyle}>Daftar Baru</button>
           <button onClick={handleReprint} style={buttonStyle}>Print Ulang Barcode Login</button>
         </div>
@@ -1036,7 +1038,7 @@ function Daftar() {
       </div>
 
       <div style={{ ...card(), flex: 1, overflowY: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, color: colors.text, fontSize: 14 }}>Barcode Command</div>
           <button onClick={printAllCommandBarcodes} style={buttonStyle}>Print Semua Barcode</button>
         </div>

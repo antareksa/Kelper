@@ -175,3 +175,11 @@ export function IconChevronDown({ size = 12 }) {
     </svg>
   );
 }
+
+export function IconMenu({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" {...base}>
+      <path d="M2 4h12M2 8h12M2 12h12" />
+    </svg>
+  );
+}

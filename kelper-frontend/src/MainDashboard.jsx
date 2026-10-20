@@ -82,7 +82,7 @@ function KpiCard({ label, value, trend, spark }) {
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
       <CardHeader label={label} />
-      <div style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
+      <div className="kp-kpi-value" style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
       <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
         {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
         <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix, trend.emptyText) : 'Tidak ada pembanding'}</span>
@@ -99,7 +99,7 @@ function PageViewCard({ pageViews, dayCount }) {
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
       <CardHeader label="Jumlah Pengunjung" />
-      <div style={{ fontSize: 24, fontWeight: 700, color: pageViews ? colors.text : colors.textFaint, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>
+      <div className="kp-kpi-value" style={{ fontSize: 24, fontWeight: 700, color: pageViews ? colors.text : colors.textFaint, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>
         {pageViews ? pageViews.pageViews.toLocaleString('id-ID') : '—'}
       </div>
       <div style={{ fontSize: 11.5, marginTop: 4, marginBottom: 12, color: colors.textFaint, lineHeight: 1.4 }}>
@@ -144,7 +144,7 @@ function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
   return (
     <div style={card({ flex: 1 })}>
       <CardHeader label="Alur Keuntungan" />
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div className="kp-funnel" style={{ display: 'flex', gap: 8 }}>
         {steps.map((s) => (
           <div
             key={s.label}
@@ -486,7 +486,7 @@ function MainDashboard() {
         </div>
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          <div className="kp-kpis" style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
             <KpiCard label="Total Order" value={String(data.today.orderCount)} trend={{ pct: data.trend.orderCountPct, ...trendText }} spark={data.series.orderCount} />
             <KpiCard label="Omzet" value={formatRupiah(data.today.omzet)} trend={{ pct: data.trend.omzetPct, ...trendText }} spark={data.series.omzet} />
             <KpiCard label="Laba Kotor" value={formatRupiah(data.today.laba)} trend={{ pct: data.trend.labaPct, ...trendText }} spark={data.series.laba} />
@@ -499,22 +499,22 @@ function MainDashboard() {
             <PageViewCard pageViews={data.pageViews} dayCount={data.dayCount} />
           </div>
 
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+          <div className="kp-stack" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
             <ProfitFunnel laba={data.today.laba} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} iklan={data.today.iklan} affiliasi={data.affiliasi} />
           </div>
 
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+          <div className="kp-stack" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
             <LineChart omzetSeries={data.chart.omzet} labaSeries={data.chart.laba} unit={data.chart.unit} dateLabel={rangeLabel(data)} />
           </div>
         </>
       )}
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+      <div className="kp-stack" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <ProductList products={data.topProducts} dateLabel={rangeLabel(data)} />
         <CostBreakdown iklan={data.today.iklan} layanan={data.today.layanan} biayaPesanan={data.today.biayaPesanan} affiliasiCommission={data.affiliasi?.commission} dateLabel={rangeLabel(data)} />
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+      <div className="kp-stack" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
         <StockList label="5 Stok Dashboard Terbanyak" items={data.mostStock} />
         <StockList label="5 Stok Dashboard Tersedikit" items={data.leastStock} />
       </div>

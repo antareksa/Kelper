@@ -103,7 +103,7 @@ export default function OperatorPerformance() {
             </div>
           </div>
 
-          <div style={{ ...card(), padding: 0, overflow: 'hidden' }}>
+          <div style={{ ...card(), padding: 0, overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${colors.border}`, textAlign: 'left' }}>

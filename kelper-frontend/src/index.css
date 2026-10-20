@@ -147,3 +147,56 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Phone layout for the admin Dashboard (2026-10-20). Pages use inline styles,
+   so these classes override them with !important only below 768px; desktop is
+   untouched. */
+@media (max-width: 768px) {
+  /* side-by-side cards -> one under the other */
+  .kp-stack {
+    flex-direction: column !important;
+  }
+  .kp-stack > * {
+    flex: none !important;
+    width: 100%;
+  }
+  /* KPI cards: two per row */
+  .kp-kpis {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+  }
+  .kp-kpis > * {
+    min-width: 0 !important;
+  }
+  .kp-kpi-value {
+    font-size: 18px !important;
+    overflow-wrap: anywhere;
+  }
+  /* Alur Keuntungan tiles: two per row instead of five squeezed ones */
+  .kp-funnel {
+    flex-wrap: wrap;
+  }
+  .kp-funnel > * {
+    flex: 1 1 calc(50% - 8px) !important;
+    aspect-ratio: auto !important;
+    min-height: 72px;
+  }
+  .kp-funnel > * > :last-child {
+    font-size: 16px !important;
+  }
+  /* order columns (Packing Station): swipe left/right, one column at a time */
+  .kp-columns {
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+  .kp-columns > * {
+    flex: 0 0 85% !important;
+    scroll-snap-align: start;
+    max-height: 75dvh;
+  }
+  .kp-wrap {
+    flex-wrap: wrap !important;
+  }
+}

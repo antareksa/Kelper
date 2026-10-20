@@ -12,7 +12,8 @@ import IklanRoas from './IklanRoas';
 import { useShopeeConnection } from './useShopeeConnection';
 import { SHOP_ID } from './shopConfig';
 import { colors } from './theme';
-import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory, IconBolt } from './Icons';
+import { IconGrid, IconBox, IconMonitor, IconUser, IconTag, IconChevronDown, IconSettings, IconPower, IconAlertTriangle, IconSearch, IconHistory, IconBolt, IconMenu } from './Icons';
+import { useIsMobile } from './useIsMobile';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken, getAdminRole, setAdminRole } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
@@ -79,6 +80,10 @@ function Dashboard() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [shopeeModalDismissed, setShopeeModalDismissed] = useState(false);
+  // Phone (2026-10-20): the sidebar becomes a slide-in menu behind a top bar.
+  const isMobile = useIsMobile();
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
   // Checked only once actually logged in (not on the login form) — a fresh
   // check every login, since local dismissal state resets on reload, so
@@ -182,7 +187,7 @@ function Dashboard() {
   if (!authenticated) {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
-        <form onSubmit={handleLogin} style={{ ...cardStyle, width: 320 }}>
+        <form onSubmit={handleLogin} style={{ ...cardStyle, width: 320, maxWidth: 'calc(100vw - 32px)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
             <IconGrid size={18} />
             <span style={{ fontWeight: 700, fontSize: 16, color: colors.text, fontFamily: 'var(--heading)' }}>KELPER Admin</span>
@@ -210,7 +215,7 @@ function Dashboard() {
   if (!SHOP_ID && location.pathname !== '/config/shopee') {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
-        <div style={{ ...cardStyle, width: 360, textAlign: 'center' }}>
+        <div style={{ ...cardStyle, width: 360, maxWidth: 'calc(100vw - 32px)', textAlign: 'center' }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: colors.text, marginBottom: 10, fontFamily: 'var(--heading)' }}>
             Hubungkan Shopee
           </div>
@@ -248,7 +253,7 @@ function Dashboard() {
   }
 
   return (
-    <div style={{ background: colors.bg, height: '100vh', display: 'flex', overflow: 'hidden', fontFamily: 'var(--sans)' }}>
+    <div style={{ background: colors.bg, height: isMobile ? '100dvh' : '100vh', display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden', fontFamily: 'var(--sans)' }}>
       <>
         {showShopeeModal && (
           <div
@@ -262,7 +267,7 @@ function Dashboard() {
               zIndex: 1000,
             }}
           >
-            <div style={{ ...cardStyle, width: 360, textAlign: 'center' }}>
+            <div style={{ ...cardStyle, width: 360, maxWidth: 'calc(100vw - 32px)', textAlign: 'center' }}>
               <div style={{ fontSize: 17, fontWeight: 700, color: colors.text, marginBottom: 10, fontFamily: 'var(--heading)' }}>
                 Hubungkan Shopee
               </div>
@@ -282,18 +287,48 @@ function Dashboard() {
           </div>
         )}
 
-        {/* Sidebar */}
+        {isMobile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
+            <button
+              onClick={() => setMenuOpen(true)}
+              aria-label="Buka menu"
+              style={{ position: 'relative', display: 'flex', padding: 8, background: colors.cardAlt, border: `1px solid ${colors.border}`, borderRadius: 8, color: colors.text, cursor: 'pointer' }}
+            >
+              <IconMenu size={18} />
+              {unresolvedCount > 0 && (
+                <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: colors.red }} />
+              )}
+            </button>
+            <IconGrid size={16} />
+            <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: 0.3, fontFamily: 'var(--heading)' }}>KELPER</span>
+          </div>
+        )}
+        {isMobile && menuOpen && (
+          <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 900 }} />
+        )}
+
+        {/* Sidebar (on a phone: a slide-in menu) */}
         <div
           style={{
-            width: 220,
+            width: isMobile ? 260 : 220,
             flexShrink: 0,
-            height: '100vh',
+            height: isMobile ? '100dvh' : '100vh',
             borderRight: `1px solid ${colors.border}`,
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
             padding: 20,
             boxSizing: 'border-box',
+            ...(isMobile && {
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              zIndex: 901,
+              background: colors.bg,
+              overflowY: 'auto',
+              transform: menuOpen ? 'translateX(0)' : 'translateX(-100%)',
+              transition: 'transform 0.2s ease',
+            }),
           }}
         >
           <div>
@@ -468,7 +503,7 @@ function Dashboard() {
         </div>
 
         {/* Main content */}
-        <div style={{ flex: 1, height: '100vh', overflowY: 'auto', padding: 24, boxSizing: 'border-box' }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, height: isMobile ? 'auto' : '100vh', overflowY: 'auto', padding: isMobile ? 12 : 24, boxSizing: 'border-box' }}>
           <Routes>
             <Route path="/" element={<Navigate to={homePath} replace />} />
             <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
