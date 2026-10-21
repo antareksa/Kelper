@@ -68,6 +68,8 @@ function PackingStationSettings() {
     settings.workHourEndHour !== settingsDraft.workHourEndHour ||
     settings.instantWorkHourStartHour !== settingsDraft.instantWorkHourStartHour ||
     settings.instantWorkHourEndHour !== settingsDraft.instantWorkHourEndHour ||
+    settings.instantSaturdayStartHour !== settingsDraft.instantSaturdayStartHour ||
+    settings.instantSaturdayEndHour !== settingsDraft.instantSaturdayEndHour ||
     settings.saturdayStartHour !== settingsDraft.saturdayStartHour ||
     settings.saturdayEndHour !== settingsDraft.saturdayEndHour ||
     settings.sundayOff !== settingsDraft.sundayOff ||
@@ -176,6 +178,34 @@ function PackingStationSettings() {
             disabled={!settingsDraft}
             value={settingsDraft?.instantWorkHourEndHour ?? ''}
             onChange={handleSettingsNumberChange('instantWorkHourEndHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          {/* Saturday gets its own instant window too (2026-10-21) --
+              separate from both instant's weekday hours above and normal
+              orders' own Sabtu Mulai/Selesai below, since the shop's
+              Saturday hours can be shorter than a weekday's. */}
+          <label style={settingsLabelStyle}>Sabtu Instant Mulai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.instantSaturdayStartHour ?? ''}
+            onChange={handleSettingsNumberChange('instantSaturdayStartHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Sabtu Instant Selesai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.instantSaturdayEndHour ?? ''}
+            onChange={handleSettingsNumberChange('instantSaturdayEndHour')}
             style={settingsInputStyle}
           />
         </div>

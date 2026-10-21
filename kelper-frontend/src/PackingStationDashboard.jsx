@@ -351,7 +351,8 @@ function instantHoursText(w) {
   if (!w.workHourEnabled) return 'Batas jam kerja nonaktif';
   const day = new Date(Date.now() + 7 * 3600 * 1000).getUTCDay();
   if (day === 0 && w.sundayOff) return 'Minggu: libur';
-  return `${pad2(w.instantWorkHourStartHour)}:00 - ${pad2(w.instantWorkHourEndHour)}:00 WIB`;
+  const [start, end] = day === 6 ? [w.instantSaturdayStartHour, w.instantSaturdayEndHour] : [w.instantWorkHourStartHour, w.instantWorkHourEndHour];
+  return `${pad2(start)}:00 - ${pad2(end)}:00 WIB`;
 }
 
 // Live "is it work hour now" label on Order Lists (2026-10-16, instant row

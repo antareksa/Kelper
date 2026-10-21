@@ -58,10 +58,20 @@ const DEFAULTS = {
   // 7:00) lets KELPER book instant orders as soon as their own short delay
   // clears, without touching when NORMAL orders start (still
   // workHourStartHour). Applies every day instant orders would otherwise be
-  // worked (Saturday included, using this same pair, not saturdayStart/EndHour)
-  // except Sunday, which still follows sundayOff.
+  // worked, except Saturday (its own instantSaturdayStartHour/EndHour below)
+  // and Sunday (still follows sundayOff).
   instantWorkHourStartHour: 8,
   instantWorkHourEndHour: 16,
+  // Client-requested (2026-10-21): Saturday gets its own instant window too,
+  // separate from both instantWorkHourStartHour/EndHour (the weekday instant
+  // hours) and saturdayStartHour/EndHour (normal orders' Saturday hours) --
+  // the shop's physical Saturday hours can be shorter than a weekday's, so
+  // instant orders shouldn't keep getting booked/labeled past the point
+  // nobody's there to pack them, even if instant's weekday window is wider.
+  // Defaults to the same values as instantWorkHourStartHour/EndHour, so
+  // nothing changes on Saturday until this is set deliberately.
+  instantSaturdayStartHour: 8,
+  instantSaturdayEndHour: 16,
   // Kill switch for the work-hour restriction itself — lets an admin turn
   // work-hour enforcement off entirely (bookings happen any time, like
   // before this feature existed) to check the rest of the flow without
@@ -148,6 +158,16 @@ function getInstantWorkHourEndHour() {
   return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.instantWorkHourEndHour;
 }
 
+function getInstantSaturdayStartHour() {
+  const v = Number(getSetting('instantSaturdayStartHour', String(DEFAULTS.instantSaturdayStartHour)));
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.instantSaturdayStartHour;
+}
+
+function getInstantSaturdayEndHour() {
+  const v = Number(getSetting('instantSaturdayEndHour', String(DEFAULTS.instantSaturdayEndHour)));
+  return Number.isFinite(v) && v >= 0 && v <= 23 ? v : DEFAULTS.instantSaturdayEndHour;
+}
+
 function getWorkHourEnabled() {
   return getSetting('workHourEnabled', String(DEFAULTS.workHourEnabled)) === 'true';
 }
@@ -164,20 +184,23 @@ function getReadyToCheckStuckSeconds() {
 // behaves exactly like before this feature existed, for checking the rest
 // of the flow without waiting for the clock.
 //
-// isInstant (2026-10-21 hotfix) picks which start/end pair applies:
-// instantWorkHourStartHour/EndHour for an instant order, every non-Sunday
-// day (no separate shorter Saturday window the way normal orders get —
-// see DEFAULTS' comment), or the normal workHourStartHour/EndHour (with
-// Saturday's own shorter hours) otherwise. Sunday-off applies to both.
-// Callers that don't care about the distinction (most of them -- anything
-// not deciding a specific order's own eligibility) can omit the argument
-// and get the normal-order window, same as before this parameter existed.
+// isInstant (2026-10-21 hotfix) picks which start/end pair applies: an
+// instant order uses instantWorkHourStartHour/EndHour on a weekday or
+// instantSaturdayStartHour/EndHour on Saturday; a normal order uses
+// workHourStartHour/EndHour or Saturday's own saturdayStartHour/EndHour.
+// Sunday-off applies to both. Callers that don't care about the distinction
+// (most of them -- anything not deciding a specific order's own eligibility)
+// can omit the argument and get the normal-order window, same as before
+// this parameter existed.
 function isWithinWorkHour(isInstant) {
   if (!getWorkHourEnabled()) return true;
   const day = getWIBDay();
   if (day === 0 && getSundayOff()) return false;
   const hour = getWIBHour();
-  if (isInstant) return hour >= getInstantWorkHourStartHour() && hour < getInstantWorkHourEndHour();
+  if (isInstant) {
+    if (day === 6) return hour >= getInstantSaturdayStartHour() && hour < getInstantSaturdayEndHour();
+    return hour >= getInstantWorkHourStartHour() && hour < getInstantWorkHourEndHour();
+  }
   if (day === 6) return hour >= getSaturdayStartHour() && hour < getSaturdayEndHour();
   return hour >= getWorkHourStartHour() && hour < getWorkHourEndHour();
 }
@@ -195,13 +218,15 @@ function getPackingSettings() {
     sundayOff: getSundayOff(),
     instantWorkHourStartHour: getInstantWorkHourStartHour(),
     instantWorkHourEndHour: getInstantWorkHourEndHour(),
+    instantSaturdayStartHour: getInstantSaturdayStartHour(),
+    instantSaturdayEndHour: getInstantSaturdayEndHour(),
     workHourEnabled: getWorkHourEnabled(),
     readyToCheckStuckSeconds: getReadyToCheckStuckSeconds(),
     priorityCarriers: getPriorityCarriersText(),
   };
 }
 
-function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, saturdayStartHour, saturdayEndHour, sundayOff, instantWorkHourStartHour, instantWorkHourEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
+function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxConcurrentBookings, maxReadyToCheck, workHourStartHour, workHourEndHour, saturdayStartHour, saturdayEndHour, sundayOff, instantWorkHourStartHour, instantWorkHourEndHour, instantSaturdayStartHour, instantSaturdayEndHour, workHourEnabled, readyToCheckStuckSeconds, priorityCarriers }) {
   if (orderDelayMinutes != null) setSetting('orderDelayMinutes', Math.max(0, Number(orderDelayMinutes)));
   if (instantOrderDelayMinutes != null) setSetting('instantOrderDelayMinutes', Math.max(0, Number(instantOrderDelayMinutes)));
   if (maxConcurrentBookings != null) setSetting('maxConcurrentBookings', Math.max(0, Number(maxConcurrentBookings)));
@@ -213,6 +238,8 @@ function setPackingSettings({ orderDelayMinutes, instantOrderDelayMinutes, maxCo
   if (sundayOff != null) setSetting('sundayOff', sundayOff ? 'true' : 'false');
   if (instantWorkHourStartHour != null) setSetting('instantWorkHourStartHour', Math.min(23, Math.max(0, Number(instantWorkHourStartHour))));
   if (instantWorkHourEndHour != null) setSetting('instantWorkHourEndHour', Math.min(23, Math.max(0, Number(instantWorkHourEndHour))));
+  if (instantSaturdayStartHour != null) setSetting('instantSaturdayStartHour', Math.min(23, Math.max(0, Number(instantSaturdayStartHour))));
+  if (instantSaturdayEndHour != null) setSetting('instantSaturdayEndHour', Math.min(23, Math.max(0, Number(instantSaturdayEndHour))));
   if (workHourEnabled != null) setSetting('workHourEnabled', workHourEnabled ? 'true' : 'false');
   if (readyToCheckStuckSeconds != null) setSetting('readyToCheckStuckSeconds', Math.max(1, Number(readyToCheckStuckSeconds)));
   if (typeof priorityCarriers === 'string') setSetting('priorityCarriers', priorityCarriers.trim().slice(0, 300));
@@ -232,6 +259,8 @@ module.exports = {
   getSundayOff,
   getInstantWorkHourStartHour,
   getInstantWorkHourEndHour,
+  getInstantSaturdayStartHour,
+  getInstantSaturdayEndHour,
   getWorkHourEnabled,
   getReadyToCheckStuckSeconds,
   getPriorityCarriers,
