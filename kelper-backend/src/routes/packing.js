@@ -278,14 +278,17 @@ router.post('/next-order', async (req, res) => {
   // the normal orderDelayMinutes — see packingSettings.js.
   const normalCutoff = now() - getOrderDelaySeconds(false);
   const instantCutoff = now() - getOrderDelaySeconds(true);
-  // Client-requested (2026-10-07): INSTANT orders are only worked during work
-  // hour. Outside the window none is handed to a station -- whatever its label
+  // Client-requested (2026-10-07): INSTANT orders are only worked during
+  // THEIR OWN work hour (instantWorkHourStartHour/EndHour, client-requested
+  // 2026-10-21 hotfix -- separate from normal orders' workHourStartHour/
+  // EndHour). Outside it none is handed to a station -- whatever its label
   // state -- and none is booked (shopeeSync.js); it waits in the Waiting List
-  // until the window reopens. (Seen in production: instant order 261004Q27D8NBX
+  // until that window reopens. (Seen in production: instant order 261004Q27D8NBX
   // was packed after 16:00 with only a temp barcode and went to "ship tomorrow".)
   // Normal orders keep the old after-hours behaviour: claimable even unlabeled,
   // to be packed with a temp barcode.
-  const withinWorkHour = isWithinWorkHour();
+  const normalOpen = isWithinWorkHour(false);
+  const instantOpen = isWithinWorkHour(true);
   // Fresh orders only. Until 2026-10-07 this also picked up yesterday's Pack
   // Besok boxes (DEFERRED_READY, now labelled) and told the operator to go and
   // find the box by its temp barcode. The client does not want operators
@@ -294,19 +297,41 @@ router.post('/next-order', async (req, res) => {
   // /print-resi below).
   // Priority (client-requested 2026-10-12): instant, then a priority expedition,
   // then fewer pieces to scan, then the oldest -- see priorityOrder.js.
-  const allowed = afterHoursFreshAllowed(shop_id, normalCutoff); // null = no after-hours cap
+  // afterHoursFreshAllowed only ever covers NORMAL orders (its own query
+  // filters is_instant = 0) and the cap it enforces was never meant to apply
+  // to instant orders either -- so when normal work hour is closed (the only
+  // time this cap list is non-null) but instant's own window is open, check
+  // for an eligible instant order separately and prefer it: instant always
+  // sorts first in priorityOrderBy, so if one exists it's the right pick.
+  const allowed = afterHoursFreshAllowed(shop_id, normalCutoff); // null = no after-hours cap (or normal work hour open)
   const ob = priorityOrderBy('o');
-  const pick = allowed
+  let pick = allowed
     ? (allowed.length ? { order_sn: allowed[0] } : undefined) // the visible set is already in priority order
-    : db.prepare(`
-        SELECT o.order_sn AS order_sn
-        FROM orders o
-        WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
-          AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
-          AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
-        ${ob.sql}
-        LIMIT 1
-      `).get(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, ...ob.params);
+    : undefined;
+  if (allowed && instantOpen) {
+    const instantPick = db.prepare(`
+      SELECT o.order_sn AS order_sn FROM orders o
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 1 AND COALESCE(o.is_instant, 0) = 1
+        AND (o.delay_skip_at IS NOT NULL OR o.created_at <= ?)
+      ${ob.sql}
+      LIMIT 1
+    `).get(shop_id, instantCutoff, ...ob.params);
+    if (instantPick) pick = instantPick;
+  }
+  if (!allowed) {
+    pick = db.prepare(`
+      SELECT o.order_sn AS order_sn
+      FROM orders o
+      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+        AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
+        AND (
+          (COALESCE(o.is_instant, 0) = 1 AND ? = 1 AND o.label_ready = 1)
+          OR (COALESCE(o.is_instant, 0) = 0 AND (? = 0 OR o.label_ready = 1))
+        )
+      ${ob.sql}
+      LIMIT 1
+    `).get(shop_id, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, ...ob.params);
+  }
 
   if (!pick) {
     return res.status(404).json({ error: 'no_orders', message: 'No orders ready to pack for this shop' });
@@ -1033,7 +1058,11 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
 
   const normalCutoff = now() - getOrderDelaySeconds(false);
   const instantCutoff = now() - getOrderDelaySeconds(true);
-  const withinWorkHour = isWithinWorkHour();
+  // Client-requested (2026-10-21) hotfix: instant orders have their own
+  // work-hour window now, separate from normal orders' -- see
+  // packingSettings.js's isWithinWorkHour and /next-order above.
+  const normalOpen = isWithinWorkHour(false);
+  const instantOpen = isWithinWorkHour(true);
 
   const waitingDelay = db
     .prepare(`
@@ -1060,7 +1089,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
       WHERE shop_id = ? AND status = 'READY_TO_PACK'
         AND (delay_skip_at IS NOT NULL OR created_at <= CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END)
-        AND label_ready = 0 AND ? = 1
+        AND label_ready = 0 AND (CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END) = 1
         -- Without this, a Pack Besok order (packing_sessions.status =
         -- DEFERRED_READY) would match here too — orders.status stays
         -- READY_TO_PACK for the whole Pack Besok flow, only the session's
@@ -1068,22 +1097,24 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
         -- below, which already covers it.
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       UNION ALL
+      -- Pack Besok/DEFERRED_READY never happens for instant orders (see
+      -- /next-order), so this leftover branch only ever needs normalOpen.
       SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at, o.is_instant, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
       ORDER BY created_at ASC
     `)
-    .all(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, shop_id, withinWorkHour ? 1 : 0)
+    .all(shop_id, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, shop_id, normalOpen ? 1 : 0)
     .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, sessionStartedAt: row.session_started_at }) }));
 
   const processing = eligibleUnlabeled.filter((row) => isBookingInFlight(row.order_sn));
   // A fresh order (no session yet) waiting for a free booking slot is still
   // just waiting, like one inside its cancellation delay.
   const queuedFresh = eligibleUnlabeled.filter((row) => row.session_started_at == null && !isBookingInFlight(row.order_sn));
-  // Outside work hour an instant order is held back whatever its label state
-  // (see /next-order): it sits here until the window reopens.
-  const heldInstants = withinWorkHour
+  // Outside ITS OWN work hour an instant order is held back whatever its
+  // label state (see /next-order): it sits here until that window reopens.
+  const heldInstants = instantOpen
     ? []
     : db
         .prepare(`
@@ -1109,7 +1140,10 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
-        AND CASE WHEN ? = 1 THEN o.label_ready = 1 ELSE COALESCE(o.is_instant, 0) = 0 END
+        AND (
+          (COALESCE(o.is_instant, 0) = 1 AND ? = 1 AND o.label_ready = 1)
+          OR (COALESCE(o.is_instant, 0) = 0 AND (? = 0 OR o.label_ready = 1))
+        )
         -- Any existing packing_sessions row (not just an active one) means
         -- this order is already represented by a different bucket/branch —
         -- a DEFERRED_READY one by the leftover branch below (once labeled)
@@ -1126,11 +1160,14 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
     `)
-    .all(shop_id, instantCutoff, normalCutoff, withinWorkHour ? 1 : 0, shop_id)
+    .all(shop_id, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, shop_id)
     .filter((row) => {
       // Past the cap (see afterHoursFreshAllowed): a fresh order that did not
-      // make the first N waits in the Waiting List instead.
-      if (!afterHoursAllowed || row.session_started_at != null || afterHoursAllowed.includes(row.order_sn)) return true;
+      // make the first N waits in the Waiting List instead. afterHoursAllowed
+      // only ever lists NORMAL orders (that cap was never meant for instant,
+      // which has its own separate work-hour gate) -- an instant row must
+      // never be judged against it.
+      if (!afterHoursAllowed || row.is_instant || row.session_started_at != null || afterHoursAllowed.includes(row.order_sn)) return true;
       overCap.push({ ...row, tags: computeTags({ isInstant: row.is_instant }) });
       return false;
     })
@@ -1321,11 +1358,11 @@ router.post('/resolve-masalah', requireAdminAuth, (req, res) => {
 // which is a different question and was genuinely confusing when the two
 // disagreed (rule enabled, but the clock is at 2am).
 router.get('/settings', requireAdminAuth, (req, res) => {
-  res.json({ ...getPackingSettings(), currentlyWithinWorkHour: isWithinWorkHour() });
+  res.json({ ...getPackingSettings(), currentlyWithinWorkHour: isWithinWorkHour(), currentlyWithinInstantWorkHour: isWithinWorkHour(true) });
 });
 
 router.post('/settings', requireAdminAuth, (req, res) => {
-  res.json({ ...setPackingSettings(req.body || {}), currentlyWithinWorkHour: isWithinWorkHour() });
+  res.json({ ...setPackingSettings(req.body || {}), currentlyWithinWorkHour: isWithinWorkHour(), currentlyWithinInstantWorkHour: isWithinWorkHour(true) });
 });
 
 // Client-requested (2026-09-25): the Order Detail popup's single source of
@@ -1345,7 +1382,10 @@ function resolveOrderBucket(orderSn) {
   if (order.status === 'CANCELLED') return { order, session: null, bucket: 'Cancelled', rank: -1 };
 
   const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ?').get(orderSn);
-  const withinWorkHour = isWithinWorkHour();
+  // This order's OWN window (2026-10-21 hotfix: instant has its own, see
+  // packingSettings.js's isWithinWorkHour) -- correct either way since
+  // order.is_instant picks which pair of hours applies.
+  const withinWorkHour = isWithinWorkHour(order.is_instant);
   const cutoff = now() - getOrderDelaySeconds(order.is_instant);
 
   if (session) {
@@ -1367,7 +1407,10 @@ function resolveOrderBucket(orderSn) {
   if (!order.label_ready && withinWorkHour) {
     return { order, session: null, bucket: isBookingInFlight(orderSn) ? 'Processing' : 'Waiting List', rank: 1 };
   }
-  const allowed = afterHoursFreshAllowed(order.shop_id, cutoff);
+  // afterHoursFreshAllowed's cap only ever covers NORMAL orders (its query
+  // filters is_instant = 0) -- an instant order reaching this point (its own
+  // window is open and it's already labeled) is never subject to it.
+  const allowed = order.is_instant ? null : afterHoursFreshAllowed(order.shop_id, cutoff);
   if (allowed && !allowed.includes(orderSn)) return { order, session: null, bucket: 'Waiting List', rank: 0 };
   return { order, session: null, bucket: 'Ready to Check', rank: 2 };
 }

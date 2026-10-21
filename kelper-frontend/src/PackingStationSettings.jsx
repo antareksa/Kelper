@@ -66,6 +66,8 @@ function PackingStationSettings() {
     settings.maxReadyToCheck !== settingsDraft.maxReadyToCheck ||
     settings.workHourStartHour !== settingsDraft.workHourStartHour ||
     settings.workHourEndHour !== settingsDraft.workHourEndHour ||
+    settings.instantWorkHourStartHour !== settingsDraft.instantWorkHourStartHour ||
+    settings.instantWorkHourEndHour !== settingsDraft.instantWorkHourEndHour ||
     settings.saturdayStartHour !== settingsDraft.saturdayStartHour ||
     settings.saturdayEndHour !== settingsDraft.saturdayEndHour ||
     settings.sundayOff !== settingsDraft.sundayOff ||
@@ -145,6 +147,35 @@ function PackingStationSettings() {
             disabled={!settingsDraft}
             value={settingsDraft?.workHourEndHour ?? ''}
             onChange={handleSettingsNumberChange('workHourEndHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          {/* Instant orders' own window (2026-10-21 hotfix), separate from
+              the Sen-Jum hours above -- some instant couriers auto-arrange
+              the real pickup with Shopee the moment the order is placed, so
+              lowering this (e.g. to 7) lets KELPER book/label them before
+              the courier shows up, without moving when normal orders start. */}
+          <label style={settingsLabelStyle}>Jam Kerja Instant Mulai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.instantWorkHourStartHour ?? ''}
+            onChange={handleSettingsNumberChange('instantWorkHourStartHour')}
+            style={settingsInputStyle}
+          />
+        </div>
+        <div>
+          <label style={settingsLabelStyle}>Jam Kerja Instant Selesai</label>
+          <input
+            type="number"
+            min="0"
+            max="23"
+            disabled={!settingsDraft}
+            value={settingsDraft?.instantWorkHourEndHour ?? ''}
+            onChange={handleSettingsNumberChange('instantWorkHourEndHour')}
             style={settingsInputStyle}
           />
         </div>

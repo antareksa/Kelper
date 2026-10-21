@@ -344,25 +344,55 @@ function todaysHoursText(w) {
   return `${DAY_NAMES[day]}: ${pad2(start)}:00 - ${pad2(end)}:00 WIB`;
 }
 
-// Live "is it work hour now" label on Order Lists (2026-10-16); the settings
-// form itself is in Pengaturan.
+// Instant orders' own window (2026-10-21 hotfix) -- one flat start/end every
+// day instant orders are worked at all (no separate shorter Saturday pair
+// the way normal orders get), Sunday still off when sundayOff is on.
+function instantHoursText(w) {
+  if (!w.workHourEnabled) return 'Batas jam kerja nonaktif';
+  const day = new Date(Date.now() + 7 * 3600 * 1000).getUTCDay();
+  if (day === 0 && w.sundayOff) return 'Minggu: libur';
+  return `${pad2(w.instantWorkHourStartHour)}:00 - ${pad2(w.instantWorkHourEndHour)}:00 WIB`;
+}
+
+// Live "is it work hour now" label on Order Lists (2026-10-16, instant row
+// added 2026-10-21); the settings form itself is in Pengaturan.
 function WorkHourStatus({ workHour }) {
   const inside = workHour?.currentlyWithinWorkHour;
+  const instantInside = workHour?.currentlyWithinInstantWorkHour;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div
-        style={{
-          padding: '9px 14px',
-          borderRadius: 8,
-          fontWeight: 700,
-          fontSize: 13,
-          background: workHour == null ? colors.cardAlt : inside ? colors.greenDim : colors.orangeDim,
-          color: workHour == null ? colors.textDim : inside ? colors.green : colors.orange,
-        }}
-      >
-        {workHour == null ? 'Memeriksa jam kerja...' : inside ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div
+          style={{
+            padding: '9px 14px',
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            background: workHour == null ? colors.cardAlt : inside ? colors.greenDim : colors.orangeDim,
+            color: workHour == null ? colors.textDim : inside ? colors.green : colors.orange,
+          }}
+        >
+          {workHour == null ? 'Memeriksa jam kerja...' : inside ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
+        </div>
+        {workHour && <div style={{ fontSize: 12, color: colors.textDim }}>{todaysHoursText(workHour)}</div>}
       </div>
-      {workHour && <div style={{ fontSize: 12, color: colors.textDim }}>{todaysHoursText(workHour)}</div>}
+      {workHour && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              padding: '5px 10px',
+              borderRadius: 6,
+              fontWeight: 700,
+              fontSize: 11.5,
+              background: instantInside ? colors.greenDim : colors.orangeDim,
+              color: instantInside ? colors.green : colors.orange,
+            }}
+          >
+            Instant: {instantInside ? 'Sedang Jam Kerja' : 'Di Luar Jam Kerja'}
+          </div>
+          <div style={{ fontSize: 11.5, color: colors.textDim }}>{instantHoursText(workHour)}</div>
+        </div>
+      )}
     </div>
   );
 }

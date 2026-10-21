@@ -356,11 +356,15 @@ async function bookOneOrder(accessToken, shopId, orderSn) {
 //     of the backlog, rather than piling up more printed labels than
 //     stations can realistically work through.
 async function bookAndLabelPendingOrders(accessToken, shopId) {
-  // Nothing is booked outside the work-hour window -- INSTANT orders included
-  // (client-requested 2026-10-07): an instant order is only worked during work
-  // hour, so one that arrives after the window closes just waits in the
-  // Waiting List and is booked when the window reopens.
-  if (!isWithinWorkHour()) return;
+  // Client-requested (2026-10-21) hotfix: instant orders now have their own
+  // work-hour window (instantWorkHourStartHour/EndHour), separate from
+  // normal orders' workHourStartHour/EndHour -- see packingSettings.js's
+  // isWithinWorkHour. Nothing is booked when BOTH windows are closed; which
+  // rows are actually eligible is then decided per-row in the query below
+  // (an instant row needs instantOpen, a normal row needs normalOpen).
+  const normalOpen = isWithinWorkHour(false);
+  const instantOpen = isWithinWorkHour(true);
+  if (!normalOpen && !instantOpen) return;
 
   // Client-requested (2026-10-16): instant orders use their own,
   // independently configurable delay (instantOrderDelayMinutes) instead of
@@ -379,10 +383,11 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
       SELECT o.order_sn FROM orders o
       WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 0
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
+        AND CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END = 1
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ${ob.sql}
     `)
-    .all(shopId, instantCutoff, normalCutoff, ...ob.params);
+    .all(shopId, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, ...ob.params);
 
   const maxReadyToCheck = getMaxReadyToCheck();
   if (maxReadyToCheck > 0) {
@@ -414,7 +419,11 @@ async function bookAndLabelPendingOrders(accessToken, shopId) {
 // resume-besok (both gated on label_ready = 1) find it ready to hand to a
 // station for the temp-barcode-scan -> real-label-print -> confirm-scan flow.
 async function bookDeferredOrders(accessToken, shopId) {
-  if (!isWithinWorkHour()) return; // instant orders too: see bookAndLabelPendingOrders
+  // Normal-order-only window (default param = normal) -- Pack Besok/
+  // DEFERRED_READY never happens for instant orders in the first place (see
+  // routes/packing.js's /next-order), so there's no separate instant window
+  // to consider here, unlike bookAndLabelPendingOrders.
+  if (!isWithinWorkHour()) return;
 
   const pending = db
     .prepare(`
