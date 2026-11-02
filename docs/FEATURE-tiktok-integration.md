@@ -1,6 +1,6 @@
 # Feature: TikTok Shop Integration
 
-**Status:** Planning only — nothing built yet. Two draft deploy files exist locally, uncommitted, not referenced by anything live: `deploy/kelper-staging.service`, `deploy/setup-staging.sh`. This doc is what gets reviewed/approved before either is pushed or any application code is written.
+**Status (2026-11-03):** Staging is **live** (Part 1, on the same VM, following the `dev-staging` branch). TikTok's API model has been read from the official spec (see "TikTok Shop API findings" below). **No TikTok application code yet**; that waits for the open questions and the Partner Center sandbox credentials.
 
 ## Client requirement (as given)
 
@@ -41,15 +41,76 @@ Not started. Planned shape, so Shopee code paths are never touched:
 
 **Blocked on (only the user can provide):**
 - TikTok Shop Partner Center account + app registration (sandbox App Key/Secret) — TikTok's equivalent of Shopee's Open Platform signup.
-- TikTok Shop API documentation, once available, to confirm: their OAuth flow shape, order status values, whether an "instant delivery" concept exists, their equivalent of escrow/order income, their shipping/label model.
+- ~~TikTok Shop API documentation~~ — done 2026-11-03, see the next section.
+
+## TikTok Shop API findings (2026-11-03)
+
+Source: the official TikTok Shop OpenAPI spec bundled with TikTok's `tts-open-toolkit` (snapshot, 405 endpoints). Versions below are the newest in that snapshot; **re-check each one on Partner Center docv2 before coding** (`https://partner.tiktokshop.com/docv2`), the snapshot may lag. Nothing here has been tried against a real shop yet.
+
+### Login (OAuth) and request basics
+- Seller authorizes the app in TikTok's page → our redirect URL gets an `auth_code` → exchange it for `access_token` + `refresh_token`. **The token exchange/refresh endpoints are NOT in the bundled spec** (they live on TikTok's separate auth host); take them from docv2's "Authorization" guide.
+- After login: `GET /authorization/202309/shops` returns the authorized shops: `id`, `name`, `code`, `region`, and **`cipher`**. Every shop-level call needs `shop_cipher` (query) + header `x-tts-access-token`. Also common query params `app_key`, `timestamp`, `sign` (HMAC-SHA256 with the App Secret; exact recipe from docv2's "Sign your API request", not in the spec).
+- Webhooks: `PUT /event/202309/webhooks` registers a URL per `event_type`; the one we need is **`ORDER_STATUS_CHANGE`** (fires on every status change, like Shopee push). Can start with polling only, same as Shopee's `discoveryLoop`.
+
+### Orders
+- List: `POST /order/202309/orders/search` — filter by `order_status`, `create_time_ge/lt`, `update_time_ge/lt`; `page_size` ≤ 100 with `page_token` paging. Detail: `GET /order/202507/orders?ids=` (≤ 50 per call).
+- **Status values:** `UNPAID` → `ON_HOLD` → `AWAITING_SHIPMENT` → (`PARTIALLY_SHIPPING`) → `AWAITING_COLLECTION` → `IN_TRANSIT` → `DELIVERED` → `COMPLETED`; or `CANCELLED`. Plus `is_buyer_request_cancel` (buyer asked to cancel, pending).
+  - `ON_HOLD` = "buyer may still cancel without the seller's approval". It's TikTok's own built-in cancellation window, i.e. the same idea as KELPER's order delay.
+- Deadlines on the order: `rts_sla_time` (latest ship time), `shipping_due_time` (auto-cancel if not `AWAITING_COLLECTION` by then), `collection_due_time` (auto-cancel if not `IN_TRANSIT` by then), `pick_up_cut_off_time` (SEA).
+- **Items: there is no `quantity` field on `line_items`.** TikTok returns one line item per unit, so 3 × the same SKU = 3 line items; KELPER must group by `sku_id` / `seller_sku` to get `qty`. `seller_sku` is the merchant's own SKU code (= what KELPER's catalog/barcodes use). Virtual bundles come with `combined_listing_skus`.
+- Indonesia-only fields worth knowing: `commerce_platform` = `TIKTOK_SHOP` or **`TOKOPEDIA`** (Tokopedia orders come through the same API), `buyer_service_fee`, `shipping_insurance_fee`, Horizon+ `distance_fee`.
+- `shipping_type`: `TIKTOK` (TikTok's logistics, label from TikTok — the normal case) or `SELLER` (own courier). `fulfillment_type` must be `FULFILLMENT_BY_SELLER` for us to ship it (FBT / Dilayani Tokopedia orders are shipped by them, KELPER should skip those).
+
+### "Instant" orders
+- **No explicit instant flag in the spec.** The only delivery-type info is `delivery_option_id` / `delivery_option_name` (display text, e.g. "Express shipping"), `shipping_provider` / `shipping_provider_id`, and the warehouse delivery option `type` = `STANDARD | EXPRESS | ECONOMY | SEND_BY_SELLER`. Instant/same-day (GoSend, Grab) would have to be detected from the provider/option name or ID, like Shopee's channel list. **Needs a real or sandbox order to see what Indonesia instant orders look like.**
+
+### Shipping ("booking") and the label
+Shopee's flow (KELPER books, then fetches the label) maps 1-to-1, but TikTok works **per package**, not per order:
+1. Order detail → `packages[].id` (normally one package per order).
+2. Optional: `GET /fulfillment/202309/packages/{package_id}/handover_time_slots` → `can_pickup`, `can_drop_off`, `pickup_slots[]`.
+3. **Book:** `POST /fulfillment/202309/packages/{package_id}/ship` with `handover_method` = `PICKUP` (+ `pickup_slot`) or `DROP_OFF`. Order moves to `AWAITING_COLLECTION`, `tracking_number` appears. (= Shopee `ship_order`.)
+4. **Label:** `GET /fulfillment/202309/packages/{package_id}/shipping_documents?document_type=SHIPPING_LABEL&document_size=A6` → `doc_url` (PDF, **valid 24 hours**, so download and keep it, don't store only the URL). A6 is the default; A5 also possible; `SHIPPING_LABEL_PICTURE` gives a PNG.
+5. Package status: `PROCESSING` (arranged, waiting for courier) → `FULFILLING` (picked up) → `COMPLETED` / `CANCELLED`.
+- Split/combined packages exist (`/packages/combine`, `/orders/{id}/split`); KELPER should start with one-package orders only and send anything else to Masalah.
+
+### Money (for Omzet / Laba / Layanan / Biaya Pesanan)
+- **At order time** (order detail `payment`): `sub_total` (= original price − seller − platform discounts), `shipping_fee`, `seller_discount`, `platform_discount`, `total_amount`. No fees here.
+- **After settlement:** `GET /finance/202501/orders/{order_id}/statement_transactions` → `revenue_amount`, `shipping_cost_amount`, `fee_and_tax_amount`, **`settlement_amount` = revenue − shipping cost − fees/taxes** (= Shopee's `escrow_amount`). Per-SKU `fee_tax_breakdown`, the Indonesia-relevant ones:
+  - `platform_commission_amount`, `dynamic_commission_amount` (ID only), `transaction_fee_amount` → **Biaya Pesanan**
+  - `voucher_xtra_service_fee_amount` → **Layanan** (TikTok's own "Voucher Xtra", the Promo XTRA equivalent, given as its own number, so no percentage estimate needed as on Shopee)
+  - `sfp_service_fee_amount` (Seller Free Shipping Programme ≈ Gratis Ongkir XTRA), `pit_amount` (tax) → **Biaya Pesanan**
+  - `affiliate_commission_amount`, `affiliate_ads_commission_amount` → **Affiliasi**
+- **Before settlement:** `GET /finance/202507/orders/unsettled` gives `est_revenue_amount`, `est_fee_tax_amount`, `est_settlement_amount` (estimates; shipping cost is incomplete until delivery).
+- KELPER's Omzet currently uses **catalog price × qty** (`OMZET_PRICE_SOURCE = 'catalog'` in `routes/dashboard.js`), which is platform-neutral: TikTok orders only need `seller_sku` to match the catalog. Laba Kotor works the same way (catalog price − HPP).
+
+### How TikTok orders would fit the Packing Station buckets
+`resolveOrderBucket` (routes/packing.js) is driven almost entirely by KELPER's **own** state (delay, work hour, booking in flight, `label_ready`, packing session), not by Shopee status values. From the marketplace it only needs: cancelled or not, `is_instant`, `created_at`, and "booked + label downloaded". So TikTok can use the **same buckets** if `tiktokSync.js` fills the same `orders` columns:
+
+| TikTok | KELPER |
+|---|---|
+| `UNPAID` | not imported (as Shopee `UNPAID`) |
+| `ON_HOLD` | import, stays **Waiting List** (TikTok's own cancel window; can't be booked yet) |
+| `AWAITING_SHIPMENT` | normal flow: delay/work hour → booking (`ship`) → label → Ready to Check … |
+| `AWAITING_COLLECTION` | booked; once the label PDF is saved → `label_ready` |
+| `IN_TRANSIT` / `DELIVERED` / `COMPLETED` | picked up / done |
+| `CANCELLED` | **Cancelled** |
+| `is_buyer_request_cancel = true` | flag like Shopee `IN_CANCEL` (Batal & Masalah) |
+
+Still to decide with the client: whether the TikTok order delay should stack on top of `ON_HOLD` or start after it.
+
+### Gaps (need sandbox access or docv2)
+1. Token get/refresh endpoints and the signing recipe (docv2, not in the spec).
+2. What an Indonesian instant/same-day order looks like (provider names/IDs).
+3. Real `ON_HOLD` duration in Indonesia.
+4. Whether sandbox orders can be booked and return a printable label.
 
 ## Open questions (must be settled before Part 2 can really start)
 
 1. Does the client want a Shopee **sandbox** shop connected on staging too (to test the "two marketplaces unified" scenario end-to-end), or is TikTok-only testing sufficient for now?
-2. Once TikTok's order/shipping model is known: does it map cleanly onto the existing Packing Station bucket states (Waiting List / Processing / Ready to Check / etc.), or does it need its own parallel bucket logic?
+2. ~~Does TikTok map onto the existing Packing Station buckets?~~ Yes, per the API findings above (same buckets, see the table). Remaining client choice: TikTok and Shopee orders in **one shared queue** (with a platform badge), or separate?
 3. Dashboard numbers (Omzet, Laba, etc.) — combined total across both marketplaces, or kept separately filterable? Affects `routes/dashboard.js`'s queries, which currently assume one shop per calculation.
 4. Timeline/priority — is this meant to go live this quarter, or is it fine to build incrementally alongside other work?
 
 ## Next step
 
-Once this doc is reviewed: commit + push the two staging deploy files, write the additive Caddy script, and the user sets up the DNS record — all before any TikTok application code is written.
+Staging is done (2026-11-02). Next: the user registers on TikTok Shop Partner Center and creates the app (sandbox App Key/Secret, redirect URL `https://dashboard.staging.kelper.co.id/...`), and answers the open questions above. Then the first build step is login + order import only (no booking), tested on staging.
