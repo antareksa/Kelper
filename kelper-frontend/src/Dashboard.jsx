@@ -61,6 +61,9 @@ function subItemStyle(active) {
   };
 }
 
+// The staging copy (dashboard.staging. / packing.staging.kelper.co.id).
+const IS_STAGING = window.location.hostname.includes('.staging.');
+
 function Dashboard() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -89,7 +92,7 @@ function Dashboard() {
   // check every login, since local dismissal state resets on reload, so
   // this can't go permanently silent while still disconnected.
   const shopee = useShopeeConnection(authenticated);
-  const showShopeeModal = authenticated && !isPacking && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
+  const showShopeeModal = !IS_STAGING && authenticated && !isPacking && !shopee.checking && !shopee.connected && !shopeeModalDismissed;
 
   // The role saved in the browser is only a cache for drawing the menu at once
   // on reload -- ask the server who this session really is. A 401 means the
@@ -212,7 +215,9 @@ function Dashboard() {
   // except /config/shopee itself (see the pathname check below), which is
   // where the actual "Hubungkan" controls for both the main app and Brand
   // Portal live and needs no shop_id to render.
-  if (!SHOP_ID && location.pathname !== '/config/shopee') {
+  // Staging (2026-11-02) has no shop connected on purpose, so it skips this
+  // screen and the reminder popup above; pages there just show empty data.
+  if (!SHOP_ID && !IS_STAGING && location.pathname !== '/config/shopee') {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)' }}>
         <div style={{ ...cardStyle, width: 360, maxWidth: 'calc(100vw - 32px)', textAlign: 'center' }}>
