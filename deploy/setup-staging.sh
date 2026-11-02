@@ -67,14 +67,50 @@ echo "==> Installing backend dependencies"
 echo "==> Building frontend"
 (cd "$APP_DIR/kelper-frontend" && npm ci --cache "$NPM_CACHE_DIR" && npm run build)
 
-if [ ! -f "$APP_DIR/kelper-backend/.env.production" ]; then
+# Per-checkout overrides (gitignored, read by src/config.js on top of
+# config.production.json). Without this file staging would upload packing
+# videos into the REAL video bucket and mix its database backups into
+# production's backup folder. Never overwritten once it exists.
+LOCAL_CONFIG="$APP_DIR/kelper-backend/config.local.json"
+if [ ! -f "$LOCAL_CONFIG" ]; then
+  echo "==> Writing kelper-backend/config.local.json (staging: no video uploads, own backup folder)"
+  cat > "$LOCAL_CONFIG" << 'EOF'
+{
+  "instanceName": "staging",
+  "evidence": {
+    "gcsEnabled": false
+  }
+}
+EOF
+fi
+
+# Minimal env: only an admin login, NO marketplace credentials. With no
+# Shopee keys and no connected shop, the sync loop has nothing to call, so
+# staging can never touch the real shop. Never overwritten once it exists.
+ENV_FILE="$APP_DIR/kelper-backend/.env.production"
+if [ ! -f "$ENV_FILE" ]; then
+  STAGING_ADMIN_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr -d '/+=')"
+  echo "==> Writing kelper-backend/.env.production (staging admin login only)"
+  cat > "$ENV_FILE" << EOF
+# STAGING instance -- sandbox/test credentials only. Never put the live
+# Shopee or TikTok keys here.
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=$STAGING_ADMIN_PASSWORD
+EOF
+  chmod 600 "$ENV_FILE"
   echo ""
-  echo "!! kelper-backend/.env.production is missing in THIS staging checkout."
-  echo "   The server will start, but nothing marketplace-related will work"
-  echo "   until it's filled in with SANDBOX credentials — TikTok's sandbox"
-  echo "   App Key/Secret at minimum. Do not put real/live Shopee or TikTok"
-  echo "   credentials in this file; this instance is for sandbox testing."
+  echo "    Staging Dashboard login:  admin / $STAGING_ADMIN_PASSWORD"
+  echo "    (write it down; it is also in kelper-backend/.env.production)"
   echo ""
+fi
+
+# Port 3002 must be free (or already ours, on a re-run).
+if ! systemctl is-active --quiet kelper-staging && ss -ltn 'sport = :3002' | grep -q LISTEN; then
+  echo ""
+  echo "!! Something else is already listening on port 3002:"
+  sudo ss -ltnp 'sport = :3002' || true
+  echo "   Stopping here so it isn't disturbed. Nothing was installed as a service."
+  exit 1
 fi
 
 echo "==> Installing systemd service (kelper-staging, port 3002)"
@@ -92,6 +128,6 @@ echo "    Status: sudo systemctl status kelper-staging"
 echo "    Logs:   sudo journalctl -u kelper-staging -f"
 echo "    The real production service (kelper) was not touched by this script."
 echo ""
-echo "    Next: run deploy/add-staging-https.sh ON THE SAME VM from the"
-echo "    /opt/kelper checkout (not this one) to expose this on"
-echo "    staging.kelper.co.id without disturbing the existing HTTPS config."
+echo "    Check it locally:  curl -s localhost:3002/api/ping"
+echo "    Next: bash deploy/add-staging-https.sh   (adds dashboard.staging. and"
+echo "    packing.staging.kelper.co.id to Caddy without touching the live sites)"

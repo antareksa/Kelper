@@ -3,6 +3,8 @@ node_modules/
 .env
 .env.*
 *.db
+# per-checkout overrides (the staging copy on the VM), see src/config.js
+kelper-backend/config.local.json
 kelper-asset/
 .kiosk-chrome-profile/
 .kiosk-chrome-profile-local/

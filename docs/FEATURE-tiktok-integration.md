@@ -19,19 +19,14 @@ TikTok's OAuth connect flow and (likely) webhooks need a real, publicly reachabl
 - Separate directory on the VM: `/opt/kelper-staging` (a second `git clone` of this same repo), not a switch inside `/opt/kelper`.
 - Separate systemd service: `kelper-staging` (new, alongside the existing `kelper` service — doesn't touch it), listening on **port 3002** (the app already supports `PORT` as an env var; 3001 stays the real one).
 - Separate database: happens automatically — `db.js` opens `kelper.${NODE_ENV}.db` relative to wherever the app is running from, so a second checkout directory gets its own separate SQLite file with zero code changes.
-- Separate config/credentials: same mechanism — its own `.env.production` and `config.production.json`, physically in the staging directory, holding **TikTok sandbox credentials only** (no real Shopee, no real TikTok-live credentials ever go in this file).
+- Separate config/credentials: its own `.env.production` (written by `setup-staging.sh`: a staging admin login only, later TikTok **sandbox** credentials; never real Shopee or live TikTok keys). `config.production.json` is shared through git, so anything that must differ goes in a gitignored `kelper-backend/config.local.json` (also written by the setup script): `instanceName: "staging"` (backup.js then uses the `kelper-staging` service and `backups/staging/`, never production's backup folder) and `evidence.gcsEnabled: false` (no uploads into the real video bucket).
 - Runs with `NODE_ENV=production` (not `development`) — this project's `env.js` only recognizes those two values, and staging should behave exactly like production code-wise. The isolation comes entirely from being a different directory/service/port, not from a different `NODE_ENV` string.
-- Separate domain: `staging.kelper.co.id`, proxied by the VM's existing Caddy reverse proxy to `localhost:3002`. **Caveat already identified:** the existing `deploy/setup-https.sh` *overwrites* the whole Caddyfile rather than adding to it — re-running it naively for just the staging domain would wipe out the live `dashboard.kelper.co.id`/`packing.kelper.co.id` entries and break HTTPS for the real app. A separate, additive-only script is needed for this step (not yet written).
+- Separate domains, same split as production: `dashboard.staging.kelper.co.id` and `packing.staging.kelper.co.id` (App.jsx picks the view from the `dashboard`/`packing` hostname prefix), proxied by the VM's existing Caddy to `localhost:3002`. Added with `deploy/add-staging-https.sh`, which only **appends** one block (backup first, validate, restore the backup on failure, `reload` not `restart`). Never use `deploy/setup-https.sh` for this: it overwrites the whole Caddyfile and would drop the live `dashboard.kelper.co.id`/`packing.kelper.co.id` sites.
 
-**Draft files status:**
-- `deploy/kelper-staging.service` — written, matches `deploy/kelper.service`'s shape, port 3002. Not committed.
-- `deploy/setup-staging.sh` — written, matches `deploy/setup-vm.sh`'s shape; refuses to run if `APP_DIR` resolves to `/opt/kelper` (the real prod path), as a hard guard against misconfiguration. Not committed.
-- Still needed: the additive Caddy script for `staging.kelper.co.id`.
+**Files status (2026-11-02):** `deploy/kelper-staging.service`, `deploy/setup-staging.sh` (refuses to run from `/opt/kelper`, refuses if port 3002 is taken by something else) and `deploy/add-staging-https.sh` are all written; not yet run on the VM.
 
 **Blocked on (only the user can provide):**
-- A `staging.kelper.co.id` DNS record pointed at the VM (or a decision to use a second VM instead of sharing the existing one).
-- Confirmation that port 3002 is actually free on the VM.
-- A fresh admin account created on the staging instance once it's up (its database starts completely empty — no data copied from production).
+- DNS A records for `dashboard.staging.kelper.co.id` and `packing.staging.kelper.co.id` pointed at the VM.
 
 ## Part 2 — Application architecture for the TikTok integration itself
 

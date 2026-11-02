@@ -34,10 +34,15 @@ const Database = require('better-sqlite3');
 const { NODE_ENV } = require('../src/env');
 const { getConfig } = require('../src/config');
 
-const SERVICE = 'kelper';
+// A staging checkout (config.local.json: "instanceName": "staging") manages
+// its own service and its own backup folder, so a staging backup can never
+// show up as production's "latest", and restoring on staging never stops the
+// live "kelper" service.
+const INSTANCE = getConfig().instanceName || null;
+const SERVICE = INSTANCE ? `kelper-${INSTANCE}` : 'kelper';
 const dbFile = path.join(__dirname, '..', `kelper.${NODE_ENV}.db`);
 const localBackupDir = path.join(__dirname, '..', 'backups');
-const PREFIX = `backups/${NODE_ENV}/`;
+const PREFIX = `backups/${INSTANCE || NODE_ENV}/`;
 const localDir = process.env.KELPER_BACKUP_LOCAL_DIR || null;
 
 const args = process.argv.slice(2);

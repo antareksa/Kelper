@@ -8,6 +8,7 @@ const { NODE_ENV, isProduction } = require('./env');
 const envConfigPath = path.join(__dirname, '..', `config.${NODE_ENV}.json`);
 const fallbackConfigPath = path.join(__dirname, '..', 'config.json');
 const CONFIG_PATH = fs.existsSync(envConfigPath) ? envConfigPath : fallbackConfigPath;
+const LOCAL_CONFIG_PATH = path.join(__dirname, '..', 'config.local.json');
 
 const DEFAULTS = {
   // Whole-backend debug mode: when true, the sync loop below fabricates mock
@@ -53,6 +54,12 @@ const DEFAULTS = {
     gcsEnabled: false,
     gcsBucket: 'kelper-storage',
   },
+  // Which copy of KELPER this checkout is. null = the normal one (service
+  // "kelper", backups under backups/<env>/). The staging checkout sets
+  // "staging" in its config.local.json, so scripts/backup.js stops/starts
+  // "kelper-staging" and keeps its backups under backups/staging/ -- never
+  // mixed into production's backup folder.
+  instanceName: null,
 };
 
 function deepMerge(base, override) {
@@ -80,6 +87,21 @@ function getConfig() {
       console.error(`[config] Failed to read ${CONFIG_PATH}, using defaults: ${err.message}`);
     }
     config = DEFAULTS;
+  }
+
+  // Optional per-checkout overrides, NOT tracked in git (2026-11-02, staging).
+  // The staging copy at /opt/kelper-staging shares config.production.json
+  // with production through git, so anything that must differ there (no
+  // uploads to the real video bucket, its own instance name for backups)
+  // lives in this file instead. Production has no config.local.json, so it
+  // behaves exactly as before.
+  try {
+    const localRaw = fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8');
+    config = deepMerge(config, JSON.parse(localRaw));
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.error(`[config] Failed to read ${LOCAL_CONFIG_PATH}, ignoring it: ${err.message}`);
+    }
   }
 
   // Hard safety net, independent of whatever config.production.json actually
