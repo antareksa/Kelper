@@ -84,8 +84,14 @@ router.get('/exchange', requireConfigured, async (req, res) => {
   try {
     shops = await getAuthorizedShops(tokens.accessToken);
   } catch (err) {
-    log(`get authorized shops failed: ${err.tiktokCode ?? ''} ${err.message}`);
-    return res.status(502).json({ error: 'shops_failed', message: `Token didapat, tapi daftar toko gagal: ${err.message}` });
+    // The scopes TikTok put on this token (names only, not secret): the
+    // usual cause of this failure is a token issued without the needed one.
+    const scopes = tokens.grantedScopes.length ? tokens.grantedScopes.join(', ') : '(kosong)';
+    log(`get authorized shops failed: ${err.tiktokCode ?? ''} ${err.message} | granted scopes: ${scopes}`);
+    return res.status(502).json({
+      error: 'shops_failed',
+      message: `Token didapat, tapi daftar toko gagal: ${err.message} | Scope yang diberikan TikTok ke token ini: ${scopes}`,
+    });
   }
 
   saveConnection(tokens, shops);
