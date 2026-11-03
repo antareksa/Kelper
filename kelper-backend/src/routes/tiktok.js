@@ -87,10 +87,11 @@ router.get('/exchange', requireConfigured, async (req, res) => {
     // The scopes TikTok put on this token (names only, not secret): the
     // usual cause of this failure is a token issued without the needed one.
     const scopes = tokens.grantedScopes.length ? tokens.grantedScopes.join(', ') : '(kosong)';
-    log(`get authorized shops failed: ${err.tiktokCode ?? ''} ${err.message} | granted scopes: ${scopes}`);
+    const who = `${tokens.sellerName || '?'} (${tokens.sellerBaseRegion || '?'})`;
+    log(`get authorized shops failed: code ${err.tiktokCode ?? '?'} ${err.message} | seller ${who} | granted scopes: ${scopes}`);
     return res.status(502).json({
       error: 'shops_failed',
-      message: `Token didapat, tapi daftar toko gagal: ${err.message} | Scope yang diberikan TikTok ke token ini: ${scopes}`,
+      message: `Token didapat, tapi daftar toko gagal (kode TikTok ${err.tiktokCode ?? '?'}): ${err.message} | Seller: ${who} | Scope token: ${scopes}`,
     });
   }
 
