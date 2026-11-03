@@ -114,3 +114,5 @@ Still to decide with the client: whether the TikTok order delay should stack on 
 ## Next step
 
 Staging is done (2026-11-02). Next: the user registers on TikTok Shop Partner Center and creates the app (sandbox App Key/Secret, redirect URL `https://dashboard.staging.kelper.co.id/...`), and answers the open questions above. Then the first build step is login + order import only (no booking), tested on staging.
+
+**Step 1 built (2026-11-03): TikTok login only.** `src/tiktok/client.js` (token get/refresh, signing, authorized shops), `src/tiktok/tokenStore.js` (own tables `tiktok_tokens`, `tiktok_shops`), `src/routes/tiktok.js` at `/auth/tiktok` (admin-only; `state` checked; does nothing unless `TIKTOK_APP_KEY`/`TIKTOK_APP_SECRET` are set, so live is unaffected). Frontend: "TikTok Shop (uji coba)" card in Pengaturan (`TikTokAuth.jsx`, hidden unless configured) and `/tiktok-callback` (`TikTokCallback.jsx`). Partner Center redirect URL: `https://dashboard.staging.kelper.co.id/tiktok-callback`. Staging env also needs `TIKTOK_AUTH_URL` (the app's authorization link) or `TIKTOK_SERVICE_ID`.

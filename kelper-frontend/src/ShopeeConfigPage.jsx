@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import ShopeeAuth from './ShopeeAuth';
 import ShopeeBrandAuth from './ShopeeBrandAuth';
+import TikTokAuth from './TikTokAuth';
 import { colors, card } from './theme';
 import PackingStationSettings from './PackingStationSettings';
 import { API_BASE, apiFetch, getAdminRole } from './apiBase';
@@ -142,6 +143,9 @@ function ShopeeConfigPage() {
           <div style={{ fontSize: 13, color: colors.textDim, marginBottom: 12 }}>Affiliate (AMS) (Affiliasi)</div>
           <ShopeeBrandAuth />
         </div>
+
+        {/* Shows only where the TikTok app key is configured (staging). */}
+        <TikTokAuth />
 
         <DashboardSettings />
 

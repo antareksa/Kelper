@@ -21,6 +21,7 @@ const dashboardRoutes = require('./src/routes/dashboard');
 const reportsRoutes = require('./src/routes/reports');
 const adsRoutes = require('./src/routes/ads');
 const webhookRoutes = require('./src/routes/webhook');
+const tiktokRoutes = require('./src/routes/tiktok');
 const { startShopeeSync } = require('./src/shopeeSync');
 const { requireAdminAuth } = require('./src/adminSession');
 const { seedFromEnvIfEmpty } = require('./src/adminUsers');
@@ -54,6 +55,9 @@ app.use((req, res, next) => {
 });
 
 app.get('/api/ping', (req, res) => res.json({ ok: true }));
+// TikTok Shop connection (2026-11-03). Before /auth so its paths never reach
+// the Shopee router; does nothing unless TIKTOK_APP_KEY/SECRET are set.
+app.use('/auth/tiktok', tiktokRoutes);
 app.use('/auth', authRoutes);
 // packing/operators are protected per-route inside their own router files
 // instead of here — both mix real admin endpoints with the Packing Station

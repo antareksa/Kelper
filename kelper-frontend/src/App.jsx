@@ -4,6 +4,7 @@ import ShopeeAuth from './ShopeeAuth';
 import PackingStation from './PackingStation';
 import Dashboard from './Dashboard';
 import ShopeeCallback from './ShopeeCallback';
+import TikTokCallback from './TikTokCallback';
 import { colors } from './theme';
 import { initActiveShopId } from './shopConfig';
 import { API_BASE } from './apiBase';
@@ -45,7 +46,14 @@ function isShopeeBrandCallback() {
 // mouse click on the landing page every boot. Anything else (localhost, a
 // bare IP, the root domain) falls back to the landing page with both
 // buttons, unchanged from before.
+// TikTok Shop's redirect (2026-11-03): its own path, checked before the
+// Shopee ones so a TikTok `code` is never sent to Shopee's exchange.
+function isTikTokCallback() {
+  return window.location.pathname.replace(/\/+$/, '') === '/tiktok-callback';
+}
+
 function initialView() {
+  if (isTikTokCallback()) return 'tiktok-callback';
   if (isShopeeBrandCallback()) return 'shopee-callback-brand';
   if (isShopeeCallback()) return 'shopee-callback';
   const host = window.location.hostname;
@@ -103,6 +111,10 @@ function App() {
         Memuat...
       </div>
     );
+  }
+
+  if (view === 'tiktok-callback') {
+    return <TikTokCallback onDone={backToLanding} />;
   }
 
   if (view === 'shopee-callback') {
