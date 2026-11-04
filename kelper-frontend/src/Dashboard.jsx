@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import PackingStationDashboard from './PackingStationDashboard';
 import MainDashboard from './MainDashboard';
+import DashboardPreview from './DashboardPreview';
 import ListBarang from './ListBarang';
 import StockList from './StockList';
 import OrderSearch from './OrderSearch';
@@ -17,6 +18,14 @@ import { useIsMobile } from './useIsMobile';
 import { API_BASE, apiFetch, setAdminToken, clearAdminToken, getAdminToken, getAdminRole, setAdminRole } from './apiBase';
 
 const DASHBOARD_TAB = { path: '/home', label: 'Dashboard', Icon: IconGrid };
+// Staging only (2026-11-04): Dashboard as a group of Main / Shopee / TikTok,
+// showing TEMP data to check the layout (DashboardPreview.jsx). The live
+// Dashboard keeps its single page.
+const DASHBOARD_SUB_ITEMS = [
+  { path: '/home/main', label: 'Main (Gabungan)' },
+  { path: '/home/shopee', label: 'Shopee' },
+  { path: '/home/tiktok', label: 'TikTok' },
+];
 const ITEMS_TAB = { path: '/list-barang', label: 'List Barang', Icon: IconBox };
 const ORDER_TAB = { path: '/order', label: 'Order', Icon: IconSearch };
 const IKLAN_TAB = { path: '/iklan', label: 'Iklan', Icon: IconBolt };
@@ -348,12 +357,28 @@ function Dashboard() {
               {!isPacking && (
                 <>
                   <button
-                    onClick={() => navigate(DASHBOARD_TAB.path)}
-                    style={navItemStyle(location.pathname === DASHBOARD_TAB.path)}
+                    onClick={() => navigate(IS_STAGING ? DASHBOARD_SUB_ITEMS[0].path : DASHBOARD_TAB.path)}
+                    style={navItemStyle(IS_STAGING ? location.pathname.startsWith(DASHBOARD_TAB.path) : location.pathname === DASHBOARD_TAB.path)}
                   >
                     <DashboardIcon size={16} />
-                    {DASHBOARD_TAB.label}
+                    {IS_STAGING ? (
+                      <>
+                        <span style={{ flex: 1 }}>{DASHBOARD_TAB.label}</span>
+                        <span style={{ display: 'flex', transform: location.pathname.startsWith(DASHBOARD_TAB.path) ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
+                          <IconChevronDown size={12} />
+                        </span>
+                      </>
+                    ) : DASHBOARD_TAB.label}
                   </button>
+                  {IS_STAGING && location.pathname.startsWith(DASHBOARD_TAB.path) && (
+                    <div style={{ marginLeft: 18, marginTop: 6, marginBottom: 4, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {DASHBOARD_SUB_ITEMS.map(({ path, label }) => (
+                        <button key={path} onClick={() => navigate(path)} style={subItemStyle(location.pathname === path)}>
+                          <span>{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   <button
                     onClick={() => navigate(IKLAN_TAB.path)}
@@ -511,7 +536,10 @@ function Dashboard() {
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, height: isMobile ? 'auto' : '100vh', overflowY: 'auto', padding: isMobile ? 12 : 24, boxSizing: 'border-box' }}>
           <Routes>
             <Route path="/" element={<Navigate to={homePath} replace />} />
-            <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : <MainDashboard />} />
+            <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : IS_STAGING ? <Navigate to="/home/main" replace /> : <MainDashboard />} />
+            {IS_STAGING && !isPacking && <Route path="/home/main" element={<DashboardPreview view="main" />} />}
+            {IS_STAGING && !isPacking && <Route path="/home/shopee" element={<DashboardPreview view="shopee" />} />}
+            {IS_STAGING && !isPacking && <Route path="/home/tiktok" element={<DashboardPreview view="tiktok" />} />}
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
             <Route path="/list-barang/stock-opname" element={<StockOpname />} />
             <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}

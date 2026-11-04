@@ -76,17 +76,21 @@ function CardHeader({ label }) {
   );
 }
 
-function KpiCard({ label, value, trend, spark }) {
+function KpiCard({ label, value, trend, spark, note }) {
   const type = trendType(trend?.pct);
   const sparkColor = type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint;
   return (
     <div style={{ ...card(), flex: 1, minWidth: 160, display: 'flex', flexDirection: 'column' }}>
       <CardHeader label={label} />
       <div className="kp-kpi-value" style={{ fontSize: 24, fontWeight: 700, color: colors.text, letterSpacing: -0.5, fontFamily: 'var(--num)' }}>{value}</div>
-      <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
-        {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
-        <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix, trend.emptyText) : 'Tidak ada pembanding'}</span>
-      </div>
+      {note ? (
+        <div style={{ fontSize: 11.5, marginTop: 4, marginBottom: 12, color: colors.orange, lineHeight: 1.4 }}>{note}</div>
+      ) : (
+        <div style={{ fontSize: 12, marginTop: 4, marginBottom: 12, color: type === 'up' ? colors.green : type === 'down' ? colors.red : colors.textFaint }}>
+          {type === 'up' ? '▲' : type === 'down' ? '▼' : '—'}{' '}
+          <span style={{ fontFamily: 'var(--num)' }}>{trend ? trendLabel(trend.pct, trend.suffix, trend.emptyText) : 'Tidak ada pembanding'}</span>
+        </div>
+      )}
       {spark && spark.length >= 2 ? <Sparkline data={spark} color={sparkColor} height={30} /> : <div style={{ height: 30 }} />}
     </div>
   );
@@ -128,10 +132,10 @@ function PageViewCard({ pageViews, dayCount }) {
 // Pesanan. `blocked` only fires transiently, before the first fetch has
 // happened yet (e.g. right after connecting Affiliate (AMS), or right after
 // server startup for Iklan).
-function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi }) {
+function ProfitFunnel({ laba, layanan, biayaPesanan, iklan, affiliasi, iklanLabel = 'Iklan' }) {
   const steps = [
     { label: 'Margin', value: formatRupiah(laba), color: colors.green, blocked: false },
-    { label: 'Iklan', value: iklan != null ? formatRupiah(iklan) : null, color: colors.blue, blocked: iklan == null },
+    { label: iklanLabel, value: iklan != null ? formatRupiah(iklan) : null, color: colors.blue, blocked: iklan == null },
     { label: 'Layanan', value: formatRupiah(layanan), color: colors.blue, blocked: false },
     { label: 'Biaya Pesanan', value: formatRupiah(biayaPesanan), color: colors.orange, blocked: false },
     {
@@ -247,9 +251,9 @@ function ProductList({ products, dateLabel }) {
 // Ranks today's cost figures against each other — all four now have a real
 // data source (see ProfitFunnel), so this went from a permanent "not
 // connected" placeholder to an actual breakdown.
-function CostBreakdown({ iklan, layanan, biayaPesanan, affiliasiCommission, dateLabel }) {
+function CostBreakdown({ iklan, layanan, biayaPesanan, affiliasiCommission, dateLabel, iklanLabel = 'Iklan' }) {
   const costs = [
-    { label: 'Iklan', value: iklan },
+    { label: iklanLabel, value: iklan },
     { label: 'Layanan', value: layanan },
     { label: 'Biaya Pesanan', value: biayaPesanan },
     { label: 'Affiliasi', value: affiliasiCommission },
@@ -307,6 +311,18 @@ function StockList({ label, items }) {
   );
 }
 
+// A small Shopee/TikTok tag for a row that belongs to one marketplace. Rows
+// without a platform (the live single-shop Dashboard) show nothing.
+function PlatformBadge({ platform }) {
+  if (!platform) return null;
+  const isTikTok = platform === 'tiktok';
+  return (
+    <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 6, marginLeft: 6, background: colors.cardAlt, color: isTikTok ? colors.blue : colors.orange, border: `1px solid ${colors.border}` }}>
+      {isTikTok ? 'TikTok' : 'Shopee'}
+    </span>
+  );
+}
+
 function BocorList({ leaking }) {
   return (
     <div style={card({ flex: 1 })}>
@@ -317,9 +333,9 @@ function BocorList({ leaking }) {
         </div>
       ) : (
         leaking.map((p) => (
-          <div key={p.sku} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+          <div key={`${p.platform || ''}-${p.sku}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
             <div>
-              <div style={{ color: colors.text }}>{p.name}</div>
+              <div style={{ color: colors.text }}>{p.name}<PlatformBadge platform={p.platform} /></div>
               <div style={{ color: colors.textDim, fontSize: 11 }}>{p.sku}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
@@ -349,9 +365,9 @@ function PriceDiffList({ diffs }) {
     <div style={card({ flex: 1 })}>
       <CardHeader label="Perubahan Harga & HPP (sejak penjualan terakhir)" />
       {diffs.map((d) => (
-        <div key={d.sku} style={{ padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
+        <div key={`${d.platform || ''}-${d.sku}`} style={{ padding: '8px 0', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ color: colors.text }}>{d.name}</div>
+            <div style={{ color: colors.text }}>{d.name}<PlatformBadge platform={d.platform} /></div>
             <div style={{ color: colors.textDim, fontSize: 11 }}>{d.sku}</div>
           </div>
           <div style={{ display: 'flex', gap: 16, fontSize: 12, fontFamily: 'var(--num)' }}>
@@ -537,5 +553,8 @@ const dateInputStyle = {
   fontFamily: 'var(--sans)',
   cursor: 'pointer',
 };
+
+// Shared with the staging preview (DashboardPreview.jsx).
+export { formatRupiah, CardHeader, KpiCard, ProfitFunnel, LineChart, ProductList, CostBreakdown, StockList, BocorList, PriceDiffList };
 
 export default MainDashboard;
