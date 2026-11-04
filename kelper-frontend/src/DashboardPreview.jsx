@@ -5,7 +5,6 @@ import {
   CardHeader,
   KpiCard,
   ProfitFunnel,
-  LineChart,
   ProductList,
   CostBreakdown,
   StockList,
@@ -37,10 +36,6 @@ const TEMP = {
       orderCount: [352, 371, 398, 365, 402, 389, 412],
       omzet: [41200000, 43400000, 46900000, 42800000, 47300000, 45210000, 48650000],
       laba: [11800000, 12500000, 13600000, 12200000, 13800000, 13050000, 14120000],
-    },
-    chart: {
-      omzet: [0, 1.2, 3.1, 6.4, 10.8, 15.2, 19.9, 24.6, 29.3, 33.7, 38.1, 41.9, 45.2, 48.65].map((v) => v * 1000000),
-      laba: [0, 0.3, 0.9, 1.8, 3.1, 4.4, 5.8, 7.1, 8.5, 9.8, 11, 12.1, 13.1, 14.12].map((v) => v * 1000000),
     },
     topProducts: [
       { sku: 'CONTOH-001', name: 'Produk Contoh A', qty: 96, revenue: 11520000, profit: 3840000 },
@@ -75,10 +70,6 @@ const TEMP = {
       orderCount: [128, 142, 165, 149, 176, 171, 187],
       omzet: [13200000, 14700000, 17100000, 15300000, 18200000, 17640000, 19320000],
       laba: [3700000, 4100000, 4800000, 4300000, 5100000, 4930000, 5410000],
-    },
-    chart: {
-      omzet: [0, 0.4, 1.1, 2.3, 4.2, 6.1, 8, 9.7, 11.4, 13.2, 15.1, 16.8, 18.2, 19.32].map((v) => v * 1000000),
-      laba: [0, 0.1, 0.3, 0.6, 1.2, 1.7, 2.2, 2.7, 3.2, 3.7, 4.2, 4.7, 5.1, 5.41].map((v) => v * 1000000),
     },
     topProducts: [
       { sku: 'CONTOH-002', name: 'Produk Contoh B', qty: 52, revenue: 6240000, profit: 1820000 },
@@ -165,7 +156,6 @@ function combined() {
       omzet: addArrays(s.series.omzet, t.series.omzet),
       laba: addArrays(s.series.laba, t.series.laba),
     },
-    chart: { omzet: addArrays(s.chart.omzet, t.chart.omzet), laba: addArrays(s.chart.laba, t.chart.laba) },
     topProducts: mergeProducts(s.topProducts, t.topProducts),
     leaking: [...s.leaking, ...t.leaking],
     priceDiffs: [...s.priceDiffs, ...t.priceDiffs],
@@ -288,6 +278,116 @@ function BreakdownCard({ title, rows, barColor = colors.orange }) {
   );
 }
 
+// Omzet vs Laba, one pair of bars per day. colors.green is too light to read as
+// a chart fill on this dark card, so Laba uses the next darker green (checked
+// with the dataviz palette validator, together with colors.blue).
+const BAR_BLUE = colors.blue;
+const BAR_GREEN = '#16a34a';
+const CHART_HEIGHT = 170;
+
+function shortRupiah(value) {
+  if (value >= 1000000000) return `${Math.round((value / 1000000000) * 10) / 10}M`;
+  if (value >= 1000000) return `${Math.round(value / 1000000)}jt`;
+  if (value >= 1000) return `${Math.round(value / 1000)}rb`;
+  return String(value);
+}
+
+// A round top for the axis, so the gridlines land on readable numbers.
+function niceMax(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(value, 1)));
+  const step = [1, 2, 2.5, 5, 10].find((m) => (m * magnitude) >= value / 4) * magnitude;
+  return step * 4;
+}
+
+function lastSevenDays(endDate) {
+  const end = new Date(`${endDate}T00:00:00Z`);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(end.getTime() - (6 - i) * 86400000);
+    return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  });
+}
+
+function SevenDayBars({ omzet, laba, endDate }) {
+  const [active, setActive] = useState(null);
+  const days = lastSevenDays(endDate);
+  const top = niceMax(Math.max(...omzet, ...laba));
+  const ticks = [4, 3, 2, 1, 0].map((n) => (top / 4) * n);
+  const heightOf = (v) => `${(v / top) * 100}%`;
+  const swatch = (color) => <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: color, marginRight: 5 }} />;
+
+  return (
+    <div style={card({ flex: 1, minWidth: 0 })}>
+      <CardHeader label="Omzet vs Laba 7 Hari Terakhir" />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ position: 'relative', width: 34, height: CHART_HEIGHT, flexShrink: 0 }}>
+          {ticks.map((t) => (
+            <span key={t} style={{ position: 'absolute', right: 0, top: `${100 - (t / top) * 100}%`, transform: 'translateY(-50%)', fontSize: 10.5, color: colors.textDim, fontFamily: 'var(--num)' }}>
+              {t === 0 ? '0' : shortRupiah(t)}
+            </span>
+          ))}
+        </div>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <div style={{ position: 'relative', height: CHART_HEIGHT }}>
+            {ticks.map((t) => (
+              <div key={t} style={{ position: 'absolute', left: 0, right: 0, top: `${100 - (t / top) * 100}%`, height: 1, background: colors.border }} />
+            ))}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+              {days.map((day, i) => (
+                <div
+                  key={day}
+                  tabIndex={0}
+                  role="img"
+                  aria-label={`${day}: Omzet ${formatRupiah(omzet[i])}, Laba ${formatRupiah(laba[i])}`}
+                  onPointerEnter={() => setActive(i)}
+                  onPointerLeave={() => setActive(null)}
+                  onFocus={() => setActive(i)}
+                  onBlur={() => setActive(null)}
+                  onClick={() => setActive(i)}
+                  style={{ position: 'relative', flex: 1, minWidth: 0, padding: '0 4px', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2, cursor: 'default', outline: 'none', background: active === i ? colors.cardAlt : 'transparent', borderRadius: 6 }}
+                >
+                  <div style={{ flex: 1, maxWidth: 24, height: heightOf(omzet[i]), background: BAR_BLUE, borderRadius: '4px 4px 0 0' }} />
+                  <div style={{ flex: 1, maxWidth: 24, height: heightOf(laba[i]), background: BAR_GREEN, borderRadius: '4px 4px 0 0' }} />
+                </div>
+              ))}
+            </div>
+            {active != null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 4,
+                  ...(active < 4 ? { left: `${((active + 1) / 7) * 100}%`, marginLeft: 6 } : { right: `${((7 - active) / 7) * 100}%`, marginRight: 6 }),
+                  background: colors.bg,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 12,
+                  color: colors.text,
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  zIndex: 2,
+                }}
+              >
+                <div style={{ color: colors.textDim, marginBottom: 4 }}>{days[active]}</div>
+                <div>{swatch(BAR_BLUE)}<strong style={{ fontFamily: 'var(--num)' }}>{formatRupiah(omzet[active])}</strong> <span style={{ color: colors.textDim }}>Omzet</span></div>
+                <div style={{ marginTop: 2 }}>{swatch(BAR_GREEN)}<strong style={{ fontFamily: 'var(--num)' }}>{formatRupiah(laba[active])}</strong> <span style={{ color: colors.textDim }}>Laba</span></div>
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', marginTop: 6 }}>
+            {days.map((day) => (
+              <div key={day} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 10.5, color: colors.textDim, fontFamily: 'var(--num)' }}>{day}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 16, fontSize: 11, color: colors.textDim, marginTop: 10 }}>
+        <span>{swatch(BAR_BLUE)}Omzet</span>
+        <span>{swatch(BAR_GREEN)}Laba</span>
+      </div>
+    </div>
+  );
+}
+
 const TITLES = { main: 'Main (Gabungan Shopee + TikTok)', shopee: 'Shopee', tiktok: 'TikTok' };
 
 function DashboardPreview({ view }) {
@@ -336,7 +436,7 @@ function DashboardPreview({ view }) {
       </div>
 
       <div className="kp-stack" style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <LineChart omzetSeries={d.chart.omzet} labaSeries={d.chart.laba} unit="hour" dateLabel={dateLabel} />
+        <SevenDayBars omzet={d.series.omzet} laba={d.series.laba} endDate={endDate} />
       </div>
 
       {view !== 'main' && (
