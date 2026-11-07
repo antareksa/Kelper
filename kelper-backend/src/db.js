@@ -368,6 +368,13 @@ const newOrderCols = {
   // (shopeeSync.js's bookOneOrder); left alone when the package already
   // existed and this booking didn't choose. Drives the "Antar ke gerai" tag.
   is_dropoff: 'INTEGER NOT NULL DEFAULT 0',
+  // TikTok Shop / Tokopedia import (2026-11-07, see src/tiktok/orderSync.js).
+  // platform: 'shopee' | 'tiktok' | 'tokopedia'. marketplace_status: TikTok's
+  // own status (ON_HOLD, ...). marketplace_flags: comma list of no_sku,
+  // multi_package, buyer_cancel. Every existing row stays 'shopee'.
+  platform: "TEXT NOT NULL DEFAULT 'shopee'",
+  marketplace_status: 'TEXT',
+  marketplace_flags: 'TEXT',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {

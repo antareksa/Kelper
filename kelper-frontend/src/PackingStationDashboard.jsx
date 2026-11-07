@@ -55,13 +55,35 @@ const TAG_META = {
   // other tags this is something staff must physically act on -- nobody
   // collects this parcel, it has to be taken to the courier's counter.
   dropoff: { label: 'ANTAR KE GERAI', color: colors.orange, title: 'Kurir tidak menjemput — paket ini harus diantar ke gerai kurir' },
+  // TikTok Shop / Tokopedia orders (src/tiktok/orderSync.js).
+  no_sku: { label: 'TANPA SKU', color: colors.red, title: 'Produk ini tidak punya Seller SKU di TikTok/Tokopedia — tidak bisa di-scan' },
+  multi_package: { label: 'BEBERAPA PAKET', color: colors.red, title: 'Order ini dipecah menjadi beberapa paket' },
+  buyer_cancel: { label: 'MINTA BATAL', color: colors.red, title: 'Pembeli mengajukan pembatalan' },
 };
 
-function OrderTags({ tags }) {
-  if (!tags || tags.length === 0) return null;
+// Which marketplace an order came from. Rows without a platform are Shopee: only
+// the TikTok Shop / Tokopedia rows carry the field (routes/packing.js).
+const PLATFORM_META = {
+  shopee: { label: 'Shopee', color: '#ee4d2d' },
+  tiktok: { label: 'TikTok', color: '#111111' },
+  tokopedia: { label: 'Tokopedia', color: '#03ac0e' },
+};
+
+function PlatformTag({ platform }) {
+  const meta = PLATFORM_META[platform || 'shopee'];
+  if (!meta) return null;
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#ffffff', background: meta.color, padding: '1px 6px', borderRadius: 4 }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function OrderTags({ tags, platform }) {
   return (
     <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-      {tags.map((tag) => {
+      <PlatformTag platform={platform} />
+      {(tags || []).map((tag) => {
         const meta = TAG_META[tag];
         if (!meta) return null;
         const { Icon, label, color, title } = meta;
@@ -109,6 +131,8 @@ function OrderDetailModal({ orderSn, detail, loading, error, actionBusy, onForce
               <div>
                 <div>DITERIMA - {formatDateTime(detail.created_at)}</div>
                 <div>PENGIRIMAN - {detail.shipping_carrier || '—'}</div>
+                {detail.marketplaceStatus && <div>STATUS {PLATFORM_META[detail.platform]?.label.toUpperCase()} - {detail.marketplaceStatus}</div>}
+                <OrderTags tags={detail.tags} platform={detail.platform} />
                 {detail.delayClearsAt != null && (
                   <div>
                     DELAY -{' '}
@@ -636,7 +660,7 @@ function OrderLists() {
                         Jadwal pickup terlewat{row.pickup_time_label ? ` (${row.pickup_time_label})` : ''} — atur ulang di Shopee
                       </div>
                     )}
-                    <OrderTags tags={row.tags} />
+                    <OrderTags tags={row.tags} platform={row.platform} />
                   </div>
                 ))
               )}
@@ -750,7 +774,7 @@ function OrderListsViewOnly() {
                         Jadwal pickup terlewat{row.pickup_time_label ? ` (${row.pickup_time_label})` : ''} — atur ulang di Shopee
                       </div>
                     )}
-                    <OrderTags tags={row.tags} />
+                    <OrderTags tags={row.tags} platform={row.platform} />
                   </div>
                 ))
               )}

@@ -1,0 +1,165 @@
+const db = require('../db');
+const { isConfigured, apiRequest } = require('./client');
+const { getValidAccessToken } = require('./tokenStore');
+const { getSetting, setSetting } = require('../settings');
+
+// TikTok Shop / Tokopedia order import (2026-11-07, step 2 of the TikTok
+// integration, see docs/FEATURE-tiktok-integration.md). READ-ONLY toward TikTok:
+// nothing here books, ships or cancels. An imported order only ever shows in the
+// Waiting List until booking is built.
+//
+// Fully separate from shopeeSync.js. Orders are stored under TIKTOK_SHOP_ID, a
+// shop id no Shopee loop or /next-order ever selects, because those all filter
+// on a real Shopee shop_id. That is what keeps them unclaimable and out of
+// Shopee's booking and cancel checks without touching any of that code. The
+// real TikTok ids don't fit there anyway: they exceed JS's safe integer range.
+const TIKTOK_SHOP_ID = -1;
+
+const POLL_INTERVAL_MS = 30 * 1000;
+const FIRST_SYNC_LOOKBACK_SECONDS = 15 * 24 * 60 * 60;
+// Re-reads a little of the previous window, so an order updated while the last
+// tick was running can't fall between two ticks.
+const OVERLAP_SECONDS = 5 * 60;
+const SEARCH_PAGE_SIZE = '100';
+const DETAIL_BATCH_SIZE = 50; // GET /order/202507/orders takes at most 50 ids
+const INSTANT_PRIORITY_LEVEL = 100; // fulfillment_priority_level: 100 = Instant
+
+// Waiting to ship: ON_HOLD can't be booked yet but a new order must still show.
+const OPEN_STATUSES = ['ON_HOLD', 'AWAITING_SHIPMENT', 'PARTIALLY_SHIPPING', 'AWAITING_COLLECTION'];
+const SHIPPED_STATUSES = ['IN_TRANSIT', 'DELIVERED', 'COMPLETED'];
+// Local status for an order that left without KELPER (shipped from Seller
+// Center): drops out of every bucket and, unlike DONE, out of the Dashboard.
+const SHIPPED_EXTERNAL = 'SHIPPED_EXTERNAL';
+
+function now() {
+  return Math.floor(Date.now() / 1000);
+}
+
+// TikTok returns one line per unit, with no quantity field: 3 x the same SKU is
+// 3 lines. An empty seller_sku is possible (seen on a sandbox order), and order
+// _items.sku can't be empty, so those fall back the way Shopee's ITEM-<id> does.
+function groupLineItems(lineItems) {
+  const bySku = new Map();
+  for (const line of lineItems || []) {
+    if (line.display_status === 'CANCELLED') continue; // one line cancelled, the rest still ship
+    const sku = line.seller_sku || `ITEM-${line.sku_id}`;
+    const entry = bySku.get(sku);
+    if (entry) {
+      entry.qty += 1;
+    } else {
+      // "Default" is TikTok's name for a product with no variants.
+      const hasVariant = line.sku_name && line.sku_name !== 'Default';
+      bySku.set(sku, { sku, productName: hasVariant ? `${line.product_name} - ${line.sku_name}` : line.product_name, qty: 1 });
+    }
+  }
+  return [...bySku.values()];
+}
+
+function orderFlags(order) {
+  const flags = [];
+  if ((order.line_items || []).some((line) => !line.seller_sku)) flags.push('no_sku');
+  if ((order.packages || []).length > 1 || order.status === 'PARTIALLY_SHIPPING') flags.push('multi_package');
+  if (order.is_buyer_request_cancel) flags.push('buyer_cancel');
+  return flags.join(',') || null;
+}
+
+const insertOrder = db.prepare(`
+  INSERT OR IGNORE INTO orders (order_sn, shop_id, status, created_at, platform)
+  VALUES (?, ?, 'READY_TO_PACK', ?, ?)
+`);
+const updateOrder = db.prepare(`
+  UPDATE orders SET status = ?, buyer_name = ?, shipping_carrier = ?, is_instant = ?,
+    marketplace_status = ?, marketplace_flags = ?, platform = ?
+  WHERE order_sn = ?
+`);
+const deleteItems = db.prepare('DELETE FROM order_items WHERE order_sn = ?');
+const insertItem = db.prepare(`
+  INSERT INTO order_items (order_sn, sku, product_name, qty, price_snapshot)
+  VALUES (?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
+`);
+
+const saveOrder = db.transaction((order) => {
+  const existing = db.prepare('SELECT status FROM orders WHERE order_sn = ?').get(order.id);
+  const isOpen = OPEN_STATUSES.includes(order.status);
+  // Never imported before and already past the point KELPER could ship it.
+  if (!existing && !isOpen) return;
+  // Already finished here: a later update from TikTok changes nothing.
+  if (existing && existing.status !== 'READY_TO_PACK') return;
+  // "Dilayani Tokopedia" and the like: TikTok ships these itself.
+  if (order.fulfillment_type !== 'FULFILLMENT_BY_SELLER') return;
+
+  const platform = order.commerce_platform === 'TOKOPEDIA' ? 'tokopedia' : 'tiktok';
+  insertOrder.run(order.id, TIKTOK_SHOP_ID, order.create_time || now(), platform);
+
+  let status = 'READY_TO_PACK';
+  if (order.status === 'CANCELLED') status = 'CANCELLED';
+  else if (SHIPPED_STATUSES.includes(order.status)) status = SHIPPED_EXTERNAL;
+
+  // fulfillment_priority_level is absent while ON_HOLD, so this has to be
+  // re-read on every update instead of being decided once at import.
+  const isInstant = order.fulfillment_priority_level === INSTANT_PRIORITY_LEVEL ? 1 : 0;
+  updateOrder.run(status, order.recipient_address?.name || null, order.shipping_provider || null, isInstant,
+    order.status, orderFlags(order), platform, order.id);
+
+  if (status === 'READY_TO_PACK') {
+    deleteItems.run(order.id);
+    for (const item of groupLineItems(order.line_items)) {
+      insertItem.run(order.id, item.sku, item.productName, item.qty, item.sku);
+    }
+  }
+});
+
+async function fetchChangedOrderIds(opts, updatedSince) {
+  const ids = [];
+  let pageToken = '';
+  do {
+    const query = { page_size: SEARCH_PAGE_SIZE };
+    if (pageToken) query.page_token = pageToken;
+    const page = await apiRequest('POST', '/order/202309/orders/search', { ...opts, query, body: { update_time_ge: updatedSince } });
+    ids.push(...(page?.orders || []).map((o) => o.id));
+    pageToken = page?.next_page_token || '';
+  } while (pageToken);
+  return ids;
+}
+
+async function syncShop(accessToken, shop) {
+  const opts = { accessToken, shopCipher: shop.cipher };
+  const cursorKey = `tiktokOrdersSyncedAt:${shop.shop_id}`;
+  const startedAt = now();
+  const updatedSince = Number(getSetting(cursorKey, startedAt - FIRST_SYNC_LOOKBACK_SECONDS + OVERLAP_SECONDS)) - OVERLAP_SECONDS;
+
+  const ids = await fetchChangedOrderIds(opts, updatedSince);
+  for (let i = 0; i < ids.length; i += DETAIL_BATCH_SIZE) {
+    const batch = ids.slice(i, i + DETAIL_BATCH_SIZE);
+    const detail = await apiRequest('GET', '/order/202507/orders', { ...opts, query: { ids: batch.join(',') } });
+    for (const order of detail?.orders || []) saveOrder(order);
+  }
+  // Only after everything saved, so a failed tick retries the same window.
+  setSetting(cursorKey, startedAt);
+  if (ids.length > 0) console.log(`[server] TikTok: synced ${ids.length} changed order(s) (shop ${shop.shop_id})`);
+}
+
+async function syncTikTokOrders() {
+  const shops = db.prepare('SELECT shop_id, cipher FROM tiktok_shops').all();
+  if (shops.length === 0) return;
+  const accessToken = await getValidAccessToken();
+  for (const shop of shops) {
+    await syncShop(accessToken, shop);
+  }
+}
+
+// Does nothing on an install without TikTok keys, i.e. the live app.
+function startTikTokSync() {
+  if (!isConfigured()) return;
+  async function loop() {
+    try {
+      await syncTikTokOrders();
+    } catch (err) {
+      console.error(`[server] TikTok order sync failed: ${err.tiktokCode ?? ''} ${err.message}`);
+    }
+    setTimeout(loop, POLL_INTERVAL_MS);
+  }
+  loop();
+}
+
+module.exports = { TIKTOK_SHOP_ID, SHIPPED_EXTERNAL, startTikTokSync, syncTikTokOrders, saveOrder, groupLineItems };

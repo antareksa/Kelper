@@ -1040,7 +1040,7 @@ router.get('/session/:id', (req, res) => {
 // least one. `readyToCheckEnteredAt` is only passed for Ready to Check rows,
 // per the client's own definition of "stuck" (time in that bucket
 // specifically, not the order's total age).
-function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needsRetryShip, isDropoff }) {
+function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needsRetryShip, isDropoff, marketplaceFlags }) {
   const tags = [];
   if (isInstant) tags.push('instant');
   // Booked for drop-off (the courier offered no pickup) -- staff have to take
@@ -1049,6 +1049,7 @@ function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needs
   if (sessionStartedAt != null && sessionStartedAt < startOfDayWIB(0)) tags.push('from_yesterday');
   if (readyToCheckEnteredAt != null && now() - readyToCheckEnteredAt > getReadyToCheckStuckSeconds()) tags.push('stuck');
   if (needsRetryShip) tags.push('retry_ship');
+  if (marketplaceFlags) tags.push(...marketplaceFlags.split(','));
   return tags;
 }
 
@@ -1183,6 +1184,15 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .sort(priorityCompare()); // the order stations are handed these in (priorityOrder.js)
 
   waitingList.push(...overCap); // pushed out of Ready to Check above
+  // TikTok Shop / Tokopedia (src/tiktok/orderSync.js): shown here only for now.
+  // Booking isn't built, so they never move on and /next-order can't claim them.
+  waitingList.push(...db
+    .prepare(`
+      SELECT order_sn, buyer_name, created_at, is_instant, platform, marketplace_status, marketplace_flags, shipping_carrier
+      FROM orders WHERE platform != 'shopee' AND status = 'READY_TO_PACK'
+    `)
+    .all()
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, marketplaceFlags: row.marketplace_flags }) })));
   waitingList.sort((a, b) => a.created_at - b.created_at);
 
   const onProgressCheck = db
@@ -1380,6 +1390,9 @@ function resolveOrderBucket(orderSn) {
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(orderSn);
   if (!order) return null;
   if (order.status === 'CANCELLED') return { order, session: null, bucket: 'Cancelled', rank: -1 };
+  if (order.platform !== 'shopee') {
+    return { order, session: null, bucket: order.status === 'READY_TO_PACK' ? 'Waiting List' : 'Dikirim di luar KELPER', rank: order.status === 'READY_TO_PACK' ? 0 : -1 };
+  }
 
   const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ?').get(orderSn);
   // This order's OWN window (2026-10-21 hotfix: instant has its own, see
@@ -1441,12 +1454,15 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
   // since it's already past it.
   const delaySeconds = getOrderDelaySeconds(order.is_instant);
   const cutoff = now() - delaySeconds;
-  const canSkipDelay = !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
+  const canSkipDelay = order.platform === 'shopee' && !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
 
   res.json({
     order_sn: order.order_sn,
     created_at: order.created_at,
     shipping_carrier: order.shipping_carrier,
+    platform: order.platform,
+    marketplaceStatus: order.marketplace_status,
+    tags: computeTags({ isInstant: order.is_instant, marketplaceFlags: order.marketplace_flags }),
     bucket,
     canManage: rank >= 2,
     canSkipDelay,
@@ -1454,7 +1470,7 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
     // the popup can show "sudah X lalu" / "tersisa X lagi" instead of
     // leaving it to guesswork whether the delay is even still the reason an
     // order is in Waiting List (it often isn't -- see canSkipDelay above).
-    delayClearsAt: order.created_at + delaySeconds,
+    delayClearsAt: order.platform === 'shopee' ? order.created_at + delaySeconds : null,
     delaySkippedAt: order.delay_skip_at || null,
     forced: session?.forced === 1,
     exceptionReason: session?.status === 'EXCEPTION' ? session.exception_reason : null,

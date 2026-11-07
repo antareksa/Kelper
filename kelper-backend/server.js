@@ -23,6 +23,7 @@ const adsRoutes = require('./src/routes/ads');
 const webhookRoutes = require('./src/routes/webhook');
 const tiktokRoutes = require('./src/routes/tiktok');
 const { startShopeeSync } = require('./src/shopeeSync');
+const { startTikTokSync } = require('./src/tiktok/orderSync');
 const { requireAdminAuth } = require('./src/adminSession');
 const { seedFromEnvIfEmpty } = require('./src/adminUsers');
 
@@ -94,3 +95,4 @@ const port = process.env.PORT || 3001;
 app.listen(port, () => console.log(`kelper-backend [${NODE_ENV}] listening on http://localhost:${port}`));
 
 startShopeeSync();
+startTikTokSync();
