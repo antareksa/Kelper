@@ -138,3 +138,13 @@ Staging is done (2026-11-02). Next: the user registers on TikTok Shop Partner Ce
 - Orders page lists TikTok/Tokopedia orders with their tag.
 - Also: per-marketplace fetch switches in Order Lists (TikTok lock = no new orders, no booking), TikTok Late Pickup inferred from the pickup slot end, several TikTok shops (`orders.marketplace_shop_id`).
 - The sandbox can't create Tokopedia orders ("we only support test order placement from TikTok right now", Tokopedia & Shop onboarding guide).
+
+**Client answers (2026-11-10, via the user):** Seller SKUs match KELPER/Shopee: yes. Couriers: JNE, SiCepat, AnterAja, POS Indonesia, J&T (all already matched by `carrierSpeech.js`; TikTok's "TT Virtual# JNT express" plays J&T). Instant/Same Day: assume yes. Work hours and priority: same as Shopee. Buyer cancel request: same as Shopee. Label: A6 is fine if Shopee's is. Who connects the shop: the client. Open: Tokopedia in the new Seller Center / one shop or two; delay on top of ON_HOLD (q14); same price on all channels; split/combined packages; go-live date (the user decides).
+
+### Before going live with TikTok (checklist)
+1. Reset the TikTok **App Secret** in Partner Center (it was shown in chat) and use only the new one on live.
+2. Merge `dev-staging` -> `main`, deploy live. Without TikTok keys live behaves as before (TikTok off, staging-only pages hidden). Tell the client: Shopee fetching can now be unlocked from the Dashboard.
+3. Add `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET` (+ `TIKTOK_AUTH_URL` or `TIKTOK_SERVICE_ID`) to live's `.env.production`; add the live redirect URL (`https://dashboard.kelper.co.id/tiktok-callback`) in Partner Center; restart.
+4. Client connects the real shop (Pengaturan -> TikTok Shop). TikTok fetching starts **locked**: unlock in Order Lists only when ready.
+5. First real orders: check a Tokopedia order, an instant order, ON_HOLD length, courier names, label print + scan on the client's printer, and the first settled order's fees.
+6. The Dashboard on live still shows Shopee only (MainDashboard.jsx); the Main/Shopee/TikTok views are staging-only until switched on for live.
