@@ -422,6 +422,49 @@ function WorkHourStatus({ workHour }) {
   );
 }
 
+// One marketplace's order-fetching switch in Order Lists.
+function FetchSwitch({ label, enabled, busy, canToggle, onToggle }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <span aria-hidden style={{ width: 9, height: 9, borderRadius: '50%', background: enabled ? colors.green : colors.textFaint, flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5 }}>
+            {enabled == null ? `Memeriksa fetching ${label}...` : `Fetching ${label}: ${enabled ? 'Aktif' : 'Dikunci'}`}
+          </div>
+          <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 1 }}>
+            {enabled == null
+              ? ''
+              : enabled
+              ? `Server mengambil pesanan baru dari ${label} dan memesan pengiriman secara otomatis.`
+              : `Server tidak mengambil pesanan baru dari ${label}.`}
+          </div>
+        </div>
+      </div>
+      {canToggle && enabled != null && (
+        <button
+          onClick={onToggle}
+          disabled={busy}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 8,
+            border: 'none',
+            fontWeight: 600,
+            fontSize: 13,
+            flexShrink: 0,
+            cursor: busy ? 'default' : 'pointer',
+            background: enabled ? colors.redDim : colors.greenDim,
+            color: enabled ? colors.red : colors.green,
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {enabled ? 'Kunci Fetching' : 'Buka Fetching'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function OrderLists() {
   const [lists, setLists] = useState({ waitingList: [], processing: [], readyToCheck: [], onProgressCheck: [], readyForPickup: [], latePickup: [], readyTomorrow: [] });
   const [loading, setLoading] = useState(true);
@@ -429,7 +472,10 @@ function OrderLists() {
   // stays disabled until we actually know, so a click can't race a stale
   // guess of the state.
   const [syncEnabled, setSyncEnabled] = useState(null);
-  const [toggling, setToggling] = useState(false);
+  // TikTok/Tokopedia switch: undefined = still checking, null = TikTok not set
+  // up on this install (live), else { enabled }.
+  const [tiktokSync, setTiktokSync] = useState(undefined);
+  const [toggling, setToggling] = useState(null); // null | 'shopee' | 'tiktok'
 
   const [bulkBusy, setBulkBusy] = useState(null); // null | 'moveAll' | 'forceAll'
   // Order Detail popup (client-requested 2026-09-25) — opened by clicking any
@@ -470,7 +516,11 @@ function OrderLists() {
   async function loadSyncStatus() {
     try {
       const res = await apiFetch(`${API_BASE}/orders/sync-status`);
-      if (res.ok) setSyncEnabled((await res.json()).enabled);
+      if (res.ok) {
+        const data = await res.json();
+        setSyncEnabled(data.enabled);
+        setTiktokSync(data.tiktok ?? null);
+      }
     } catch {
       // best-effort — keeps whatever was last known rather than flashing "checking"
     }
@@ -485,17 +535,27 @@ function OrderLists() {
     }
   }
 
-  async function toggleSync() {
-    setToggling(true);
+  async function toggleSync(platform) {
+    const current = platform === 'tiktok' ? tiktokSync?.enabled : syncEnabled;
+    const name = platform === 'tiktok' ? 'TikTok/Tokopedia' : 'Shopee';
+    const question = current
+      ? `Kunci fetching ${name}? Pesanan baru tidak akan diambil sampai dibuka lagi.`
+      : `Buka fetching ${name}? Server akan langsung mengambil pesanan baru dan memesan pengiriman sesuai jam kerja.`;
+    if (!window.confirm(question)) return;
+    setToggling(platform);
     try {
       const res = await apiFetch(`${API_BASE}/orders/sync-toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !syncEnabled }),
+        body: JSON.stringify({ enabled: !current, platform }),
       });
-      if (res.ok) setSyncEnabled((await res.json()).enabled);
+      if (res.ok) {
+        const { enabled } = await res.json();
+        if (platform === 'tiktok') setTiktokSync({ enabled });
+        else setSyncEnabled(enabled);
+      }
     } finally {
-      setToggling(false);
+      setToggling(null);
     }
   }
 
@@ -538,55 +598,27 @@ function OrderLists() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
-      <div style={{ ...card(), display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <span
-            aria-hidden
-            style={{
-              width: 9,
-              height: 9,
-              borderRadius: '50%',
-              background: syncEnabled ? colors.green : colors.textFaint,
-              flexShrink: 0,
-            }}
+      <div style={{ ...card(), display: 'flex', flexDirection: 'column', gap: 10, flexShrink: 0 }}>
+        {/* One switch per marketplace (2026-11-10). Until then only Shopee had
+            one, and it could only LOCK from here: unlocking was SSH-only
+            (client-requested 2026-10-02, scripts/fetch-lock.js, which still
+            works and still offers the limited "unlock <n>"). Both directions
+            now ask for confirmation instead. */}
+        <FetchSwitch
+          label="Shopee"
+          enabled={syncEnabled}
+          busy={toggling === 'shopee'}
+          canToggle={getAdminRole() !== 'packing'}
+          onToggle={() => toggleSync('shopee')}
+        />
+        {tiktokSync && (
+          <FetchSwitch
+            label="TikTok / Tokopedia"
+            enabled={tiktokSync.enabled}
+            busy={toggling === 'tiktok'}
+            canToggle={getAdminRole() !== 'packing'}
+            onToggle={() => toggleSync('tiktok')}
           />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, color: colors.text, fontSize: 13.5 }}>
-              {syncEnabled === null ? 'Memeriksa status fetching...' : syncEnabled ? 'Fetching Order: Aktif' : 'Fetching Order: Dikunci'}
-            </div>
-            <div style={{ fontSize: 11.5, color: colors.textDim, marginTop: 1 }}>
-              {syncEnabled === null
-                ? ''
-                : syncEnabled
-                ? 'Server sedang mengambil pesanan baru dari Shopee secara otomatis.'
-                : 'Server tidak akan mengambil pesanan baru. Hanya bisa dibuka lewat SSH (fetch-lock.js unlock).'}
-            </div>
-          </div>
-        </div>
-        {/* Client-requested (2026-10-02): once locked, unlocking is
-            deliberately SSH-only (scripts/fetch-lock.js) -- no button here
-            to undo it, so a lock made for a reason (e.g. testing before a
-            new shop should start receiving real orders) can't be casually
-            clicked away from the Dashboard itself. */}
-        {syncEnabled && getAdminRole() !== 'packing' && (
-          <button
-            onClick={toggleSync}
-            disabled={toggling}
-            style={{
-              padding: '8px 16px',
-              borderRadius: 8,
-              border: 'none',
-              fontWeight: 600,
-              fontSize: 13,
-              flexShrink: 0,
-              cursor: toggling ? 'default' : 'pointer',
-              background: colors.redDim,
-              color: colors.red,
-              opacity: toggling ? 0.6 : 1,
-            }}
-          >
-            Kunci Fetching
-          </button>
         )}
       </div>
 

@@ -4,6 +4,8 @@ const { syncAndLabelOrders, getFetchBudget } = require('../shopeeSync');
 const { getSetting, setSetting } = require('../settings');
 const { expandPackingItems } = require('../packingItems');
 const { getConfig } = require('../config');
+const { isConfigured: isTikTokConfigured } = require('../tiktok/client');
+const { isTikTokSyncEnabled, setTikTokSyncEnabled } = require('../tiktok/orderSync');
 const { packingVideoFile } = require('../gcs');
 
 // Whether the order's packing video is in the bucket: true / false, or null when
@@ -28,14 +30,27 @@ const router = express.Router();
 // start/pause it. Genuinely global: pausing here also stops the manual
 // /sync endpoint below and the background timer, since all three share the
 // same underlying check.
+// `tiktok` (2026-11-10): the separate TikTok/Tokopedia switch, null on an
+// install without TikTok keys (i.e. live), where the Dashboard hides it.
 router.get('/sync-status', (req, res) => {
   // remaining: orders still allowed in by a limited unlock (null = no limit).
-  res.json({ enabled: getSetting('syncEnabled', 'false') === 'true', remaining: getFetchBudget() });
+  res.json({
+    enabled: getSetting('syncEnabled', 'false') === 'true',
+    remaining: getFetchBudget(),
+    tiktok: isTikTokConfigured() ? { enabled: isTikTokSyncEnabled() } : null,
+  });
 });
 
 router.post('/sync-toggle', (req, res) => {
-  const { enabled } = req.body;
+  const { enabled, platform } = req.body;
+  if (platform === 'tiktok') {
+    if (!isTikTokConfigured()) return res.status(400).json({ error: 'tiktok_not_configured' });
+    setTikTokSyncEnabled(!!enabled);
+    console.log(`[server] TikTok fetching ${enabled ? 'UNLOCKED' : 'LOCKED'} from the Dashboard (${req.adminUsername || 'unknown'})`);
+    return res.json({ enabled: !!enabled });
+  }
   setSetting('syncEnabled', enabled ? 'true' : 'false');
+  console.log(`[server] Shopee fetching ${enabled ? 'UNLOCKED' : 'LOCKED'} from the Dashboard (${req.adminUsername || 'unknown'})`);
   // The button is a plain on/off: it ends any limited unlock (see shopeeSync.js).
   setSetting('fetchBudget', '');
   setSetting('fetchDrain', 'false');

@@ -3,7 +3,7 @@ const { isConfigured, apiRequest } = require('./client');
 const { getValidAccessToken } = require('./tokenStore');
 const { getSetting, setSetting } = require('../settings');
 const { flagOrderAsException } = require('../shopeeSync');
-const { bookTikTokOrders } = require('./booking');
+const { bookTikTokOrders, detectLatePickups } = require('./booking');
 
 // TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
 // (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
@@ -15,8 +15,23 @@ const { bookTikTokOrders } = require('./booking');
 // The Packing Station's own queries include them through `platform != 'shopee'`
 // (routes/packing.js), which is what makes it one shared queue. The real TikTok
 // ids don't fit in shop_id anyway: they exceed JS's safe integer range.
-// Only one TikTok shop is supported: booking uses the first connected shop.
+// Several TikTok shops can be connected: orders.marketplace_shop_id says which
+// one an order belongs to, and booking uses that shop's cipher.
 const TIKTOK_SHOP_ID = -1;
+
+// The TikTok side of the Order Lists fetch switch (2026-11-10), separate from
+// Shopee's 'syncEnabled'. Off by default like Shopee's. While off, no NEW
+// TikTok order is imported and nothing is booked; orders already in KELPER
+// keep getting status updates, so a cancellation is still noticed.
+const SYNC_SETTING = 'tiktokSyncEnabled';
+const isTikTokSyncEnabled = () => getSetting(SYNC_SETTING, 'false') === 'true';
+function setTikTokSyncEnabled(enabled) {
+  setSetting(SYNC_SETTING, enabled ? 'true' : 'false');
+  // Unlocking re-reads the last 15 days, so orders that arrived while locked
+  // come in now -- the same as Shopee, whose discovery always lists every
+  // READY_TO_SHIP order of the last 15 days.
+  if (enabled) db.prepare("DELETE FROM settings WHERE key LIKE 'tiktokOrdersSyncedAt:%'").run();
+}
 
 const POLL_INTERVAL_MS = 30 * 1000;
 const BOOKING_INTERVAL_MS = 15 * 1000;
@@ -96,10 +111,12 @@ function masalahReason(flags) {
   return null;
 }
 
-const saveOrder = db.transaction((order) => {
+const saveOrder = db.transaction((order, tiktokShopId = null) => {
   const existing = db.prepare('SELECT status, label_ready FROM orders WHERE order_sn = ?').get(order.id);
   // Never imported before and already past the point KELPER could ship it.
   if (!existing && !OPEN_STATUSES.includes(order.status)) return;
+  // Fetching locked: no new orders (see SYNC_SETTING above).
+  if (!existing && !isTikTokSyncEnabled()) return;
   // Finished here (DONE, CANCELLED, SHIPPED_EXTERNAL): a later update changes nothing.
   if (existing && !ACTIVE_LOCAL.includes(existing.status)) return;
   // "Dilayani Tokopedia" and the like: TikTok ships these itself.
@@ -107,6 +124,7 @@ const saveOrder = db.transaction((order) => {
 
   const platform = order.commerce_platform === 'TOKOPEDIA' ? 'tokopedia' : 'tiktok';
   insertOrder.run(order.id, TIKTOK_SHOP_ID, order.create_time || now(), platform);
+  if (tiktokShopId) db.prepare('UPDATE orders SET marketplace_shop_id = ? WHERE order_sn = ?').run(String(tiktokShopId), order.id);
   const current = existing?.status || 'ON_HOLD';
   const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order.id);
   const untouched = !session && !existing?.label_ready; // KELPER hasn't claimed or booked it
@@ -175,16 +193,18 @@ async function syncShop(accessToken, shop) {
   for (let i = 0; i < ids.length; i += DETAIL_BATCH_SIZE) {
     const batch = ids.slice(i, i + DETAIL_BATCH_SIZE);
     const detail = await apiRequest('GET', '/order/202507/orders', { ...opts, query: { ids: batch.join(',') } });
-    for (const order of detail?.orders || []) saveOrder(order);
+    for (const order of detail?.orders || []) saveOrder(order, shop.shop_id);
   }
   // Only after everything saved, so a failed tick retries the same window.
   setSetting(cursorKey, startedAt);
   if (ids.length > 0) console.log(`[server] TikTok: synced ${ids.length} changed order(s) (shop ${shop.shop_id})`);
 }
 
-// Request options for the (single) connected TikTok shop, or null.
-async function getTikTokOpts() {
-  const shop = db.prepare('SELECT cipher FROM tiktok_shops LIMIT 1').get();
+// Request options for one connected TikTok shop (the first one when no id is
+// given, or the id is unknown), or null when none is connected.
+async function getTikTokOpts(tiktokShopId = null) {
+  const shop = (tiktokShopId && db.prepare('SELECT cipher FROM tiktok_shops WHERE shop_id = ?').get(String(tiktokShopId)))
+    || db.prepare('SELECT cipher FROM tiktok_shops LIMIT 1').get();
   return shop ? { accessToken: await getValidAccessToken(), shopCipher: shop.cipher } : null;
 }
 
@@ -203,6 +223,9 @@ async function syncTikTokOrders() {
 function startTikTokSync() {
   if (!isConfigured()) return;
   // An order imported before ON_HOLD got its own local status (2026-11-10).
+  // And one imported before marketplace_shop_id existed: there was only one shop.
+  const firstShop = db.prepare('SELECT shop_id FROM tiktok_shops LIMIT 1').get();
+  if (firstShop) db.prepare("UPDATE orders SET marketplace_shop_id = ? WHERE platform != 'shopee' AND marketplace_shop_id IS NULL").run(String(firstShop.shop_id));
   db.prepare("UPDATE orders SET status = 'ON_HOLD' WHERE platform != 'shopee' AND status = 'READY_TO_PACK' AND marketplace_status = 'ON_HOLD' AND label_ready = 0 AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = orders.order_sn)").run();
 
   async function syncLoop() {
@@ -215,8 +238,13 @@ function startTikTokSync() {
   }
   async function bookingLoop() {
     try {
-      const opts = await getTikTokOpts();
-      if (opts) await bookTikTokOrders(opts);
+      detectLatePickups(); // local only, runs even while fetching is locked
+      if (isTikTokSyncEnabled()) {
+        const accessToken = await getValidAccessToken();
+        for (const shop of db.prepare('SELECT shop_id, cipher FROM tiktok_shops').all()) {
+          await bookTikTokOrders({ accessToken, shopCipher: shop.cipher }, shop.shop_id);
+        }
+      }
     } catch (err) {
       console.error(`[server] TikTok booking tick failed: ${err.tiktokCode ?? ''} ${err.message}`);
     }
@@ -226,4 +254,4 @@ function startTikTokSync() {
   bookingLoop();
 }
 
-module.exports = { TIKTOK_SHOP_ID, SHIPPED_EXTERNAL, startTikTokSync, syncTikTokOrders, saveOrder, groupLineItems, getTikTokOpts };
+module.exports = { TIKTOK_SHOP_ID, SHIPPED_EXTERNAL, startTikTokSync, syncTikTokOrders, saveOrder, groupLineItems, getTikTokOpts, isTikTokSyncEnabled, setTikTokSyncEnabled };

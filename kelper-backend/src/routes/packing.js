@@ -78,7 +78,7 @@ function isMockOrder(orderSn) {
 // the "was it cancelled overnight?" recheck before a Pack Besok resi prints.
 async function fetchLiveStatus(order) {
   if (order.platform && order.platform !== 'shopee') {
-    const opts = await getTikTokOpts();
+    const opts = await getTikTokOpts(order.marketplace_shop_id);
     if (!opts) throw new Error('TikTok shop not connected');
     return fetchTikTokOrderStatus(opts, order.order_sn);
   }
@@ -632,7 +632,7 @@ router.post('/print-resi', async (req, res) => {
 
   const matches = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.status, ps.internal_barcode, o.order_sn, o.shop_id, o.platform, o.tracking_no, o.label_ready, o.status AS order_status
+      SELECT ps.id AS session_id, ps.status, ps.internal_barcode, o.order_sn, o.shop_id, o.platform, o.marketplace_shop_id, o.tracking_no, o.label_ready, o.status AS order_status
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.shipping_choice = 'PACK_BESOK' AND ps.status IN ('DEFERRED_READY', 'RESUMING', 'AWAITING_LABEL_SCAN')
@@ -729,7 +729,7 @@ router.post('/resume-besok', async (req, res) => {
   const session = claim();
   if (!session) return res.status(404).json({ error: 'barcode_not_found' });
 
-  const order = db.prepare('SELECT order_sn, shop_id, platform, status, tracking_no FROM orders WHERE order_sn = ?').get(session.order_sn);
+  const order = db.prepare('SELECT order_sn, shop_id, platform, marketplace_shop_id, status, tracking_no FROM orders WHERE order_sn = ?').get(session.order_sn);
   console.log(`[server] bucket: ${order.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — barcode ${internal_barcode} confirmed, frontend will now attempt to print the real label`);
   await finalizeLeftover(session, order, res);
 });

@@ -375,6 +375,11 @@ const newOrderCols = {
   platform: "TEXT NOT NULL DEFAULT 'shopee'",
   marketplace_status: 'TEXT',
   marketplace_flags: 'TEXT',
+  // TikTok (2026-11-10): which connected TikTok shop the order belongs to
+  // (tiktok_shops.shop_id, text: too big for a JS number), and when the
+  // booked courier pickup slot ends, for Late Pickup (src/tiktok/booking.js).
+  marketplace_shop_id: 'TEXT',
+  pickup_slot_end: 'INTEGER',
 };
 for (const [col, def] of Object.entries(newOrderCols)) {
   if (!orderCols.includes(col)) {
