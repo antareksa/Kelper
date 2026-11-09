@@ -11,6 +11,18 @@ const router = express.Router();
 // business owner is actually reading numbers off of.
 const REAL_ORDER_FILTER = "o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%'";
 
+// Which marketplace's orders a summary covers (2026-11-10): 'shopee' (the
+// default, exactly REAL_ORDER_FILTER, i.e. what live has always shown),
+// 'tiktok' (TikTok Shop + Tokopedia, stored under shop_id -1 by
+// src/tiktok/orderSync.js) or 'all'. Each keeps exactly one `?`, the Shopee
+// shop id, so every query below binds the same parameters whichever is used.
+const PLATFORMS = ['shopee', 'tiktok', 'all'];
+function orderFilter(platform) {
+  if (platform === 'tiktok') return "(o.shop_id = ? OR o.platform != 'shopee') AND o.platform != 'shopee' AND o.order_sn NOT LIKE 'MOCK-%'";
+  if (platform === 'all') return "(o.shop_id = ? OR o.platform != 'shopee') AND o.order_sn NOT LIKE 'MOCK-%'";
+  return REAL_ORDER_FILTER;
+}
+
 // Client-requested (2026-09-27): Total Order/Omzet/Laba Kotor/Margin now
 // attribute an order to the day it was scanned DONE in Packing Station's
 // Shipping Mode (packing_sessions.completed_at — see packing.js's
@@ -86,7 +98,7 @@ function priceInfoForItem(item, skuPrices) {
 // makes oi.price_snapshot/oi.hpp_snapshot come from the same row as
 // MAX(ps.completed_at) within each sku group, so this needs no subquery
 // to find "the latest order's snapshot" per SKU.
-function findPriceDiffs(shopId) {
+function findPriceDiffs(shopId, platform = 'shopee') {
   const lastSold = db
     .prepare(`
       SELECT oi.sku, oi.product_name, oi.price_snapshot, oi.hpp_snapshot, MAX(ps.completed_at) AS last_sold_at
@@ -98,7 +110,7 @@ function findPriceDiffs(shopId) {
         WHERE status = 'DONE'
         GROUP BY order_sn
       ) ps ON ps.order_sn = o.order_sn
-      WHERE ${REAL_ORDER_FILTER} AND oi.price_snapshot IS NOT NULL
+      WHERE ${orderFilter(platform)} AND oi.price_snapshot IS NOT NULL
       GROUP BY oi.sku
     `)
     .all(shopId);
@@ -143,12 +155,19 @@ function findPriceDiffs(shopId) {
 // scanned DONE in Shipping Mode (only orders that have actually completed
 // that scan show up at all); 'shopee' (the original behavior) counts it on
 // the day Shopee created the order, regardless of packing/shipping progress.
-function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
+//
+// TikTok/Tokopedia orders (2026-11-10): their settlement (src/tiktok/income.js)
+// gives Layanan (Voucher Xtra) and the affiliate commission as exact per-order
+// figures, so no Promo XTRA estimate; tiktokAffiliate is that commission, which
+// on Shopee comes per day from AMS instead. feeDetail is the fee breakdown per
+// marketplace for the Dashboard's "Rincian Biaya" cards.
+function sumOrdersInRange(shopId, skuPrices, startTs, endTs, platform = 'shopee') {
+  const filter = orderFilter(platform);
   const orders = DASHBOARD_DATA_SOURCE === 'internal'
     ? db
         .prepare(`
-          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
-                 oi.seller_order_processing_fee, oi.withholding_tax
+          SELECT o.order_sn, o.platform, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
+                 oi.seller_order_processing_fee, oi.withholding_tax, oi.affiliate_commission
           FROM orders o
           JOIN (
             SELECT order_sn, MAX(completed_at) AS completed_at
@@ -157,19 +176,20 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
             GROUP BY order_sn
           ) ps ON ps.order_sn = o.order_sn
           LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
-          WHERE ${REAL_ORDER_FILTER} AND ps.completed_at >= ? AND ps.completed_at < ?
+          WHERE ${filter} AND ps.completed_at >= ? AND ps.completed_at < ?
         `)
         .all(shopId, startTs, endTs)
     : db
         .prepare(`
-          SELECT o.order_sn, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
-                 oi.seller_order_processing_fee, oi.withholding_tax
+          SELECT o.order_sn, o.platform, oi.order_selling_price, oi.escrow_amount, oi.service_fee, oi.commission_fee, oi.seller_transaction_fee,
+                 oi.seller_order_processing_fee, oi.withholding_tax, oi.affiliate_commission
           FROM orders o
           LEFT JOIN order_income oi ON oi.order_sn = o.order_sn
-          WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
+          WHERE ${filter} AND o.created_at >= ? AND o.created_at < ?
         `)
         .all(shopId, startTs, endTs);
-  if (orders.length === 0) return { orderCount: 0, omzet: 0, laba: 0, layanan: 0, biayaPesanan: 0 };
+  const emptyFees = () => ({ shopee: {}, tiktok: {} });
+  if (orders.length === 0) return { orderCount: 0, omzet: 0, laba: 0, layanan: 0, biayaPesanan: 0, tiktokAffiliate: 0, tiktokSettled: 0, feeDetail: emptyFees() };
 
   const placeholders = orders.map(() => '?').join(',');
   const items = db
@@ -185,6 +205,10 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
   let laba = 0;
   let layanan = 0;
   let biayaPesanan = 0;
+  let tiktokAffiliate = 0;
+  let tiktokSettled = 0; // TikTok orders in range that have a settlement stored
+  const feeDetail = emptyFees();
+  const addFee = (group, label, value) => { feeDetail[group][label] = (feeDetail[group][label] ?? 0) + (value ?? 0); };
   const promoXtraPct = Number(getSetting('promoXtraPercentage', String(DEFAULT_PROMO_XTRA_PCT)));
   for (const order of orders) {
     const orderItems = itemsByOrder.get(order.order_sn) || [];
@@ -217,7 +241,19 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
     // part is estimated as promoXtraPercentage of the selling price (capped
     // at service_fee) and the rest of service_fee goes to Biaya Pesanan --
     // the two together still add up to Shopee's exact fees.
-    if (order.escrow_amount != null) {
+    if (order.escrow_amount != null && order.platform && order.platform !== 'shopee') {
+      // TikTok/Tokopedia: exact figures from the settlement, see src/tiktok/income.js.
+      tiktokSettled += 1;
+      layanan += order.service_fee ?? 0;
+      biayaPesanan += (order.commission_fee ?? 0) + (order.seller_transaction_fee ?? 0)
+        + (order.seller_order_processing_fee ?? 0) + (order.withholding_tax ?? 0);
+      tiktokAffiliate += order.affiliate_commission ?? 0;
+      addFee('tiktok', 'Komisi Platform', order.commission_fee);
+      addFee('tiktok', 'Biaya Transaksi', order.seller_transaction_fee);
+      addFee('tiktok', 'Biaya Lain (Gratis Ongkir, dll.)', order.seller_order_processing_fee);
+      addFee('tiktok', 'Pajak', order.withholding_tax);
+      addFee('tiktok', 'Voucher Xtra (Layanan)', order.service_fee);
+    } else if (order.escrow_amount != null) {
       const serviceFee = order.service_fee ?? 0;
       const promoXtra = Math.min(serviceFee, Math.round((order.order_selling_price ?? 0) * promoXtraPct / 100));
       layanan += promoXtra;
@@ -226,9 +262,15 @@ function sumOrdersInRange(shopId, skuPrices, startTs, endTs) {
         + (order.seller_transaction_fee ?? 0)
         + (order.withholding_tax ?? 0)
         + (serviceFee - promoXtra);
+      addFee('shopee', 'Biaya Administrasi', order.commission_fee);
+      addFee('shopee', 'Biaya Proses Pesanan', order.seller_order_processing_fee);
+      addFee('shopee', 'Biaya Transaksi', order.seller_transaction_fee);
+      addFee('shopee', 'PPh 22', order.withholding_tax);
+      addFee('shopee', 'Gratis Ongkir XTRA', serviceFee - promoXtra);
+      addFee('shopee', 'Promo XTRA (Layanan)', promoXtra);
     }
   }
-  return { orderCount: orders.length, omzet, laba, layanan, biayaPesanan };
+  return { orderCount: orders.length, omzet, laba, layanan, biayaPesanan, tiktokAffiliate, tiktokSettled, feeDetail };
 }
 
 function pctChange(today, yesterday) {
@@ -270,9 +312,17 @@ function datesInRange(start, end) {
 // YYYY-MM-DD WIB, inclusive). ?date= alone still means that one day. Every figure is the
 // total over the range; the trend compares with the period of the same length right
 // before it.
+// ?platform= (2026-11-10): 'shopee' (default, unchanged), 'tiktok' or 'all', see
+// orderFilter. Iklan and Page View exist for Shopee only, so a 'tiktok' summary
+// has none and 'all' has Shopee's; Affiliasi is Shopee's daily AMS figure plus
+// TikTok's per-order commission. Without a Shopee shop (staging) only 'tiktok'
+// and 'all' work.
 router.get('/summary', (req, res) => {
-  const { shop_id: shopId, date } = req.query;
-  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  const { date } = req.query;
+  const platform = PLATFORMS.includes(req.query.platform) ? req.query.platform : 'shopee';
+  const shopId = Number(req.query.shop_id) || 0;
+  if (!shopId && platform === 'shopee') return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  const hasShopee = platform !== 'tiktok';
 
   const todayDateStr = dateStringWIB(0);
   let startDate = req.query.start || date || todayDateStr;
@@ -292,13 +342,13 @@ router.get('/summary', (req, res) => {
   const skuPrices = buildSkuPriceMap();
   const rangeStart = startOfDateWIB(startDate);
   const rangeEnd = startOfDateWIB(shiftDateStringWIB(endDate, 1));
-  const today = sumOrdersInRange(shopId, skuPrices, rangeStart, rangeEnd);
-  const yesterday = sumOrdersInRange(shopId, skuPrices, startOfDateWIB(shiftDateStringWIB(startDate, -dayCount)), rangeStart);
+  const today = sumOrdersInRange(shopId, skuPrices, rangeStart, rangeEnd, platform);
+  const yesterday = sumOrdersInRange(shopId, skuPrices, startOfDateWIB(shiftDateStringWIB(startDate, -dayCount)), rangeStart, platform);
 
   // Sparklines: one point per day of the range, at least the 7 days ending on its last
   // day (a one-day range would otherwise be a single dot).
   const seriesDates = dayCount >= 7 ? rangeDates : datesInRange(shiftDateStringWIB(endDate, -6), endDate);
-  const days = seriesDates.map((d) => sumOrdersInRange(shopId, skuPrices, startOfDateWIB(d), startOfDateWIB(shiftDateStringWIB(d, 1))));
+  const days = seriesDates.map((d) => sumOrdersInRange(shopId, skuPrices, startOfDateWIB(d), startOfDateWIB(shiftDateStringWIB(d, 1)), platform));
 
   // Whether the selected range has real orders. On its own this no longer decides whether
   // the page shows anything: see hasData in the response below.
@@ -319,7 +369,7 @@ router.get('/summary', (req, res) => {
             WHERE status = 'DONE'
             GROUP BY order_sn
           ) ps ON ps.order_sn = o.order_sn
-          WHERE ${REAL_ORDER_FILTER} AND ps.completed_at >= ? AND ps.completed_at < ?
+          WHERE ${orderFilter(platform)} AND ps.completed_at >= ? AND ps.completed_at < ?
         `)
         .all(shopId, rangeStart, rangeEnd)
     : db
@@ -327,7 +377,7 @@ router.get('/summary', (req, res) => {
           SELECT oi.sku, oi.product_name, oi.qty, oi.price_snapshot, oi.hpp_snapshot, o.created_at AS ts
           FROM order_items oi
           JOIN orders o ON o.order_sn = oi.order_sn
-          WHERE ${REAL_ORDER_FILTER} AND o.created_at >= ? AND o.created_at < ?
+          WHERE ${orderFilter(platform)} AND o.created_at >= ? AND o.created_at < ?
         `)
         .all(shopId, rangeStart, rangeEnd);
   const chartUnit = dayCount === 1 ? 'hour' : 'day';
@@ -418,22 +468,25 @@ router.get('/summary', (req, res) => {
   // rather than a fabricated 0. Commission is null when no row has it (rows
   // fetched before that column existed).
   const placeholders = rangeDates.map(() => '?').join(',');
-  const affiliateRows = db
+  const affiliateRows = !hasShopee ? [] : db
     .prepare(`SELECT sales_confirmed, orders_confirmed, buyers_confirmed, commission FROM affiliate_performance_daily WHERE shop_id = ? AND date IN (${placeholders})`)
     .all(shopId, ...rangeDates);
   const sumOf = (rows, key) => rows.reduce((total, r) => total + (r[key] ?? 0), 0);
   const commissionRows = affiliateRows.filter((r) => r.commission != null);
-  const affiliasiCommission = commissionRows.length ? sumOf(commissionRows, 'commission') : null;
+  const shopeeCommission = commissionRows.length ? sumOf(commissionRows, 'commission') : null;
+  // TikTok's is per order, known once the order is settled (src/tiktok/income.js).
+  const hasTiktokAffiliate = platform !== 'shopee' && today.tiktokSettled > 0;
+  const affiliasiCommission = shopeeCommission == null && !hasTiktokAffiliate ? null : (shopeeCommission ?? 0) + today.tiktokAffiliate;
 
   // Page View (replaced Pengunjung, 2026-10-13): from per-item readings of Shopee's view
   // counter, see pageViewsFor; the range's total is the sum of its days that have
   // readings. null before any reading.
-  const pageViewDays = rangeDates.map((d) => pageViewsFor(shopId, d)).filter(Boolean);
+  const pageViewDays = !hasShopee ? [] : rangeDates.map((d) => pageViewsFor(shopId, d)).filter(Boolean);
   const pageViews = pageViewDays.length ? { pageViews: pageViewDays.reduce((t, d) => t + d.pageViews, 0), partial: isToday } : null;
 
   // Iklan, unlike Affiliasi, does have "today" (refetched every few minutes, see
   // shopeeSync.js's fetchAdsPerformance). Summed over the range's days with a row.
-  const adsRows = db
+  const adsRows = !hasShopee ? [] : db
     .prepare(`SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date IN (${placeholders})`)
     .all(shopId, ...rangeDates);
 
@@ -453,20 +506,31 @@ router.get('/summary', (req, res) => {
   // margin). The previous period's Laba Bersih is built the same way for the trend.
   const prevDates = datesInRange(shiftDateStringWIB(startDate, -dayCount), shiftDateStringWIB(startDate, -1));
   const prevPlaceholders = prevDates.map(() => '?').join(',');
-  const prevAdsRows = db
+  const prevAdsRows = !hasShopee ? [] : db
     .prepare(`SELECT expense FROM ads_performance_daily WHERE shop_id = ? AND date IN (${prevPlaceholders})`)
     .all(shopId, ...prevDates);
   const prevIklan = sumOf(prevAdsRows, 'expense') * (1 + adsTaxPercentage / 100);
-  const prevCommission = sumOf(
+  const prevCommission = (!hasShopee ? 0 : sumOf(
     db.prepare(`SELECT commission FROM affiliate_performance_daily WHERE shop_id = ? AND date IN (${prevPlaceholders})`).all(shopId, ...prevDates),
     'commission'
-  );
+  )) + (platform !== 'shopee' ? yesterday.tiktokAffiliate : 0);
   const prevLabaBersih = yesterday.laba - yesterday.layanan - yesterday.biayaPesanan - prevIklan - prevCommission;
   const profitPct = (omzet, bersih) => (omzet ? Math.round((bersih / omzet) * 1000) / 10 : null);
   const marginPctToday = profitPct(today.omzet, labaBersih);
   const marginPctYesterday = profitPct(yesterday.omzet, prevLabaBersih);
 
+  // 'all': what each marketplace contributed (the Main view's split table).
+  const split = (p) => {
+    const r = sumOrdersInRange(shopId, skuPrices, rangeStart, rangeEnd, p);
+    return { orderCount: r.orderCount, omzet: r.omzet, laba: r.laba };
+  };
+  const byPlatform = platform === 'all' ? { shopee: split('shopee'), tiktok: split('tiktok') } : null;
+
   res.json({
+    platform,
+    byPlatform,
+    // Fee breakdown per marketplace, settled orders only: { shopee: {label: amount}, tiktok: {...} }.
+    feeDetail: today.feeDetail,
     date: endDate, // the range's last day (kept for older callers)
     start: startDate,
     end: endDate,
@@ -476,7 +540,7 @@ router.get('/summary', (req, res) => {
     // recorded for it (changed 2026-10-13). Before, a day with no completed orders hid
     // everything, so an Affiliasi or ad-spend figure that existed for it was never shown.
     // Only a day with nothing of any kind still says "Data tidak tersedia".
-    hasData: hasOrders || affiliateRows.length > 0 || adsRows.length > 0 || !!pageViews,
+    hasData: hasOrders || affiliateRows.length > 0 || adsRows.length > 0 || !!pageViews || hasTiktokAffiliate,
     today: {
       orderCount: today.orderCount,
       omzet: today.omzet,
@@ -495,6 +559,8 @@ router.get('/summary', (req, res) => {
           buyersConfirmed: sumOf(affiliateRows, 'buyers_confirmed'),
           commission: affiliasiCommission,
         }
+      : hasTiktokAffiliate
+      ? { daysWithData: 0, salesConfirmed: null, ordersConfirmed: null, buyersConfirmed: null, commission: affiliasiCommission }
       : null,
     pageViews,
     trend: {
@@ -514,7 +580,7 @@ router.get('/summary', (req, res) => {
     leaking,
     mostStock,
     leastStock,
-    priceDiffs: findPriceDiffs(shopId),
+    priceDiffs: findPriceDiffs(shopId, platform),
     // Every metric this Dashboard shows now has a real data source
     // (escrow, Ads Performance, Brand Portal) — kept as an empty array
     // rather than removed, since the frontend still checks it per metric.

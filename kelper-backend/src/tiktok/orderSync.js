@@ -4,6 +4,7 @@ const { getValidAccessToken } = require('./tokenStore');
 const { getSetting, setSetting } = require('../settings');
 const { flagOrderAsException } = require('../shopeeSync');
 const { bookTikTokOrders, detectLatePickups } = require('./booking');
+const { fillTikTokIncome } = require('./income');
 
 // TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
 // (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
@@ -239,10 +240,13 @@ function startTikTokSync() {
   async function bookingLoop() {
     try {
       detectLatePickups(); // local only, runs even while fetching is locked
-      if (isTikTokSyncEnabled()) {
+      const shops = db.prepare('SELECT shop_id, cipher FROM tiktok_shops').all();
+      if (shops.length > 0) {
         const accessToken = await getValidAccessToken();
-        for (const shop of db.prepare('SELECT shop_id, cipher FROM tiktok_shops').all()) {
-          await bookTikTokOrders({ accessToken, shopCipher: shop.cipher }, shop.shop_id);
+        for (const shop of shops) {
+          const opts = { accessToken, shopCipher: shop.cipher };
+          if (isTikTokSyncEnabled()) await bookTikTokOrders(opts, shop.shop_id);
+          await fillTikTokIncome(opts, shop.shop_id); // read-only, so also while locked
         }
       }
     } catch (err) {

@@ -127,24 +127,26 @@ router.get('/search', async (req, res) => {
 // started. Clicking one opens /search's detail. Total = the order's items at the
 // price frozen for it (order_items.price_snapshot, else today's Harga); left out
 // for a Packing Station admin, who sees no prices anywhere.
+// TikTok Shop / Tokopedia orders (2026-11-10) are listed too, with `platform`;
+// shop_id may be absent (staging has no Shopee shop).
 router.get('/list', (req, res) => {
-  const shopId = Number(req.query.shop_id);
+  const shopId = Number(req.query.shop_id) || 0;
   const from = Number(req.query.from);
   const to = Number(req.query.to);
-  if (!shopId || !Number.isFinite(from) || !Number.isFinite(to)) {
-    return res.status(400).json({ error: 'shop_id, from and to are required' });
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    return res.status(400).json({ error: 'from and to are required' });
   }
   const LIMIT = 2000;
   const rows = db
     .prepare(`
-      SELECT o.order_sn, o.status, o.buyer_name, o.shipping_carrier, o.is_instant, o.tracking_no,
+      SELECT o.order_sn, o.platform, o.status, o.buyer_name, o.shipping_carrier, o.is_instant, o.tracking_no,
              ps.status AS session_status, ps.operator_name, ps.station_id, ps.started_at, ps.completed_at,
              (SELECT COALESCE(SUM(oi.qty), 0) FROM order_items oi WHERE oi.order_sn = o.order_sn) AS item_qty,
              (SELECT SUM(oi.qty * COALESCE(oi.price_snapshot, p.price)) FROM order_items oi
                 LEFT JOIN products p ON p.sku = oi.sku WHERE oi.order_sn = o.order_sn) AS total
       FROM orders o
       JOIN packing_sessions ps ON ps.id = (SELECT MAX(id) FROM packing_sessions WHERE order_sn = o.order_sn)
-      WHERE o.shop_id = ? AND o.order_sn NOT LIKE 'MOCK-%' AND ps.started_at >= ? AND ps.started_at < ?
+      WHERE (o.shop_id = ? OR o.platform != 'shopee') AND o.order_sn NOT LIKE 'MOCK-%' AND ps.started_at >= ? AND ps.started_at < ?
       ORDER BY ps.started_at DESC
       LIMIT ?
     `)

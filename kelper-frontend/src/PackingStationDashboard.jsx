@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { PLATFORM_META, PlatformTag } from './PlatformTag';
 import { colors, card } from './theme';
 import { renderCode39Svg } from './Barcode';
 import { COMMANDS } from './PackingStation';
@@ -60,24 +61,6 @@ const TAG_META = {
   multi_package: { label: 'BEBERAPA PAKET', color: colors.red, title: 'Order ini dipecah menjadi beberapa paket' },
   buyer_cancel: { label: 'MINTA BATAL', color: colors.red, title: 'Pembeli mengajukan pembatalan' },
 };
-
-// Which marketplace an order came from. Rows without a platform are Shopee: only
-// the TikTok Shop / Tokopedia rows carry the field (routes/packing.js).
-const PLATFORM_META = {
-  shopee: { label: 'Shopee', color: '#ee4d2d' },
-  tiktok: { label: 'TikTok', color: '#111111' },
-  tokopedia: { label: 'Tokopedia', color: '#03ac0e' },
-};
-
-function PlatformTag({ platform }) {
-  const meta = PLATFORM_META[platform || 'shopee'];
-  if (!meta) return null;
-  return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#ffffff', background: meta.color, padding: '1px 6px', borderRadius: 4 }}>
-      {meta.label}
-    </span>
-  );
-}
 
 function OrderTags({ tags, platform }) {
   return (

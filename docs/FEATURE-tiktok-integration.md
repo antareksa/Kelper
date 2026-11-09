@@ -131,3 +131,10 @@ Staging is done (2026-11-02). Next: the user registers on TikTok Shop Partner Ce
 - Station-side queries in `routes/packing.js` use `IN_QUEUE` = `(shop_id = ? OR platform != 'shopee')`; Shopee-calling code is unchanged and never sees TikTok orders. Stations with no Shopee shop (staging) send `shop_id` null and get TikTok orders only.
 - No SKU or more than one package -> Batal & Masalah ("Auto (TikTok)"). Cancelled at TikTok: unclaimed drops out; claimed -> Batal & Masalah. Admin "Batalkan" is refused for TikTok (cancel in Seller Center). The Pack Besok print re-checks the live TikTok status.
 - Not yet: the fetch lock ("Kunci Fetching") doesn't stop TikTok import or booking; fees/income; Orders page and Dashboard; one TikTok shop only.
+
+**Step 4 built (2026-11-10): money and reports, staging only.**
+- `src/tiktok/income.js`: for DONE TikTok orders, `statement_transactions` -> `order_income` (Layanan = `voucher_xtra_service_fee_amount`; Biaya Pesanan = platform + dynamic commission, transaction fee, every other fee, taxes; new `order_income.affiliate_commission` = affiliate fees). All-zero answer = not settled, nothing stored, retried every 6 h. **Mapping follows the spec only; check it on the first real settled order.**
+- `/dashboard/summary?platform=shopee|tiktok|all` (default shopee = unchanged, checked against the previous code). Staging's Main/Shopee/TikTok Dashboard now shows real data instead of TEMP. TikTok has no Iklan or Page View (not in the API / no analytics scope).
+- Orders page lists TikTok/Tokopedia orders with their tag.
+- Also: per-marketplace fetch switches in Order Lists (TikTok lock = no new orders, no booking), TikTok Late Pickup inferred from the pickup slot end, several TikTok shops (`orders.marketplace_shop_id`).
+- The sandbox can't create Tokopedia orders ("we only support test order placement from TikTok right now", Tokopedia & Shop onboarding guide).

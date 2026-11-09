@@ -544,6 +544,10 @@ for (const [col, def] of [
   ['seller_order_processing_fee', 'REAL'],
   ['withholding_tax', 'REAL'],
   ['raw_income', 'TEXT'],
+  // TikTok (2026-11-10, src/tiktok/income.js): TikTok charges affiliate
+  // commission per order, inside the settlement; Shopee's comes per day from
+  // AMS (affiliate_performance_daily) and leaves this NULL.
+  ['affiliate_commission', 'REAL'],
 ]) {
   if (!orderIncomeCols.includes(col)) db.exec(`ALTER TABLE order_income ADD COLUMN ${col} ${def}`);
 }

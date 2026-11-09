@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { PlatformTag } from './PlatformTag';
 import { colors, card } from './theme';
 import { IconSearch } from './Icons';
 import { API_BASE, apiFetch } from './apiBase';
@@ -266,6 +267,7 @@ function OrderList({ onOpen }) {
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600 }}>
                       {o.order_sn}
                       {o.is_instant && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: colors.bg, background: colors.orange, padding: '1px 5px', borderRadius: 4 }}>INSTANT</span>}
+                      {o.platform && o.platform !== 'shopee' && <span style={{ marginLeft: 6 }}><PlatformTag platform={o.platform} /></span>}
                     </span>
                     <span style={{ color: colors.textDim }}>{formatDateTime(o.started_at)}</span>
                     <span>{o.operator_name || '—'}</span>
