@@ -108,7 +108,9 @@ const ACTIVE_LOCAL = ['ON_HOLD', 'READY_TO_PACK', 'LOCKED', 'DEFERRED'];
 function masalahReason(flags) {
   const list = (flags || '').split(',');
   if (list.includes('no_sku')) return 'TikTok: ada produk tanpa Seller SKU, tidak bisa discan';
-  if (list.includes('multi_package')) return 'TikTok: order dipecah/digabung jadi beberapa paket';
+  // A split order (several parcels) is NOT sent here (2026-11-10, the user: "do
+  // what Shopee does"): like shopee/shipping.js, booking takes the first parcel.
+  // The BEBERAPA PAKET tag still warns staff.
   return null;
 }
 
@@ -155,7 +157,7 @@ const saveOrder = db.transaction((order, tiktokShopId = null) => {
   const isInstant = order.fulfillment_priority_level === INSTANT_PRIORITY_LEVEL ? 1 : 0;
   const flags = orderFlags(order);
   updateOrder.run(status, order.recipient_address?.name || null, order.shipping_provider || null, isInstant,
-    order.status, flags, platform, order.packages?.length === 1 ? order.packages[0].id : null, order.id);
+    order.status, flags, platform, order.packages?.[0]?.id || null, order.id);
 
   // Items only while nobody is scanning them yet.
   if (!session && ['ON_HOLD', 'READY_TO_PACK'].includes(status)) {

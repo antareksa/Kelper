@@ -14,8 +14,7 @@ const { markBookingInFlight, flagOrderAsException, countReadyToCheck, mapWithCon
 // treats the order exactly like a Shopee one.
 //
 // TikTok works per PACKAGE: order -> packages[0].id -> ship -> shipping_documents.
-// Orders with more than one package never get here (orderSync.js sends them to
-// Masalah).
+// An order with several packages books the first one, as Shopee does.
 
 const LABEL_TRIES = 8;
 const LABEL_WAIT_MS = 5000; // the sandbox label was ready ~10 s after `ship`
@@ -86,7 +85,9 @@ async function bookShipment(opts, orderSn) {
   if (!['AWAITING_SHIPMENT', 'AWAITING_COLLECTION'].includes(order.status)) {
     throw new Error(`TikTok status is ${order.status}, not bookable`);
   }
-  if ((order.packages || []).length !== 1) throw new Error(`order has ${(order.packages || []).length} packages`);
+  // The first parcel, like Shopee (shopee/shipping.js uses package_list[0]):
+  // a split order's other parcels are left to staff in Seller Center.
+  if (!order.packages?.length) throw new Error('TikTok has no package for this order yet');
   const packageId = order.packages[0].id;
 
   let pickupTimeLabel = null;
