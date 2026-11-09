@@ -1813,7 +1813,7 @@ function PackingStation() {
                       rel="noreferrer"
                       style={{ color: colors.blue, fontSize: 13, fontWeight: 500 }}
                     >
-                      Lihat label {state.order.order_sn.startsWith('MOCK-') ? 'mock' : 'Shopee'} PDF (resi: {state.session.tracking_no})
+                      Lihat label {state.order.order_sn.startsWith('MOCK-') ? 'mock' : state.order.platform === 'tokopedia' ? 'Tokopedia' : state.order.platform === 'tiktok' ? 'TikTok' : 'Shopee'} PDF (resi: {state.session.tracking_no})
                     </a>
                   </div>
                 )}

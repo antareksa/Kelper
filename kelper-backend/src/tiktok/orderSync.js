@@ -2,20 +2,24 @@ const db = require('../db');
 const { isConfigured, apiRequest } = require('./client');
 const { getValidAccessToken } = require('./tokenStore');
 const { getSetting, setSetting } = require('../settings');
+const { flagOrderAsException } = require('../shopeeSync');
+const { bookTikTokOrders } = require('./booking');
 
-// TikTok Shop / Tokopedia order import (2026-11-07, step 2 of the TikTok
-// integration, see docs/FEATURE-tiktok-integration.md). READ-ONLY toward TikTok:
-// nothing here books, ships or cancels. An imported order only ever shows in the
-// Waiting List until booking is built.
+// TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
+// (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
+// from TikTok; booking and labels are in booking.js.
 //
-// Fully separate from shopeeSync.js. Orders are stored under TIKTOK_SHOP_ID, a
-// shop id no Shopee loop or /next-order ever selects, because those all filter
-// on a real Shopee shop_id. That is what keeps them unclaimable and out of
-// Shopee's booking and cancel checks without touching any of that code. The
-// real TikTok ids don't fit there anyway: they exceed JS's safe integer range.
+// Orders are stored under TIKTOK_SHOP_ID with orders.platform 'tiktok' or
+// 'tokopedia'. Every Shopee-calling loop (booking, cancel checks, income,
+// shopeeSync.js) filters on the real Shopee shop_id, so it never touches them.
+// The Packing Station's own queries include them through `platform != 'shopee'`
+// (routes/packing.js), which is what makes it one shared queue. The real TikTok
+// ids don't fit in shop_id anyway: they exceed JS's safe integer range.
+// Only one TikTok shop is supported: booking uses the first connected shop.
 const TIKTOK_SHOP_ID = -1;
 
 const POLL_INTERVAL_MS = 30 * 1000;
+const BOOKING_INTERVAL_MS = 15 * 1000;
 const FIRST_SYNC_LOOKBACK_SECONDS = 15 * 24 * 60 * 60;
 // Re-reads a little of the previous window, so an order updated while the last
 // tick was running can't fall between two ticks.
@@ -65,11 +69,11 @@ function orderFlags(order) {
 
 const insertOrder = db.prepare(`
   INSERT OR IGNORE INTO orders (order_sn, shop_id, status, created_at, platform)
-  VALUES (?, ?, 'READY_TO_PACK', ?, ?)
+  VALUES (?, ?, 'ON_HOLD', ?, ?)
 `);
 const updateOrder = db.prepare(`
-  UPDATE orders SET status = ?, buyer_name = ?, shipping_carrier = ?, is_instant = ?,
-    marketplace_status = ?, marketplace_flags = ?, platform = ?
+  UPDATE orders SET status = ?, buyer_name = COALESCE(?, buyer_name), shipping_carrier = COALESCE(?, shipping_carrier),
+    is_instant = ?, marketplace_status = ?, marketplace_flags = ?, platform = ?, package_number = COALESCE(?, package_number)
   WHERE order_sn = ?
 `);
 const deleteItems = db.prepare('DELETE FROM order_items WHERE order_sn = ?');
@@ -78,35 +82,74 @@ const insertItem = db.prepare(`
   VALUES (?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
 `);
 
+// Local statuses an imported order can still change from. ON_HOLD is TikTok's
+// own cancel window: kept as its own local status (2026-11-10) so every
+// READY_TO_PACK query (claiming, booking, the buckets) skips it untouched, and
+// it shows in the Waiting List until TikTok releases it.
+const ACTIVE_LOCAL = ['ON_HOLD', 'READY_TO_PACK', 'LOCKED', 'DEFERRED'];
+
+// Why an order can't go through the Packing Station normally, or null.
+function masalahReason(flags) {
+  const list = (flags || '').split(',');
+  if (list.includes('no_sku')) return 'TikTok: ada produk tanpa Seller SKU, tidak bisa discan';
+  if (list.includes('multi_package')) return 'TikTok: order dipecah/digabung jadi beberapa paket';
+  return null;
+}
+
 const saveOrder = db.transaction((order) => {
-  const existing = db.prepare('SELECT status FROM orders WHERE order_sn = ?').get(order.id);
-  const isOpen = OPEN_STATUSES.includes(order.status);
+  const existing = db.prepare('SELECT status, label_ready FROM orders WHERE order_sn = ?').get(order.id);
   // Never imported before and already past the point KELPER could ship it.
-  if (!existing && !isOpen) return;
-  // Already finished here: a later update from TikTok changes nothing.
-  if (existing && existing.status !== 'READY_TO_PACK') return;
+  if (!existing && !OPEN_STATUSES.includes(order.status)) return;
+  // Finished here (DONE, CANCELLED, SHIPPED_EXTERNAL): a later update changes nothing.
+  if (existing && !ACTIVE_LOCAL.includes(existing.status)) return;
   // "Dilayani Tokopedia" and the like: TikTok ships these itself.
   if (order.fulfillment_type !== 'FULFILLMENT_BY_SELLER') return;
 
   const platform = order.commerce_platform === 'TOKOPEDIA' ? 'tokopedia' : 'tiktok';
   insertOrder.run(order.id, TIKTOK_SHOP_ID, order.create_time || now(), platform);
+  const current = existing?.status || 'ON_HOLD';
+  const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(order.id);
+  const untouched = !session && !existing?.label_ready; // KELPER hasn't claimed or booked it
 
-  let status = 'READY_TO_PACK';
-  if (order.status === 'CANCELLED') status = 'CANCELLED';
-  else if (SHIPPED_STATUSES.includes(order.status)) status = SHIPPED_EXTERNAL;
+  let status = current;
+  if (order.status === 'CANCELLED') {
+    // Same as Shopee's detectCancelledOrders: unclaimed just drops out; once a
+    // station has it, it goes to Batal & Masalah.
+    status = 'CANCELLED';
+    if (session) {
+      db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session.id);
+      db.prepare('UPDATE orders SET cancel_needs_resolve = 1 WHERE order_sn = ?').run(order.id);
+    }
+    console.log(`[server] TikTok order ${order.id} was cancelled${session ? ' while already claimed' : ''} — removed from queue`);
+  } else if (order.status === 'ON_HOLD') {
+    if (untouched) status = 'ON_HOLD';
+  } else if (OPEN_STATUSES.includes(order.status)) {
+    if (current === 'ON_HOLD') status = 'READY_TO_PACK';
+  } else if (SHIPPED_STATUSES.includes(order.status)) {
+    // Shipped without KELPER (from Seller Center). One KELPER booked is left
+    // to the Shipping Mode pickup scan, exactly like Shopee.
+    if (untouched) status = SHIPPED_EXTERNAL;
+  }
 
   // fulfillment_priority_level is absent while ON_HOLD, so this has to be
   // re-read on every update instead of being decided once at import.
   const isInstant = order.fulfillment_priority_level === INSTANT_PRIORITY_LEVEL ? 1 : 0;
+  const flags = orderFlags(order);
   updateOrder.run(status, order.recipient_address?.name || null, order.shipping_provider || null, isInstant,
-    order.status, orderFlags(order), platform, order.id);
+    order.status, flags, platform, order.packages?.length === 1 ? order.packages[0].id : null, order.id);
 
-  if (status === 'READY_TO_PACK') {
+  // Items only while nobody is scanning them yet.
+  if (!session && ['ON_HOLD', 'READY_TO_PACK'].includes(status)) {
     deleteItems.run(order.id);
     for (const item of groupLineItems(order.line_items)) {
       insertItem.run(order.id, item.sku, item.productName, item.qty, item.sku);
     }
   }
+
+  // Can't be packed normally: straight to Batal & Masalah once TikTok releases
+  // it, the same place a Shopee order goes when its booking keeps failing.
+  const reason = masalahReason(flags);
+  if (reason && status === 'READY_TO_PACK' && !session) flagOrderAsException(order.id, reason, 'Auto (TikTok)');
 });
 
 async function fetchChangedOrderIds(opts, updatedSince) {
@@ -139,6 +182,12 @@ async function syncShop(accessToken, shop) {
   if (ids.length > 0) console.log(`[server] TikTok: synced ${ids.length} changed order(s) (shop ${shop.shop_id})`);
 }
 
+// Request options for the (single) connected TikTok shop, or null.
+async function getTikTokOpts() {
+  const shop = db.prepare('SELECT cipher FROM tiktok_shops LIMIT 1').get();
+  return shop ? { accessToken: await getValidAccessToken(), shopCipher: shop.cipher } : null;
+}
+
 async function syncTikTokOrders() {
   const shops = db.prepare('SELECT shop_id, cipher FROM tiktok_shops').all();
   if (shops.length === 0) return;
@@ -149,17 +198,32 @@ async function syncTikTokOrders() {
 }
 
 // Does nothing on an install without TikTok keys, i.e. the live app.
+// Two loops, like shopeeSync.js: booking waits on TikTok for each label (up to
+// ~40 s), and must never hold up noticing new or cancelled orders.
 function startTikTokSync() {
   if (!isConfigured()) return;
-  async function loop() {
+  // An order imported before ON_HOLD got its own local status (2026-11-10).
+  db.prepare("UPDATE orders SET status = 'ON_HOLD' WHERE platform != 'shopee' AND status = 'READY_TO_PACK' AND marketplace_status = 'ON_HOLD' AND label_ready = 0 AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = orders.order_sn)").run();
+
+  async function syncLoop() {
     try {
       await syncTikTokOrders();
     } catch (err) {
       console.error(`[server] TikTok order sync failed: ${err.tiktokCode ?? ''} ${err.message}`);
     }
-    setTimeout(loop, POLL_INTERVAL_MS);
+    setTimeout(syncLoop, POLL_INTERVAL_MS);
   }
-  loop();
+  async function bookingLoop() {
+    try {
+      const opts = await getTikTokOpts();
+      if (opts) await bookTikTokOrders(opts);
+    } catch (err) {
+      console.error(`[server] TikTok booking tick failed: ${err.tiktokCode ?? ''} ${err.message}`);
+    }
+    setTimeout(bookingLoop, BOOKING_INTERVAL_MS);
+  }
+  syncLoop();
+  bookingLoop();
 }
 
-module.exports = { TIKTOK_SHOP_ID, SHIPPED_EXTERNAL, startTikTokSync, syncTikTokOrders, saveOrder, groupLineItems };
+module.exports = { TIKTOK_SHOP_ID, SHIPPED_EXTERNAL, startTikTokSync, syncTikTokOrders, saveOrder, groupLineItems, getTikTokOpts };

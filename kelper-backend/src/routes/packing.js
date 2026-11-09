@@ -15,6 +15,8 @@ const { priorityOrderBy, priorityCompare, piecesSql } = require('../priorityOrde
 const { isBookingInFlight } = require('../shopeeSync');
 const { releaseInProgress, releaseStationSessions } = require('../sessionRelease');
 const { touchStation } = require('../stationPresence');
+const { fetchTikTokOrderStatus } = require('../tiktok/booking');
+const { getTikTokOpts } = require('../tiktok/orderSync');
 
 const router = express.Router();
 // Packing videos go to a temp file, not memory: up to 200 MB each (about 25 min at
@@ -25,6 +27,15 @@ const uploadVideo = multer({ dest: require('os').tmpdir(), limits: { fileSize: 2
 function now() {
   return Math.floor(Date.now() / 1000);
 }
+
+// The Packing Station's queue (2026-11-10): the Shopee shop's orders plus every
+// TikTok Shop / Tokopedia order, which src/tiktok/orderSync.js stores under
+// shop_id -1 with orders.platform 'tiktok' / 'tokopedia'. One shared queue, so
+// every station-facing query filters with these (each keeps exactly one `?`,
+// still bound to the Shopee shop id). On an install with no TikTok orders,
+// i.e. live today, they match exactly what `shop_id = ?` did.
+const IN_QUEUE = "(shop_id = ? OR platform != 'shopee')";
+const IN_QUEUE_O = "(o.shop_id = ? OR o.platform != 'shopee')";
 
 function touch(sessionId) {
   db.prepare('UPDATE packing_sessions SET last_activity_at = ? WHERE id = ?').run(now(), sessionId);
@@ -63,11 +74,24 @@ function isMockOrder(orderSn) {
 // order.label_pdf is excluded here (and everywhere else in this file) since
 // it's a binary blob only needed by GET /label — including it in every JSON
 // response would bloat every scan/status payload for no reason.
+// The marketplace's own current status for one order (Shopee or TikTok), for
+// the "was it cancelled overnight?" recheck before a Pack Besok resi prints.
+async function fetchLiveStatus(order) {
+  if (order.platform && order.platform !== 'shopee') {
+    const opts = await getTikTokOpts();
+    if (!opts) throw new Error('TikTok shop not connected');
+    return fetchTikTokOrderStatus(opts, order.order_sn);
+  }
+  const accessToken = await getValidAccessToken(order.shop_id);
+  const detail = await getOrderDetail(accessToken, order.shop_id, [order.order_sn]);
+  return detail.response?.order_list?.[0]?.order_status;
+}
+
 function getSessionWithOrder(sessionId) {
   const session = db.prepare('SELECT * FROM packing_sessions WHERE id = ?').get(sessionId);
   if (!session) return null;
   const order = db.prepare(`
-    SELECT order_sn, shop_id, status, buyer_name, created_at, is_instant, is_dropoff, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
+    SELECT order_sn, shop_id, platform, status, buyer_name, created_at, is_instant, is_dropoff, logistics_channel_id, shipping_carrier, tracking_no, label_ready, label_printed
     FROM orders WHERE order_sn = ?
   `).get(session.order_sn);
   const items = expandPackingItems(session.order_sn);
@@ -168,16 +192,14 @@ async function finalizeLeftover(session, order, res) {
   }
 
   try {
-    const accessToken = await getValidAccessToken(order.shop_id);
-    const detail = await getOrderDetail(accessToken, order.shop_id, [order.order_sn]);
-    const liveStatus = detail.response?.order_list?.[0]?.order_status;
+    const liveStatus = await fetchLiveStatus(order);
 
     if (liveStatus === 'CANCELLED' || order.status === 'CANCELLED') {
       db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(session.id);
       db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_needs_resolve = 1 WHERE order_sn = ?").run(order.order_sn);
       return res.status(400).json({
         error: 'order_cancelled',
-        message: `Order was cancelled overnight (Shopee status: ${liveStatus}) — resi generation blocked`,
+        message: `Order was cancelled overnight (${order.platform === 'shopee' ? 'Shopee' : 'TikTok'} status: ${liveStatus}) — resi generation blocked`,
       });
     }
 
@@ -216,7 +238,7 @@ function afterHoursFreshAllowed(shopId, cutoff) {
   const labelledBoxes = db
     .prepare(`
       SELECT COUNT(*) AS c FROM packing_sessions ps JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
+      WHERE ps.status = 'DEFERRED_READY' AND ${IN_QUEUE_O} AND o.label_ready = 1
     `)
     .get(shopId).c;
   const slots = Math.max(0, cap - labelledBoxes);
@@ -224,7 +246,7 @@ function afterHoursFreshAllowed(shopId, cutoff) {
   return db
     .prepare(`
       SELECT o.order_sn FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+      WHERE ${IN_QUEUE_O} AND o.status = 'READY_TO_PACK'
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= ?) AND COALESCE(o.is_instant, 0) = 0
         AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
       ${ob.sql}
@@ -235,9 +257,12 @@ function afterHoursFreshAllowed(shopId, cutoff) {
 }
 
 router.post('/next-order', async (req, res) => {
-  const { station_id, shop_id, operator_name } = req.body;
-  if (!station_id || !shop_id) {
-    return res.status(400).json({ error: 'station_id and shop_id are required' });
+  const { station_id, operator_name } = req.body;
+  // No Shopee shop connected (staging): 0 matches no Shopee order, and the
+  // queue filter still includes TikTok/Tokopedia orders.
+  const shop_id = req.body.shop_id || 0;
+  if (!station_id) {
+    return res.status(400).json({ error: 'station_id is required' });
   }
   touchStation(station_id); // idle stations poll this every 3s, so it doubles as a heartbeat
 
@@ -311,7 +336,7 @@ router.post('/next-order', async (req, res) => {
   if (allowed && instantOpen) {
     const instantPick = db.prepare(`
       SELECT o.order_sn AS order_sn FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 1 AND COALESCE(o.is_instant, 0) = 1
+      WHERE ${IN_QUEUE_O} AND o.status = 'READY_TO_PACK' AND o.label_ready = 1 AND COALESCE(o.is_instant, 0) = 1
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= ?)
       ${ob.sql}
       LIMIT 1
@@ -322,7 +347,7 @@ router.post('/next-order', async (req, res) => {
     pick = db.prepare(`
       SELECT o.order_sn AS order_sn
       FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+      WHERE ${IN_QUEUE_O} AND o.status = 'READY_TO_PACK'
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
         AND (
           (COALESCE(o.is_instant, 0) = 1 AND ? = 1 AND o.label_ready = 1)
@@ -545,8 +570,7 @@ router.post('/confirm-besok', (req, res) => {
 const PRINT_RESI_STATION = 'PRINT-RESI';
 
 router.get('/besok-list', (req, res) => {
-  const shopId = Number(req.query.shop_id);
-  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  const shopId = Number(req.query.shop_id) || 0; // 0: no Shopee shop (staging), TikTok orders only
   touchStation(req.query.station_id);
 
   const rows = db
@@ -556,7 +580,7 @@ router.get('/besok-list', (req, res) => {
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.shipping_choice = 'PACK_BESOK' AND ps.status IN ('DEFERRED_READY', 'RESUMING', 'AWAITING_LABEL_SCAN')
-        AND o.shop_id = ? AND o.status != 'CANCELLED'
+        AND ${IN_QUEUE_O} AND o.status != 'CANCELLED'
     `)
     .all(shopId)
     .map((r) => ({ ...r, state: r.status === 'AWAITING_LABEL_SCAN' ? 'printed' : r.label_ready ? 'ready' : 'waiting' }));
@@ -585,19 +609,17 @@ async function startBesokPrint(match, operatorName) {
   if (isMockOrder(match.order_sn)) return finish();
 
   try {
-    const accessToken = await getValidAccessToken(match.shop_id);
-    const detail = await getOrderDetail(accessToken, match.shop_id, [match.order_sn]);
-    const liveStatus = detail.response?.order_list?.[0]?.order_status;
+    const liveStatus = await fetchLiveStatus(match);
     if (liveStatus === 'CANCELLED' || match.order_status === 'CANCELLED') {
       db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', needs_resolve = 1 WHERE id = ?").run(match.session_id);
       db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_needs_resolve = 1 WHERE order_sn = ?").run(match.order_sn);
-      return { status: 400, body: { error: 'order_cancelled', message: `Order ${match.order_sn} dibatalkan semalam (status Shopee: ${liveStatus}) — resi tidak dicetak.` } };
+      return { status: 400, body: { error: 'order_cancelled', message: `Order ${match.order_sn} dibatalkan semalam (status ${match.platform === 'shopee' ? 'Shopee' : 'TikTok'}: ${liveStatus}) — resi tidak dicetak.` } };
     }
     return finish();
   } catch (err) {
     // Leave it printable — a transient Shopee failure must not strand it.
     db.prepare("UPDATE packing_sessions SET status = 'DEFERRED_READY' WHERE id = ?").run(match.session_id);
-    return { status: 502, body: { error: 'shopee_check_failed', message: `Gagal memeriksa order ke Shopee: ${err.message}. Coba scan lagi.` } };
+    return { status: 502, body: { error: 'shopee_check_failed', message: `Gagal memeriksa order ke ${match.platform === 'shopee' ? 'Shopee' : 'TikTok'}: ${err.message}. Coba scan lagi.` } };
   }
 }
 
@@ -610,7 +632,7 @@ router.post('/print-resi', async (req, res) => {
 
   const matches = db
     .prepare(`
-      SELECT ps.id AS session_id, ps.status, ps.internal_barcode, o.order_sn, o.shop_id, o.tracking_no, o.label_ready, o.status AS order_status
+      SELECT ps.id AS session_id, ps.status, ps.internal_barcode, o.order_sn, o.shop_id, o.platform, o.tracking_no, o.label_ready, o.status AS order_status
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
       WHERE ps.shipping_choice = 'PACK_BESOK' AND ps.status IN ('DEFERRED_READY', 'RESUMING', 'AWAITING_LABEL_SCAN')
@@ -707,7 +729,7 @@ router.post('/resume-besok', async (req, res) => {
   const session = claim();
   if (!session) return res.status(404).json({ error: 'barcode_not_found' });
 
-  const order = db.prepare('SELECT order_sn, shop_id, status, tracking_no FROM orders WHERE order_sn = ?').get(session.order_sn);
+  const order = db.prepare('SELECT order_sn, shop_id, platform, status, tracking_no FROM orders WHERE order_sn = ?').get(session.order_sn);
   console.log(`[server] bucket: ${order.order_sn} -> On Progress Check (AWAITING_LABEL_SCAN) — barcode ${internal_barcode} confirmed, frontend will now attempt to print the real label`);
   await finalizeLeftover(session, order, res);
 });
@@ -918,9 +940,8 @@ router.post('/confirm-pickup', (req, res) => {
 // first, same convention as Order Lists' other buckets), then
 // oldest-waiting first within each group.
 router.get('/pickup-list', (req, res) => {
-  const shopId = Number(req.query.shop_id);
+  const shopId = Number(req.query.shop_id) || 0; // 0: no Shopee shop (staging), TikTok orders only
   const { station_id: stationId } = req.query;
-  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
   touchStation(stationId);
 
   const orders = db
@@ -928,7 +949,7 @@ router.get('/pickup-list', (req, res) => {
       SELECT o.order_sn, o.shipping_carrier, o.is_instant, o.is_dropoff
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND ${IN_QUEUE_O}
       ORDER BY o.is_instant DESC, ps.last_activity_at ASC
     `)
     .all(shopId);
@@ -941,14 +962,13 @@ router.get('/pickup-list', (req, res) => {
 // same as scanning each one's label in Shipping Mode without needing the
 // physical labels in hand.
 router.post('/force-pickup-all', requireAdminAuth, (req, res) => {
-  const shopId = Number(req.body.shop_id || req.query.shop_id);
-  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  const shopId = Number(req.body.shop_id || req.query.shop_id) || 0; // 0: no Shopee shop (staging), TikTok orders only
 
   const orderSns = db
     .prepare(`
       SELECT o.order_sn FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND ${IN_QUEUE_O}
     `)
     .all(shopId)
     .map((r) => r.order_sn);
@@ -1053,6 +1073,24 @@ function computeTags({ isInstant, sessionStartedAt, readyToCheckEnteredAt, needs
   return tags;
 }
 
+// Adds the platform (Shopee / TikTok / Tokopedia tag) and TikTok's own status
+// and warning tags to /order-lists rows, in one lookup instead of a column in
+// each of the bucket queries above.
+function withMarketplace(rows) {
+  if (rows.length === 0) return rows;
+  const info = new Map(
+    db.prepare(`SELECT order_sn, platform, marketplace_status, marketplace_flags FROM orders WHERE order_sn IN (${rows.map(() => '?').join(',')})`)
+      .all(...rows.map((r) => r.order_sn))
+      .map((r) => [r.order_sn, r])
+  );
+  return rows.map((row) => {
+    const m = info.get(row.order_sn);
+    if (!m || m.platform === 'shopee') return row;
+    const extra = (m.marketplace_flags || '').split(',').filter((f) => f && !row.tags?.includes(f));
+    return { ...row, platform: m.platform, marketplace_status: m.marketplace_status, tags: [...(row.tags || []), ...extra] };
+  });
+}
+
 router.get('/order-lists', requireAdminAuth, (req, res) => {
   const { shop_id } = req.query;
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
@@ -1069,7 +1107,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant
       FROM orders
-      WHERE shop_id = ? AND status = 'READY_TO_PACK'
+      WHERE ${IN_QUEUE} AND status = 'READY_TO_PACK'
         AND delay_skip_at IS NULL
         AND created_at > CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END
       ORDER BY created_at ASC
@@ -1088,7 +1126,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   const eligibleUnlabeled = db
     .prepare(`
       SELECT order_sn, buyer_name, created_at, is_instant, NULL AS session_started_at FROM orders o
-      WHERE shop_id = ? AND status = 'READY_TO_PACK'
+      WHERE ${IN_QUEUE} AND status = 'READY_TO_PACK'
         AND (delay_skip_at IS NOT NULL OR created_at <= CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END)
         AND label_ready = 0 AND (CASE WHEN COALESCE(is_instant, 0) = 1 THEN ? ELSE ? END) = 1
         -- Without this, a Pack Besok order (packing_sessions.status =
@@ -1103,7 +1141,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT o.order_sn, o.buyer_name, ps.started_at AS created_at, o.is_instant, ps.started_at AS session_started_at
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0 AND ? = 1
+      WHERE ps.status = 'DEFERRED_READY' AND ${IN_QUEUE_O} AND o.label_ready = 0 AND ? = 1
       ORDER BY created_at ASC
     `)
     .all(shop_id, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, shop_id, normalOpen ? 1 : 0)
@@ -1120,7 +1158,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     : db
         .prepare(`
           SELECT order_sn, buyer_name, created_at, is_instant FROM orders o
-          WHERE shop_id = ? AND status = 'READY_TO_PACK'
+          WHERE ${IN_QUEUE} AND status = 'READY_TO_PACK'
             AND (delay_skip_at IS NOT NULL OR created_at <= ?) AND COALESCE(is_instant, 0) = 1
             AND NOT EXISTS (SELECT 1 FROM packing_sessions ps WHERE ps.order_sn = o.order_sn)
         `)
@@ -1139,7 +1177,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT o.order_sn, o.buyer_name, o.created_at, o.is_instant, o.is_dropoff, o.label_ready, o.label_ready_at, o.delay_skip_at, NULL AS internal_barcode, NULL AS session_started_at,
         o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM orders o
-      WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK'
+      WHERE ${IN_QUEUE_O} AND o.status = 'READY_TO_PACK'
         AND (o.delay_skip_at IS NOT NULL OR o.created_at <= CASE WHEN COALESCE(o.is_instant, 0) = 1 THEN ? ELSE ? END)
         AND (
           (COALESCE(o.is_instant, 0) = 1 AND ? = 1 AND o.label_ready = 1)
@@ -1159,7 +1197,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
         o.shipping_carrier, ${piecesSql('o')} AS pieces
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 1
+      WHERE ps.status = 'DEFERRED_READY' AND ${IN_QUEUE_O} AND o.label_ready = 1
     `)
     .all(shop_id, instantCutoff, normalCutoff, instantOpen ? 1 : 0, normalOpen ? 1 : 0, shop_id)
     .filter((row) => {
@@ -1184,15 +1222,16 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
     .sort(priorityCompare()); // the order stations are handed these in (priorityOrder.js)
 
   waitingList.push(...overCap); // pushed out of Ready to Check above
-  // TikTok Shop / Tokopedia (src/tiktok/orderSync.js): shown here only for now.
-  // Booking isn't built, so they never move on and /next-order can't claim them.
+  // TikTok Shop / Tokopedia orders still ON_HOLD at TikTok (its own cancel
+  // window, see src/tiktok/orderSync.js): not bookable or claimable yet, so
+  // they wait here, like a Shopee order inside its delay.
   waitingList.push(...db
     .prepare(`
-      SELECT order_sn, buyer_name, created_at, is_instant, platform, marketplace_status, marketplace_flags, shipping_carrier
-      FROM orders WHERE platform != 'shopee' AND status = 'READY_TO_PACK'
+      SELECT order_sn, buyer_name, created_at, is_instant
+      FROM orders WHERE platform != 'shopee' AND status = 'ON_HOLD'
     `)
     .all()
-    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant, marketplaceFlags: row.marketplace_flags }) })));
+    .map((row) => ({ ...row, tags: computeTags({ isInstant: row.is_instant }) })));
   waitingList.sort((a, b) => a.created_at - b.created_at);
 
   const onProgressCheck = db
@@ -1200,7 +1239,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.status, o.buyer_name, o.is_instant, o.is_dropoff, o.label_ready, o.label_printed
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN') AND o.shop_id = ?
+      WHERE ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN') AND ${IN_QUEUE_O}
       ORDER BY ps.started_at ASC
     `)
     .all(shop_id)
@@ -1214,7 +1253,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.is_dropoff, o.pickup_time_label
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 0 AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 0 AND ${IN_QUEUE_O}
       ORDER BY ps.last_activity_at ASC
     `)
     .all(shop_id)
@@ -1232,7 +1271,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.last_activity_at, o.tracking_no, o.buyer_name, o.is_instant, o.pickup_time_label
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 1 AND o.shop_id = ?
+      WHERE ps.status = 'READY_FOR_PICKUP' AND o.needs_retry_ship = 1 AND ${IN_QUEUE_O}
       ORDER BY ps.last_activity_at ASC
     `)
     .all(shop_id)
@@ -1248,7 +1287,7 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.internal_barcode, ps.started_at, o.buyer_name, o.is_instant
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'DEFERRED_READY' AND o.shop_id = ? AND o.label_ready = 0
+      WHERE ps.status = 'DEFERRED_READY' AND ${IN_QUEUE_O} AND o.label_ready = 0
       ORDER BY ps.started_at ASC
     `)
     .all(shop_id)
@@ -1265,15 +1304,16 @@ router.get('/order-lists', requireAdminAuth, (req, res) => {
   // order each query already chose (oldest first, or newest first where that
   // is the point of the list) is kept.
   const instantFirst = (rows) => [...rows].sort((a, b) => (b.is_instant ? 1 : 0) - (a.is_instant ? 1 : 0));
+  const finish = (rows) => withMarketplace(instantFirst(rows));
 
   res.json({
-    waitingList: instantFirst(waitingList),
-    processing: instantFirst(processing),
-    readyToCheck: instantFirst(readyToCheck),
-    onProgressCheck: instantFirst(onProgressCheck),
-    readyForPickup: instantFirst(readyForPickup),
-    latePickup: instantFirst(latePickup),
-    readyTomorrow: instantFirst(readyTomorrow),
+    waitingList: finish(waitingList),
+    processing: finish(processing),
+    readyToCheck: finish(readyToCheck),
+    onProgressCheck: finish(onProgressCheck),
+    readyForPickup: finish(readyForPickup),
+    latePickup: finish(latePickup),
+    readyTomorrow: finish(readyTomorrow),
   });
 });
 
@@ -1292,7 +1332,7 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
     .prepare(`
       SELECT order_sn, buyer_name, created_at, cancel_needs_resolve
       FROM orders
-      WHERE shop_id = ? AND status = 'CANCELLED'
+      WHERE ${IN_QUEUE} AND status = 'CANCELLED'
       ORDER BY created_at DESC
       LIMIT 200
     `)
@@ -1303,7 +1343,7 @@ router.get('/cancel-masalah-list', requireAdminAuth, (req, res) => {
       SELECT ps.id AS session_id, ps.order_sn, ps.station_id, ps.operator_name, ps.started_at, ps.exception_reason, ps.needs_resolve
       FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'EXCEPTION' AND o.shop_id = ?
+      WHERE ps.status = 'EXCEPTION' AND ${IN_QUEUE_O}
       ORDER BY ps.started_at DESC
     `)
     .all(shop_id);
@@ -1319,13 +1359,13 @@ router.get('/unresolved-count', requireAdminAuth, (req, res) => {
   if (!shop_id) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
 
   const { count: cancelledCount } = db
-    .prepare("SELECT COUNT(*) AS count FROM orders WHERE shop_id = ? AND status = 'CANCELLED' AND cancel_needs_resolve = 1")
+    .prepare(`SELECT COUNT(*) AS count FROM orders WHERE ${IN_QUEUE} AND status = 'CANCELLED' AND cancel_needs_resolve = 1`)
     .get(shop_id);
   const { count: masalahCount } = db
     .prepare(`
       SELECT COUNT(*) AS count FROM packing_sessions ps
       JOIN orders o ON o.order_sn = ps.order_sn
-      WHERE ps.status = 'EXCEPTION' AND ps.needs_resolve = 1 AND o.shop_id = ?
+      WHERE ps.status = 'EXCEPTION' AND ps.needs_resolve = 1 AND ${IN_QUEUE_O}
     `)
     .get(shop_id);
 
@@ -1390,9 +1430,10 @@ function resolveOrderBucket(orderSn) {
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(orderSn);
   if (!order) return null;
   if (order.status === 'CANCELLED') return { order, session: null, bucket: 'Cancelled', rank: -1 };
-  if (order.platform !== 'shopee') {
-    return { order, session: null, bucket: order.status === 'READY_TO_PACK' ? 'Waiting List' : 'Dikirim di luar KELPER', rank: order.status === 'READY_TO_PACK' ? 0 : -1 };
-  }
+  // TikTok Shop / Tokopedia: still in TikTok's own cancel window, or shipped
+  // from Seller Center without KELPER. Otherwise exactly the Shopee rules below.
+  if (order.status === 'ON_HOLD') return { order, session: null, bucket: 'Waiting List', rank: 0 };
+  if (order.status === 'SHIPPED_EXTERNAL') return { order, session: null, bucket: 'Dikirim di luar KELPER', rank: -1 };
 
   const session = db.prepare('SELECT * FROM packing_sessions WHERE order_sn = ?').get(orderSn);
   // This order's OWN window (2026-10-21 hotfix: instant has its own, see
@@ -1454,7 +1495,7 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
   // since it's already past it.
   const delaySeconds = getOrderDelaySeconds(order.is_instant);
   const cutoff = now() - delaySeconds;
-  const canSkipDelay = order.platform === 'shopee' && !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
+  const canSkipDelay = order.status !== 'ON_HOLD' && !session && bucket === 'Waiting List' && !order.delay_skip_at && order.created_at > cutoff;
 
   res.json({
     order_sn: order.order_sn,
@@ -1470,7 +1511,7 @@ router.get('/order-detail', requireAdminAuth, (req, res) => {
     // the popup can show "sudah X lalu" / "tersisa X lagi" instead of
     // leaving it to guesswork whether the delay is even still the reason an
     // order is in Waiting List (it often isn't -- see canSkipDelay above).
-    delayClearsAt: order.platform === 'shopee' ? order.created_at + delaySeconds : null,
+    delayClearsAt: order.status === 'ON_HOLD' ? null : order.created_at + delaySeconds, // ON_HOLD: TikTok decides when
     delaySkippedAt: order.delay_skip_at || null,
     forced: session?.forced === 1,
     exceptionReason: session?.status === 'EXCEPTION' ? session.exception_reason : null,
@@ -1495,7 +1536,7 @@ router.post('/skip-delay', requireAdminAuth, (req, res) => {
   const resolved = resolveOrderBucket(order_sn);
   if (!resolved) return res.status(404).json({ error: 'order_not_found' });
   const { order, session, bucket } = resolved;
-  if (session || bucket !== 'Waiting List' || order.delay_skip_at) {
+  if (session || bucket !== 'Waiting List' || order.delay_skip_at || order.status === 'ON_HOLD') {
     return res.status(409).json({ error: 'not_delay_gated', message: 'Order ini bukan sedang menunggu delay.' });
   }
 
@@ -1543,10 +1584,9 @@ router.post('/force-ready-for-pickup', requireAdminAuth, (req, res) => {
 // the single-order button never showing for them; already-Ready-to-Pickup
 // or terminal (Cancelled/Done) orders are naturally excluded too.
 router.post('/force-ready-for-pickup-all', requireAdminAuth, (req, res) => {
-  const shopId = Number(req.body.shop_id || req.query.shop_id);
-  if (!shopId) return res.status(400).json({ error: 'shop_id_required', message: 'shop_id is required' });
+  const shopId = Number(req.body.shop_id || req.query.shop_id) || 0; // 0: no Shopee shop (staging), TikTok orders only
 
-  const orderSns = db.prepare("SELECT order_sn FROM orders WHERE shop_id = ? AND status = 'READY_TO_PACK'").all(shopId).map((r) => r.order_sn);
+  const orderSns = db.prepare(`SELECT order_sn FROM orders WHERE ${IN_QUEUE} AND status = 'READY_TO_PACK'`).all(shopId).map((r) => r.order_sn);
   const candidates = orderSns.filter((sn) => {
     const resolved = resolveOrderBucket(sn);
     return resolved && (resolved.bucket === 'Ready to Check' || resolved.bucket === 'On Progress Check');
@@ -1572,6 +1612,11 @@ router.post('/cancel-order', requireAdminAuth, async (req, res) => {
   const order = db.prepare('SELECT * FROM orders WHERE order_sn = ?').get(order_sn);
   if (!order) return res.status(404).json({ error: 'order_not_found' });
   if (order.status === 'CANCELLED') return res.json({ ok: true, order_sn, alreadyCancelled: true });
+  // Cancelling through the TikTok API isn't built: do it in TikTok Seller
+  // Center, and the order sync removes it from the queue within ~30 s.
+  if (order.platform !== 'shopee') {
+    return res.status(400).json({ error: 'cancel_not_supported', message: 'Order TikTok/Tokopedia dibatalkan lewat TikTok Seller Center. KELPER akan menghapusnya dari antrian dalam ±30 detik.' });
+  }
 
   if (!isMockOrder(order_sn)) {
     try {

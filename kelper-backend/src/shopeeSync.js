@@ -248,9 +248,11 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// TikTok/Tokopedia orders (platform != 'shopee') count too: they share the one
+// Packing Station queue, so "Maks Siap Dicek" caps both together.
 const countReadyToCheck = db.prepare(`
   SELECT COUNT(*) as c FROM orders o
-  WHERE o.shop_id = ? AND o.status = 'READY_TO_PACK' AND o.label_ready = 1
+  WHERE (o.shop_id = ? OR o.platform != 'shopee') AND o.status = 'READY_TO_PACK' AND o.label_ready = 1
     AND NOT EXISTS (
       SELECT 1 FROM packing_sessions ps
       WHERE ps.order_sn = o.order_sn AND ps.status IN ('IN_PROGRESS', 'RESUMING', 'AWAITING_LABEL_SCAN', 'READY_FOR_PICKUP')
@@ -267,7 +269,7 @@ const countReadyToCheck = db.prepare(`
 // flipped to EXCEPTION in place, keeping its original station/operator) or
 // not yet (the bookAndLabelPendingOrders path — a fresh SYSTEM-owned session
 // is created purely to carry the EXCEPTION status and reason).
-function flagOrderAsException(orderSn, reason) {
+function flagOrderAsException(orderSn, reason, operatorName = 'Auto (Booking Gagal)') {
   const session = db.prepare('SELECT id FROM packing_sessions WHERE order_sn = ?').get(orderSn);
   if (session) {
     db.prepare("UPDATE packing_sessions SET status = 'EXCEPTION', exception_reason = ?, needs_resolve = 1, last_activity_at = ? WHERE id = ?")
@@ -275,10 +277,10 @@ function flagOrderAsException(orderSn, reason) {
   } else {
     db.prepare(`
       INSERT INTO packing_sessions (order_sn, station_id, operator_name, status, exception_reason, needs_resolve, started_at, last_activity_at)
-      VALUES (?, 'SYSTEM', 'Auto (Booking Gagal)', 'EXCEPTION', ?, 1, ?, ?)
-    `).run(orderSn, reason, now(), now());
+      VALUES (?, 'SYSTEM', ?, 'EXCEPTION', ?, 1, ?, ?)
+    `).run(orderSn, operatorName, reason, now(), now());
   }
-  console.log(`[server] ${orderSn}: moved to Masalah after repeated booking failures — ${reason}`);
+  console.log(`[server] ${orderSn}: moved to Masalah (${operatorName}) — ${reason}`);
 }
 
 // Shared by both booking paths below: books the real shipment with Shopee
@@ -297,6 +299,8 @@ function flagOrderAsException(orderSn, reason) {
 // "in flight" after a restart anyway.
 const bookingInFlight = new Set();
 const isBookingInFlight = (orderSn) => bookingInFlight.has(orderSn);
+// For src/tiktok/booking.js, so a TikTok booking shows under "Processing" too.
+const markBookingInFlight = (orderSn, inFlight) => (inFlight ? bookingInFlight.add(orderSn) : bookingInFlight.delete(orderSn));
 
 async function bookOneOrder(accessToken, shopId, orderSn) {
   bookingInFlight.add(orderSn);
@@ -1127,4 +1131,4 @@ function startShopeeSync() {
   enrichmentLoop();
 }
 
-module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, getFetchBudget, isFetchDraining, fetchAffiliatePerformance, resetAffiliateRetry, fetchPageViews, resetPageViewRetry };
+module.exports = { syncAndLabelOrders, startShopeeSync, isBookingInFlight, markBookingInFlight, flagOrderAsException, countReadyToCheck, mapWithConcurrency, getFetchBudget, isFetchDraining, fetchAffiliatePerformance, resetAffiliateRetry, fetchPageViews, resetPageViewRetry };
