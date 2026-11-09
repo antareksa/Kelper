@@ -457,6 +457,12 @@ if (!orderItemCols.includes('price_snapshot')) {
 if (!orderItemCols.includes('hpp_snapshot')) {
   db.exec('ALTER TABLE order_items ADD COLUMN hpp_snapshot INTEGER');
 }
+// The marketplace's own product image for this line (2026-11-10): TikTok's
+// sku_image (src/tiktok/orderSync.js). The Packing Station shows it when the SKU
+// has no Shopee catalog image. NULL for Shopee orders.
+if (!orderItemCols.includes('image_url')) {
+  db.exec('ALTER TABLE order_items ADD COLUMN image_url TEXT');
+}
 
 // Client-requested (2026-10-03): when a station last proved it is alive (a
 // heartbeat from the page, or any request it makes while working — see

@@ -95,6 +95,10 @@ function getSessionWithOrder(sessionId) {
     FROM orders WHERE order_sn = ?
   `).get(session.order_sn);
   const items = expandPackingItems(session.order_sn);
+  // The order's own line images (TikTok's sku_image, see db.js), by SKU.
+  const lineImages = Object.fromEntries(
+    db.prepare('SELECT sku, image_url FROM order_items WHERE order_sn = ? AND image_url IS NOT NULL').all(session.order_sn).map((r) => [r.sku, r.image_url])
+  );
   const progress = db.prepare('SELECT sku, scanned_qty FROM scan_progress WHERE session_id = ?').all(sessionId);
   const progressBySku = Object.fromEntries(progress.map((p) => [p.sku, p.scanned_qty]));
   // barcode is a display hint only (what the operator should physically scan
@@ -107,13 +111,14 @@ function getSessionWithOrder(sessionId) {
     // Same model-then-item image fallback as products.js's catalog listing —
     // purely cosmetic (the Packing Station thumbnail), never used for
     // matching a scan, so a SKU with no synced catalog entry just shows no
-    // image instead of failing anything.
+    // image instead of failing anything. A TikTok/Tokopedia order's own line
+    // image is the fallback (2026-11-10): those SKUs often have no Shopee entry.
     image_url: db.prepare(`
       SELECT COALESCE(m.image_url, i.image_url) AS image_url
       FROM shopee_item_models m
       JOIN shopee_items i ON i.item_id = m.item_id
       WHERE COALESCE(m.model_sku, i.item_sku, 'ITEM-' || i.item_id) = ?
-    `).get(it.sku)?.image_url ?? null,
+    `).get(it.sku)?.image_url ?? lineImages[it.sku] ?? null,
   }));
   // length check matters: an order whose items haven't arrived from Shopee
   // yet (get_order_detail can lag well behind label_ready) has zero rows

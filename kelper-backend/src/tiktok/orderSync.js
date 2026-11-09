@@ -69,7 +69,7 @@ function groupLineItems(lineItems) {
     } else {
       // "Default" is TikTok's name for a product with no variants.
       const hasVariant = line.sku_name && line.sku_name !== 'Default';
-      bySku.set(sku, { sku, productName: hasVariant ? `${line.product_name} - ${line.sku_name}` : line.product_name, qty: 1 });
+      bySku.set(sku, { sku, productName: hasVariant ? `${line.product_name} - ${line.sku_name}` : line.product_name, qty: 1, imageUrl: line.sku_image || null });
     }
   }
   return [...bySku.values()];
@@ -94,8 +94,8 @@ const updateOrder = db.prepare(`
 `);
 const deleteItems = db.prepare('DELETE FROM order_items WHERE order_sn = ?');
 const insertItem = db.prepare(`
-  INSERT INTO order_items (order_sn, sku, product_name, qty, price_snapshot)
-  VALUES (?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
+  INSERT INTO order_items (order_sn, sku, product_name, qty, image_url, price_snapshot)
+  VALUES (?, ?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
 `);
 
 // Local statuses an imported order can still change from. ON_HOLD is TikTok's
@@ -161,7 +161,7 @@ const saveOrder = db.transaction((order, tiktokShopId = null) => {
   if (!session && ['ON_HOLD', 'READY_TO_PACK'].includes(status)) {
     deleteItems.run(order.id);
     for (const item of groupLineItems(order.line_items)) {
-      insertItem.run(order.id, item.sku, item.productName, item.qty, item.sku);
+      insertItem.run(order.id, item.sku, item.productName, item.qty, item.imageUrl, item.sku);
     }
   }
 
