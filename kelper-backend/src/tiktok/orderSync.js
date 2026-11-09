@@ -191,15 +191,29 @@ async function syncShop(accessToken, shop) {
   const updatedSince = Number(getSetting(cursorKey, startedAt - FIRST_SYNC_LOOKBACK_SECONDS + OVERLAP_SECONDS)) - OVERLAP_SECONDS;
 
   const ids = await fetchChangedOrderIds(opts, updatedSince);
+  let changed = 0;
   for (let i = 0; i < ids.length; i += DETAIL_BATCH_SIZE) {
     const batch = ids.slice(i, i + DETAIL_BATCH_SIZE);
     const detail = await apiRequest('GET', '/order/202507/orders', { ...opts, query: { ids: batch.join(',') } });
-    for (const order of detail?.orders || []) saveOrder(order, shop.shop_id);
+    for (const order of detail?.orders || []) {
+      saveOrder(order, shop.shop_id);
+      if (seenUpdateTime.get(order.id) !== order.update_time) changed += 1;
+      seenUpdateTime.set(order.id, order.update_time);
+    }
   }
   // Only after everything saved, so a failed tick retries the same window.
   setSetting(cursorKey, startedAt);
-  if (ids.length > 0) console.log(`[server] TikTok: synced ${ids.length} changed order(s) (shop ${shop.shop_id})`);
+  // Forget orders that have left the re-read window: they can't come back
+  // through it unless TikTok changes them again, and then they count as new.
+  for (const [id, t] of seenUpdateTime) if (t < updatedSince) seenUpdateTime.delete(id);
+  if (changed > 0) console.log(`[server] TikTok: synced ${changed} changed order(s) (shop ${shop.shop_id})`);
 }
+
+// order id -> the update_time last saved (2026-11-10). Every tick re-reads the
+// last OVERLAP_SECONDS on purpose, so one change used to be logged again on each
+// tick for 5 minutes; now only an order whose update_time is new is counted.
+// In memory: after a restart the first tick logs the window once.
+const seenUpdateTime = new Map();
 
 // Request options for one connected TikTok shop (the first one when no id is
 // given, or the id is unknown), or null when none is connected.
