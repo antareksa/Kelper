@@ -137,6 +137,23 @@ function Dashboard() {
   // the full list, since this is always mounted regardless of which page is
   // open. Only runs once actually logged in with a shop connected.
   const [unresolvedCount, setUnresolvedCount] = useState(0);
+  // Low-disk banner (2026-11-10, see backend diskCheck.js): null or { freeBytes, freePct, low }.
+  const [disk, setDisk] = useState(null);
+  useEffect(() => {
+    if (!authenticated) return undefined;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await apiFetch(`${API_BASE}/admin/disk`);
+        if (res.ok && !cancelled) setDisk(await res.json());
+      } catch {
+        // best-effort: a missed poll keeps the last known state
+      }
+    }
+    poll();
+    const interval = setInterval(poll, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [authenticated]);
   useEffect(() => {
     if (!authenticated || !SHOP_ID) return;
     let cancelled = false;
@@ -534,6 +551,11 @@ function Dashboard() {
 
         {/* Main content */}
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, height: isMobile ? 'auto' : '100vh', overflowY: 'auto', padding: isMobile ? 12 : 24, boxSizing: 'border-box' }}>
+          {disk?.low && (
+            <div role="alert" style={{ background: colors.redDim, border: `1px solid ${colors.red}`, color: colors.red, borderRadius: 10, padding: '10px 14px', fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+              Disk server hampir penuh: sisa {(disk.freeBytes / 1024 ** 3).toFixed(1)} GB ({disk.freePct}%). Jika penuh, KELPER gagal menyimpan data. Hubungi admin server.
+            </div>
+          )}
           <Routes>
             <Route path="/" element={<Navigate to={homePath} replace />} />
             <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : IS_STAGING ? <Navigate to="/home/main" replace /> : <MainDashboard />} />

@@ -2,6 +2,7 @@ const express = require('express');
 const { checkLocked, recordFailure, recordSuccess } = require('../loginGuard');
 const { createSession, destroySession, requireAdminAuth } = require('../adminSession');
 const { findAdmin, verifyPassword } = require('../adminUsers');
+const { getDiskStatus } = require('../diskCheck');
 
 const router = express.Router();
 
@@ -39,6 +40,12 @@ router.post('/login', (req, res) => {
 // on load instead of trusting a role it saved in the browser, so a packing
 // account can't turn itself into a full admin by editing local storage (the
 // server enforces the role on every request regardless, see adminSession.js).
+// Free space on the server's disk, for the Dashboard's low-disk banner (see
+// diskCheck.js). null until the first check has run.
+router.get('/disk', requireAdminAuth, (req, res) => {
+  res.json(getDiskStatus());
+});
+
 router.get('/me', requireAdminAuth, (req, res) => {
   res.json({ role: req.adminRole, username: req.adminUsername });
 });
