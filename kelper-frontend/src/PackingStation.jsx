@@ -6,6 +6,7 @@ import { SHOP_ID } from './shopConfig';
 import { API_BASE } from './apiBase';
 import { speakCarrier, playSound, preloadCarrierSounds } from './carrierSpeech';
 import { renderBesokLabelSvg, isBesokCode, BESOK_LABEL_MM } from './besokLabel';
+import ScanCheatPanel, { SCAN_CHEAT_ENABLED } from './ScanCheatPanel';
 
 // orders.created_at / packing_sessions.completed_at are unix SECONDS
 // (server-side, see shopeeSync.js's now()), not the millisecond timestamps
@@ -1384,9 +1385,11 @@ function PackingStation() {
     }
   }
 
-  async function handleScanSubmit(e) {
+  // `cheatValue`: a code sent by the staging-only ScanCheatPanel instead of
+  // typed into the scan input; everything after this line treats it the same.
+  async function handleScanSubmit(e, cheatValue) {
     if (e) e.preventDefault();
-    const raw = scanValue.trim();
+    const raw = (cheatValue ?? scanValue).trim();
     setScanValue('');
     if (!raw) return;
     const value = COMMAND_BARCODE_ALIASES[raw] ?? raw;
@@ -1830,6 +1833,17 @@ function PackingStation() {
         type={infoType}
       />
 
+      {SCAN_CHEAT_ENABLED && (
+        <ScanCheatPanel
+          onScan={(value) => handleScanSubmit(null, value)}
+          operatorName={operatorName}
+          mode={mode}
+          state={state}
+          pickupList={pickupList}
+          besokList={besokList}
+        />
+      )}
+
       <style>{`
         @keyframes kelper-spin { to { transform: rotate(360deg); } }
         .kelper-spinner {
@@ -1850,7 +1864,7 @@ function PackingStation() {
            (rendered separately, before stationReady) keeps the normal cursor.
            !important overrides the browser's own default cursor on inputs/
            buttons (text caret, pointer), which plain inheritance can't. */
-        *, *::before, *::after { cursor: none !important; }
+        ${SCAN_CHEAT_ENABLED ? '' : '*, *::before, *::after { cursor: none !important; }'}
       `}</style>
 
       <iframe ref={printFrameRef} title="label-print" style={{ display: 'none' }} />
