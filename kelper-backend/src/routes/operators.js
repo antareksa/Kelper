@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const { startOfTodayWIB } = require('../wib');
 const { requireAdminAuth } = require('../adminSession');
+const { getConfig } = require('../config');
 const { touchStation, checkOutStation, startPresenceSweep, STATION_DEAD_AFTER_SECONDS } = require('../stationPresence');
 
 startPresenceSweep();
@@ -144,5 +145,15 @@ router.get('/by-name', requireAdminAuth, (req, res) => {
 
   res.json(operator);
 });
+
+// Staging-only helper for the Packing Station's cheat panel (ScanCheatPanel.jsx),
+// so a tester without a scanner can log in with a button. It lists login
+// barcodes with no auth, so it must never exist on the live app: it is only
+// registered on the staging instance or a non-production run.
+if (getConfig().instanceName === 'staging' || process.env.NODE_ENV !== 'production') {
+  router.get('/cheat-list', (req, res) => {
+    res.json({ operators: db.prepare('SELECT name, login_barcode FROM operators ORDER BY name').all() });
+  });
+}
 
 module.exports = router;

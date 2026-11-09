@@ -1837,6 +1837,7 @@ function PackingStation() {
         <ScanCheatPanel
           onScan={(value) => handleScanSubmit(null, value)}
           operatorName={operatorName}
+          paused={paused}
           mode={mode}
           state={state}
           pickupList={pickupList}

@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { colors } from './theme';
+import { API_BASE } from './apiBase';
 
 // "Cheat" scan panel (2026-11-10): lets a tester drive the Packing Station
-// with the mouse when no barcode scanner is at hand. Every button goes through
-// the station's own handleScanSubmit, exactly like a scan, so nothing about the
+// with the mouse when no barcode scanner is at hand. Buttons only, picked for
+// whatever the station is waiting for: the right scan, a wrong one, and the
+// commands that make sense at that moment. Every button goes through the
+// station's own handleScanSubmit, exactly like a scan, so nothing about the
 // flow is skipped or faked server-side.
 //
 // Staging and local development only. Never shown on the live hostnames, where
@@ -11,142 +14,138 @@ import { colors } from './theme';
 const host = window.location.hostname;
 export const SCAN_CHEAT_ENABLED = host.includes('.staging.') || host === 'localhost' || host === '127.0.0.1';
 
-const RECENT_KEY = 'kelper.scanCheat.recent';
-const RECENT_MAX = 6;
-// SHUTDOWN_PC is left out on purpose: on a set-up PC it really turns it off.
-const COMMANDS = ['NEXT_ORDER', 'PAUSE', 'RESUME', 'UNDO', 'MASALAH', 'RELEASE_ORDER', 'REPRINT', 'SHIPPING_MODE', 'PRINT_RESI_MODE', 'PACKING_MODE', 'LOGOUT'];
+// Codes that can't match anything real, for testing the "wrong scan" paths.
+const WRONG = 'CHEAT-SALAH';
 
-function loadRecent() {
-  try {
-    const list = JSON.parse(localStorage.getItem(RECENT_KEY));
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
+// [label, value, kind] buttons for the station's current state.
+function buttonsFor({ operatorName, operators, paused, mode, state, pickupList, besokList }) {
+  if (!operatorName) {
+    return [
+      ...operators.map((o) => [`Masuk: ${o.name}`, o.login_barcode, 'good']),
+      ['Barcode operator salah', WRONG, 'bad'],
+    ];
   }
-}
+  if (paused) return [['RESUME', 'RESUME', 'good'], ['LOGOUT', 'LOGOUT']];
 
-function saveRecent(list) {
-  try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
-  } catch {
-    // storage unavailable: the list just won't survive a reload
+  if (mode === 'shipping') {
+    const next = pickupList[0];
+    return [
+      ...(next ? [[`Scan resi pickup (benar): ${next.order_sn}`, next.order_sn, 'good']] : []),
+      ['Scan resi salah', WRONG, 'bad'],
+      ['PACKING_MODE', 'PACKING_MODE'],
+    ];
   }
-}
 
-// What the station is waiting for right now, as [label, value] buttons.
-function suggestions({ operatorName, mode, state, pickupList, besokList }) {
-  if (!operatorName) return [];
-  if (mode === 'shipping') return pickupList.map((o) => [`Pickup ${o.order_sn}`, o.order_sn]);
-  if (mode === 'printresi') return besokList.map((o) => [`Besok ${o.internal_barcode || o.order_sn}`, o.internal_barcode || o.order_sn]);
-  if (!state) return [];
+  if (mode === 'printresi') {
+    const next = besokList[0];
+    const right = !next ? []
+      : next.status === 'AWAITING_LABEL_SCAN'
+        ? [[`Scan resi tercetak (benar): ${next.order_sn}`, next.order_sn, 'good']]
+        : [[`Scan barcode Pack Besok (benar): ${next.internal_barcode}`, next.internal_barcode, 'good']];
+    return [...right, ['Scan barcode salah', WRONG, 'bad'], ['PACKING_MODE', 'PACKING_MODE']];
+  }
+
+  const idle = [['NEXT_ORDER', 'NEXT_ORDER', 'good'], ['SHIPPING_MODE', 'SHIPPING_MODE'], ['PRINT_RESI_MODE', 'PRINT_RESI_MODE'], ['PAUSE', 'PAUSE'], ['LOGOUT', 'LOGOUT']];
+  if (!state) return idle;
 
   const { session, order, items } = state;
-  const out = [];
   if (session.status === 'IN_PROGRESS') {
-    for (const it of items) {
-      const done = it.scanned_qty >= it.qty;
-      out.push([`${done ? '✓ ' : ''}${it.sku} (${it.scanned_qty}/${it.qty})`, it.barcode || it.sku]);
-    }
-    out.push(['Item salah (uji)', 'CHEAT-WRONG-ITEM']);
+    const next = items.find((it) => it.scanned_qty < it.qty);
+    return [
+      ...(next ? [[`Scan item benar: ${next.sku} (${next.scanned_qty + 1}/${next.qty})`, next.barcode || next.sku, 'good']] : []),
+      ['Scan item salah', WRONG, 'bad'],
+      ['UNDO', 'UNDO'],
+      ['MASALAH', 'MASALAH'],
+      ['RELEASE_ORDER', 'RELEASE_ORDER'],
+      ['PAUSE', 'PAUSE'],
+    ];
   }
-  if (['RESUMING', 'DEFERRED_READY'].includes(session.status) && session.internal_barcode) {
-    out.push([`Barcode sementara ${session.internal_barcode}`, session.internal_barcode]);
+  if (session.status === 'RESUMING' || (session.status === 'DEFERRED_READY' && !session.besok_confirmed_at)) {
+    return [
+      [`Scan barcode sementara (benar): ${session.internal_barcode}`, session.internal_barcode, 'good'],
+      ['Scan barcode sementara salah', WRONG, 'bad'],
+      ...(session.status === 'DEFERRED_READY' ? [['REPRINT', 'REPRINT']] : []),
+    ];
   }
   if (session.status === 'AWAITING_LABEL_SCAN') {
-    if (order.tracking_no) out.push([`Resi ${order.tracking_no}`, order.tracking_no]);
-    out.push([`Order ${order.order_sn}`, order.order_sn]);
-    out.push(['Label salah (uji)', 'CHEAT-WRONG-LABEL']);
+    const resi = order.tracking_no || order.order_sn;
+    return [
+      [`Scan resi (benar): ${resi}`, resi, 'good'],
+      ['Scan resi salah', WRONG, 'bad'],
+      ['REPRINT', 'REPRINT'],
+    ];
   }
-  return out;
+  return idle;
 }
 
-export default function ScanCheatPanel({ onScan, operatorName, mode, state, pickupList, besokList }) {
+export default function ScanCheatPanel({ onScan, operatorName, paused, mode, state, pickupList, besokList }) {
   const [open, setOpen] = useState(true);
-  const [text, setText] = useState('');
-  const [recent, setRecent] = useState(loadRecent);
+  const [operators, setOperators] = useState([]);
+  const [operatorsError, setOperatorsError] = useState(false);
 
-  function sendTyped() {
-    const value = text.trim();
-    if (!value) return;
-    const next = [value, ...recent.filter((v) => v !== value)].slice(0, RECENT_MAX);
-    setRecent(next);
-    saveRecent(next);
-    setText('');
-    onScan(value);
-  }
+  // Only needed for the login buttons; the server only serves this list on staging.
+  useEffect(() => {
+    if (operatorName) return;
+    fetch(`${API_BASE}/operators/cheat-list`)
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data) => { setOperators(data.operators || []); setOperatorsError(false); })
+      .catch(() => setOperatorsError(true));
+  }, [operatorName]);
 
   // preventDefault on mousedown keeps the focus on the station's hidden scan
   // input, so a real scanner (if one is plugged in) still works alongside.
-  const button = (label, value, key) => (
-    <button key={key ?? value} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onScan(value)} style={buttonStyle}>
-      {label}
-    </button>
-  );
+  const keepFocus = (e) => e.preventDefault();
 
   if (!open) {
     return (
-      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setOpen(true)} style={{ ...panelBase, ...buttonStyle, padding: '8px 12px', fontWeight: 700 }}>
+      <button type="button" onMouseDown={keepFocus} onClick={() => setOpen(true)} style={{ ...panelBase, ...buttonStyle(), fontWeight: 700 }}>
         CHEAT
       </button>
     );
   }
 
-  const hints = suggestions({ operatorName, mode, state, pickupList, besokList });
+  const buttons = buttonsFor({ operatorName, operators, paused, mode, state, pickupList, besokList });
   return (
-    <div style={{ ...panelBase, width: 280, maxHeight: 'calc(100vh - 150px)', overflowY: 'auto', padding: 12, background: colors.card, border: `2px dashed ${colors.yellow}`, borderRadius: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+    <div style={{ ...panelBase, width: 300, maxHeight: 'calc(100vh - 150px)', overflowY: 'auto', padding: 12, background: colors.card, border: `2px dashed ${colors.yellow}`, borderRadius: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <strong style={{ fontSize: 13, color: colors.text }}>Cheat scan (staging)</strong>
-        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setOpen(false)} style={{ ...buttonStyle, padding: '2px 8px' }}>Tutup</button>
+        <button type="button" onMouseDown={keepFocus} onClick={() => setOpen(false)} style={{ ...buttonStyle(), padding: '2px 8px', fontSize: 11 }}>Tutup</button>
       </div>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-        <input
-          data-mouse-input="true"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') sendTyped(); }}
-          placeholder={operatorName ? 'Ketik kode lalu Enter' : 'Barcode operator (OP-...)'}
-          style={{ flex: 1, minWidth: 0, fontSize: 12, padding: '6px 8px', borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.cardAlt, color: colors.text }}
-        />
-        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={sendTyped} style={buttonStyle}>Scan</button>
+      {!operatorName && operatorsError && (
+        <p style={noteStyle}>Daftar operator tidak bisa dimuat.</p>
+      )}
+      {!operatorName && !operatorsError && operators.length === 0 && (
+        <p style={noteStyle}>Belum ada operator. Buat dulu di Dashboard → Daftar.</p>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {buttons.map(([label, value, kind], i) => (
+          <button key={`${i}-${label}`} type="button" onMouseDown={keepFocus} onClick={() => onScan(value)} style={buttonStyle(kind)}>
+            {label}
+          </button>
+        ))}
       </div>
-      {!operatorName && (
-        <p style={noteStyle}>Barcode operator ada di Dashboard → Daftar (operator), formatnya OP-xxxxxxxx.</p>
-      )}
-
-      {recent.length > 0 && (
-        <Section title="Terakhir diketik">{recent.map((v) => button(v, v, `recent-${v}`))}</Section>
-      )}
-      {hints.length > 0 && (
-        <Section title="Yang ditunggu sekarang">{hints.map(([label, value], i) => button(label, value, `hint-${i}`))}</Section>
-      )}
-      {operatorName && (
-        <Section title="Perintah">{COMMANDS.map((c) => button(c, c))}</Section>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, children }) {
-  return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: colors.textDim, marginBottom: 4 }}>{title}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{children}</div>
     </div>
   );
 }
 
 const panelBase = { position: 'fixed', top: 64, right: 16, zIndex: 50, boxSizing: 'border-box', fontFamily: 'var(--sans)' };
-const buttonStyle = {
-  fontSize: 11,
-  padding: '4px 8px',
-  background: colors.cardAlt,
-  border: `1px solid ${colors.border}`,
-  color: colors.text,
-  borderRadius: 6,
-  cursor: 'pointer',
-  fontFamily: 'var(--sans)',
-  textAlign: 'left',
-  wordBreak: 'break-all',
-};
-const noteStyle = { margin: '0 0 4px', fontSize: 11, color: colors.textDim };
+
+function buttonStyle(kind) {
+  const accent = kind === 'good' ? colors.green : kind === 'bad' ? colors.red : colors.border;
+  return {
+    fontSize: 13,
+    fontWeight: kind ? 600 : 400,
+    padding: '8px 10px',
+    background: colors.cardAlt,
+    border: `1px solid ${accent}`,
+    borderLeft: `4px solid ${accent}`,
+    color: colors.text,
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontFamily: 'var(--sans)',
+    textAlign: 'left',
+    wordBreak: 'break-all',
+  };
+}
+
+const noteStyle = { margin: '0 0 8px', fontSize: 12, color: colors.textDim };
