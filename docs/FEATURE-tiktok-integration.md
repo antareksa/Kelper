@@ -143,10 +143,11 @@ Staging is done (2026-11-02). Next: the user registers on TikTok Shop Partner Ce
 
 ### Before going live with TikTok (checklist)
 1. Reset the TikTok **App Secret** in Partner Center (it was shown in chat) and use only the new one on live.
-2. Merge `dev-staging` -> `main`, deploy live. Without TikTok keys live behaves as before (TikTok off, staging-only pages hidden). Tell the client: Shopee fetching can now be unlocked from the Dashboard.
-3. Add `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET` (+ `TIKTOK_AUTH_URL` or `TIKTOK_SERVICE_ID`) to live's `.env.production`; add the live redirect URL (`https://dashboard.kelper.co.id/tiktok-callback`) in Partner Center; restart.
-4. Client connects the real shop (Pengaturan -> TikTok Shop). TikTok fetching starts **locked**: unlock in Order Lists only when ready.
-5. First real orders: check a Tokopedia order, an instant order, ON_HOLD length, courier names, label print + scan on the client's printer, and the first settled order's fees.
-6. The Dashboard on live still shows Shopee only (MainDashboard.jsx); the Main/Shopee/TikTok views are staging-only until switched on for live.
+2. **Back up the live database first** (on the VM: `cd /opt/kelper/kelper-backend && NODE_ENV=production node scripts/backup.js save before-tiktok-merge`, then `... backup.js list` to see it in the bucket). The merge adds tables and a `stock_log.platform` column; nothing existing is changed, but this is the way back if anything goes wrong (`backup.js load <name>`).
+3. Merge `dev-staging` -> `main`, deploy live. Without TikTok keys live behaves as before (TikTok off, staging-only pages hidden). Tell the client: Shopee fetching can now be unlocked from the Dashboard.
+4. Add `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET` (+ `TIKTOK_AUTH_URL` or `TIKTOK_SERVICE_ID`) to live's `.env.production`; add the live redirect URL (`https://dashboard.kelper.co.id/tiktok-callback`) in Partner Center; restart.
+5. Client connects the real shop (Pengaturan -> TikTok Shop). TikTok fetching starts **locked**: unlock in Order Lists only when ready.
+6. First real orders: check a Tokopedia order, an instant order, ON_HOLD length, courier names, label print + scan on the client's printer, and the first settled order's fees.
+7. The Dashboard on live still shows Shopee only (MainDashboard.jsx); the Main/Shopee/TikTok views are staging-only until switched on for live.
 
 **Separate List Barang, stock and price per marketplace (2026-11-10, client-requested).** `src/tiktok/catalogSync.js` copies TikTok's product list into `tiktok_catalog` hourly (search + detail for changed products: price, TikTok's own stock, variant name, image). KELPER's TikTok stock is `tiktok_stock_dashboard` (separate from `products.stock`), edited in **List Barang TikTok** (both roles; Harga/HPP for a full admin only), uploaded with `?platform=tiktok`, lowered by TikTok orders at pickup. TikTok order items take TikTok's price. `stock_log.platform` keeps the two apart; **Stock Opname** has a Shopee / TikTok switch. HPP and barcode stay shared. Without TikTok keys (live today) the menu is unchanged.
