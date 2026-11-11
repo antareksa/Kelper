@@ -155,6 +155,10 @@ function Dashboard() {
       .then((data) => setTiktokEnabled(!!data?.tiktok))
       .catch(() => {});
   }, [authenticated]);
+  // The Main / Shopee / TikTok Dashboard (DashboardPreview.jsx, 2026-11-10): on
+  // staging always, elsewhere (live) once TikTok is set up there. Live without
+  // TikTok keys keeps its Shopee-only MainDashboard, unchanged.
+  const marketplaceViews = IS_STAGING || tiktokEnabled;
   // Low-disk banner (2026-11-10, see backend diskCheck.js): null or { freeBytes, freePct, low }.
   const [disk, setDisk] = useState(null);
   useEffect(() => {
@@ -392,11 +396,11 @@ function Dashboard() {
               {!isPacking && (
                 <>
                   <button
-                    onClick={() => navigate(IS_STAGING ? DASHBOARD_SUB_ITEMS[0].path : DASHBOARD_TAB.path)}
-                    style={navItemStyle(IS_STAGING ? location.pathname.startsWith(DASHBOARD_TAB.path) : location.pathname === DASHBOARD_TAB.path)}
+                    onClick={() => navigate(marketplaceViews ? DASHBOARD_SUB_ITEMS[0].path : DASHBOARD_TAB.path)}
+                    style={navItemStyle(marketplaceViews ? location.pathname.startsWith(DASHBOARD_TAB.path) : location.pathname === DASHBOARD_TAB.path)}
                   >
                     <DashboardIcon size={16} />
-                    {IS_STAGING ? (
+                    {marketplaceViews ? (
                       <>
                         <span style={{ flex: 1 }}>{DASHBOARD_TAB.label}</span>
                         <span style={{ display: 'flex', transform: location.pathname.startsWith(DASHBOARD_TAB.path) ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }}>
@@ -405,7 +409,7 @@ function Dashboard() {
                       </>
                     ) : DASHBOARD_TAB.label}
                   </button>
-                  {IS_STAGING && location.pathname.startsWith(DASHBOARD_TAB.path) && (
+                  {marketplaceViews && location.pathname.startsWith(DASHBOARD_TAB.path) && (
                     <div style={{ marginLeft: 18, marginTop: 6, marginBottom: 4, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {DASHBOARD_SUB_ITEMS.map(({ path, label }) => (
                         <button key={path} onClick={() => navigate(path)} style={subItemStyle(location.pathname === path)}>
@@ -576,10 +580,10 @@ function Dashboard() {
           )}
           <Routes>
             <Route path="/" element={<Navigate to={homePath} replace />} />
-            <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : IS_STAGING ? <Navigate to="/home/main" replace /> : <MainDashboard />} />
-            {IS_STAGING && !isPacking && <Route path="/home/main" element={<DashboardPreview view="main" />} />}
-            {IS_STAGING && !isPacking && <Route path="/home/shopee" element={<DashboardPreview view="shopee" />} />}
-            {IS_STAGING && !isPacking && <Route path="/home/tiktok" element={<DashboardPreview view="tiktok" />} />}
+            <Route path="/home" element={isPacking ? <Navigate to={homePath} replace /> : marketplaceViews ? <Navigate to="/home/main" replace /> : <MainDashboard />} />
+            {marketplaceViews && !isPacking && <Route path="/home/main" element={<DashboardPreview view="main" />} />}
+            {marketplaceViews && !isPacking && <Route path="/home/shopee" element={<DashboardPreview view="shopee" />} />}
+            {marketplaceViews && !isPacking && <Route path="/home/tiktok" element={<DashboardPreview view="tiktok" />} />}
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
             {tiktokEnabled && <Route path="/list-barang/tiktok" element={<StockList platform="tiktok" showPrices={!isPacking} />} />}
             <Route path="/list-barang/stock-opname" element={<StockOpname tiktokEnabled={tiktokEnabled} />} />

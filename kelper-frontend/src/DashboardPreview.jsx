@@ -14,10 +14,10 @@ import {
   PriceDiffList,
 } from './MainDashboard';
 
-// STAGING (2026-11-04, real data since 2026-11-10): the Main / Shopee / TikTok
-// Dashboard. Each view reads /dashboard/summary with ?platform= all / shopee /
-// tiktok (see routes/dashboard.js). Only reachable on staging hostnames (see
-// Dashboard.jsx's IS_STAGING); live still shows MainDashboard.jsx.
+// The Main / Shopee / TikTok Dashboard (2026-11-04, real data since 2026-11-10).
+// Each view reads /dashboard/summary with ?platform= all / shopee / tiktok (see
+// routes/dashboard.js). Shown on staging, and on any server with TikTok set up
+// (Dashboard.jsx's marketplaceViews); otherwise MainDashboard.jsx is shown.
 //
 // Main is computed by the server the way it must be: amounts are added,
 // percentages recomputed from the totals (never added or averaged).
