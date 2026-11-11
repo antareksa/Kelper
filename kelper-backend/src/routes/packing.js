@@ -57,6 +57,11 @@ const { withStockLog } = require('../stockLog');
 const consumeStockQty = db.prepare(`
   UPDATE products SET stock = MAX(stock - ?, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
 `);
+// A TikTok/Tokopedia order takes from the TikTok stock instead (2026-11-10,
+// client-requested: separate stock per marketplace, see db.js tiktok_stock_dashboard).
+const consumeTikTokStockQty = db.prepare(`
+  UPDATE tiktok_stock_dashboard SET stock = MAX(stock - ?, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
+`);
 const consumeStock = db.prepare(`
   UPDATE products SET stock = MAX(stock - 1, 0), updated_at = ? WHERE sku = ? AND stock IS NOT NULL
 `);
@@ -814,8 +819,10 @@ function confirmOrderPickedUp(orderSn) {
   // Skipped for a session that already took it per scan (those older sessions
   // took the parts per scan, the way they began).
   if (!session.stock_consumed_at_scan) {
+    const isTikTok = db.prepare('SELECT platform FROM orders WHERE order_sn = ?').get(orderSn)?.platform !== 'shopee';
     for (const it of db.prepare('SELECT sku, qty FROM order_items WHERE order_sn = ?').all(orderSn)) {
-      withStockLog(it.sku, 'sale', orderSn, pickedUpAt, () => consumeStockQty.run(it.qty, pickedUpAt, it.sku));
+      if (isTikTok) withStockLog(it.sku, 'sale', orderSn, pickedUpAt, () => consumeTikTokStockQty.run(it.qty, pickedUpAt, it.sku), 'tiktok');
+      else withStockLog(it.sku, 'sale', orderSn, pickedUpAt, () => consumeStockQty.run(it.qty, pickedUpAt, it.sku));
     }
   }
 

@@ -58,7 +58,11 @@ const inputStyle = {
   boxSizing: 'border-box',
 };
 
-function StockOpname() {
+// tiktokEnabled (2026-11-10): shows a Shopee / TikTok switch; each has its own
+// stock (see the backend's tiktok_stock_dashboard).
+function StockOpname({ tiktokEnabled = false }) {
+  const [platform, setPlatform] = useState('shopee');
+  const platformQuery = platform === 'tiktok' ? '&platform=tiktok' : '';
   const today = wibDateString(0);
   // Both ends yesterday by default: the latest complete day.
   const [startDate, setStartDate] = useState(wibDateString(1));
@@ -73,7 +77,7 @@ function StockOpname() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    apiFetch(`${API_BASE}/products/stock-opname?start=${startDate}&end=${endDate}`)
+    apiFetch(`${API_BASE}/products/stock-opname?start=${startDate}&end=${endDate}${platformQuery}`)
       .then(async (res) => {
         if (!res.ok) throw new Error();
         const body = await res.json();
@@ -82,7 +86,7 @@ function StockOpname() {
       .catch(() => { if (!cancelled) setError('Gagal memuat data stock opname.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [startDate, endDate]);
+  }, [startDate, endDate, platformQuery]);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -107,12 +111,12 @@ function StockOpname() {
   async function handleDownloadTemplate() {
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/products/stock-template`);
+      const res = await apiFetch(`${API_BASE}/products/stock-template${platform === 'tiktok' ? '?platform=tiktok' : ''}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Gagal mengunduh template');
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'item-stok-template.xlsx';
+      a.download = platform === 'tiktok' ? 'item-stok-tiktok-template.xlsx' : 'item-stok-template.xlsx';
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -122,7 +126,22 @@ function StockOpname() {
 
   return (
     <div style={{ color: colors.text }}>
-      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)', marginBottom: 4 }}>Stock Opname</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--heading)' }}>Stock Opname{tiktokEnabled ? (platform === 'tiktok' ? ' TikTok' : ' Shopee') : ''}</div>
+        {tiktokEnabled && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[['shopee', 'Shopee'], ['tiktok', 'TikTok / Tokopedia']].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setPlatform(key)}
+                style={{ ...buttonStyle, background: platform === key ? colors.cardAlt : colors.card, color: platform === key ? colors.text : colors.textDim, fontWeight: platform === key ? 600 : 400 }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 16 }}>
         Stok Awal + Masuk − Keluar = Stok Akhir, per item. Keluar = terjual (scan pickup) dan pengurangan manual;
         Masuk = unggah Item Stok dan penambahan manual.

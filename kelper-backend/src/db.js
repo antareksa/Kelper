@@ -652,8 +652,43 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS stock_log_created ON stock_log (created_at);
+
+  -- TikTok Shop / Tokopedia (2026-11-10, client-requested): a separate List
+  -- Barang, stock and price per marketplace. tiktok_catalog is TikTok's own
+  -- product list (src/tiktok/catalogSync.js), one row per TikTok SKU: price is
+  -- TikTok's selling price (used for TikTok orders' Omzet), tiktok_stock is
+  -- what TikTok itself shows. tiktok_stock_dashboard is KELPER's own TikTok
+  -- stock count per SKU, separate from products.stock (Shopee's): edited in
+  -- List Barang TikTok, lowered by TikTok orders at pickup. HPP and barcode stay
+  -- shared in products: same physical product.
+  CREATE TABLE IF NOT EXISTS tiktok_catalog (
+    shop_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    sku_id TEXT NOT NULL,
+    seller_sku TEXT,
+    product_name TEXT,
+    sku_name TEXT,
+    price REAL,
+    tiktok_stock INTEGER,
+    image_url TEXT,
+    status TEXT,
+    product_update_time INTEGER,
+    synced_at INTEGER NOT NULL,
+    PRIMARY KEY (shop_id, sku_id)
+  );
+  CREATE TABLE IF NOT EXISTS tiktok_stock_dashboard (
+    sku TEXT PRIMARY KEY,
+    stock INTEGER,
+    updated_at INTEGER NOT NULL
+  );
 `);
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('stockLogStartedAt', ?)").run(String(Math.floor(Date.now() / 1000)));
+// Which stock a stock_log row belongs to (2026-11-10): 'shopee' (products.stock,
+// every older row) or 'tiktok' (tiktok_stock_dashboard).
+if (!db.prepare('PRAGMA table_info(stock_log)').all().some((c) => c.name === 'platform')) {
+  db.exec("ALTER TABLE stock_log ADD COLUMN platform TEXT NOT NULL DEFAULT 'shopee'");
+}
+db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('tiktokStockLogStartedAt', ?)").run(String(Math.floor(Date.now() / 1000)));
 
 // Client-requested (2026-10-17): an admin can force an order in Waiting List
 // past its buyer-cancellation delay (orderDelayMinutes/instantOrderDelayMinutes)

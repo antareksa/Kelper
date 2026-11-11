@@ -35,6 +35,13 @@ const ITEMS_SUB_ITEMS = [
   { path: '/list-barang', label: 'List Barang' },
   { path: '/list-barang/stock-opname', label: 'Stock Opname' },
 ];
+// With TikTok set up on this server (2026-11-10, client-requested: a list and
+// stock per marketplace). Without it (live today) the menu is as before.
+const ITEMS_SUB_ITEMS_TIKTOK = [
+  { path: '/list-barang', label: 'List Barang Shopee' },
+  { path: '/list-barang/tiktok', label: 'List Barang TikTok' },
+  { path: '/list-barang/stock-opname', label: 'Stock Opname' },
+];
 
 const PACKING_GROUP = { path: '/packing-station', label: 'Packing Station Dashboard', Icon: IconMonitor };
 const PACKING_SUB_ITEMS = [
@@ -137,6 +144,17 @@ function Dashboard() {
   // the full list, since this is always mounted regardless of which page is
   // open. Only runs once actually logged in with a shop connected.
   const [unresolvedCount, setUnresolvedCount] = useState(0);
+  // Whether this server has TikTok set up (2026-11-10): adds List Barang TikTok
+  // and Stock Opname's TikTok switch. /orders/sync-status says (tiktok: null on
+  // an install without TikTok keys); both roles may read it.
+  const [tiktokEnabled, setTiktokEnabled] = useState(false);
+  useEffect(() => {
+    if (!authenticated) return;
+    apiFetch(`${API_BASE}/orders/sync-status`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setTiktokEnabled(!!data?.tiktok))
+      .catch(() => {});
+  }, [authenticated]);
   // Low-disk banner (2026-11-10, see backend diskCheck.js): null or { freeBytes, freePct, low }.
   const [disk, setDisk] = useState(null);
   useEffect(() => {
@@ -422,7 +440,7 @@ function Dashboard() {
               </button>
               {location.pathname.startsWith(ITEMS_TAB.path) && (
                 <div style={{ marginLeft: 18, marginTop: 6, marginBottom: 4, paddingLeft: 10, borderLeft: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {ITEMS_SUB_ITEMS.map(({ path, label }) => (
+                  {(tiktokEnabled ? ITEMS_SUB_ITEMS_TIKTOK : ITEMS_SUB_ITEMS).map(({ path, label }) => (
                     <button key={path} onClick={() => navigate(path)} style={subItemStyle(location.pathname === path)}>
                       <span>{label}</span>
                     </button>
@@ -563,7 +581,8 @@ function Dashboard() {
             {IS_STAGING && !isPacking && <Route path="/home/shopee" element={<DashboardPreview view="shopee" />} />}
             {IS_STAGING && !isPacking && <Route path="/home/tiktok" element={<DashboardPreview view="tiktok" />} />}
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
-            <Route path="/list-barang/stock-opname" element={<StockOpname />} />
+            {tiktokEnabled && <Route path="/list-barang/tiktok" element={<StockList platform="tiktok" showPrices={!isPacking} />} />}
+            <Route path="/list-barang/stock-opname" element={<StockOpname tiktokEnabled={tiktokEnabled} />} />
             <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}
             <Route path="/order" element={<OrderSearch />} />
             <Route path="/iklan" element={isPacking ? <Navigate to={homePath} replace /> : <IklanRoas />} />

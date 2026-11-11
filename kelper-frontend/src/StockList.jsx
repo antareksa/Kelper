@@ -11,7 +11,12 @@ import { IconSearch, IconUpload } from './Icons';
 import { API_BASE, apiFetch } from './apiBase';
 import { StockInput, VariantThumb } from './ListBarang';
 
+// 2026-11-10: also List Barang TikTok (platform 'tiktok'), for both roles. The
+// TikTok list has its own stock (separate from Shopee's) and, for a full admin
+// only (showPrices), TikTok's own Harga and the shared HPP.
 const GRID = '56px minmax(120px,1fr) minmax(220px,3fr) 110px 150px';
+const GRID_PRICES = '56px minmax(120px,1fr) minmax(220px,3fr) 110px 110px 110px 150px';
+const rupiah = (v) => (v == null ? '—' : `Rp${Math.round(v).toLocaleString('id-ID')}`);
 
 const inputStyle = {
   height: 34,
@@ -41,7 +46,10 @@ const pillStyle = {
   whiteSpace: 'nowrap',
 };
 
-export default function StockList() {
+export default function StockList({ platform = 'shopee', showPrices = false }) {
+  const isTikTok = platform === 'tiktok';
+  const marketLabel = isTikTok ? 'TikTok' : 'Shopee';
+  const grid = showPrices ? GRID_PRICES : GRID;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -54,7 +62,7 @@ export default function StockList() {
 
   async function load() {
     try {
-      const res = await apiFetch(`${API_BASE}/products/stock-list`);
+      const res = await apiFetch(`${API_BASE}/products/${isTikTok ? 'tiktok-stock-list' : 'stock-list'}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       setItems(data);
@@ -67,8 +75,9 @@ export default function StockList() {
   }
 
   useEffect(() => {
+    setLoading(true);
     load();
-  }, []);
+  }, [platform]);
 
   // Same hiding rule as List Barang: an archived or banned listing isn't
   // something being sold, so it is hidden unless asked for.
@@ -95,7 +104,7 @@ export default function StockList() {
     try {
       const body = new FormData();
       body.append('file', file);
-      const res = await apiFetch(`${API_BASE}/products/import-stock`, { method: 'POST', body });
+      const res = await apiFetch(`${API_BASE}/products/import-stock${isTikTok ? '?platform=tiktok' : ''}`, { method: 'POST', body });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       const notes = [];
@@ -155,10 +164,10 @@ export default function StockList() {
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, opacity: uploading ? 0.6 : 1 }}
-          title="Impor stok dari Excel: kolom SKU dan Stok"
+          title={`Impor stok ${marketLabel} dari Excel: kolom SKU dan Stok`}
         >
           <IconUpload size={15} />
-          {uploading ? 'Mengimpor...' : 'Unggah Stok'}
+          {uploading ? 'Mengimpor...' : `Unggah Stok ${marketLabel}`}
         </button>
       </div>
 
@@ -173,26 +182,30 @@ export default function StockList() {
         {loading ? (
           <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Memuat produk...</p>
         ) : items.length === 0 ? (
-          <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Belum ada produk. Hubungi admin utama untuk menyinkronkan produk dari Shopee.</p>
+          <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>
+            {isTikTok ? 'Belum ada produk TikTok. Produk diambil otomatis dari TikTok Shop setiap jam setelah toko terhubung.' : 'Belum ada produk. Hubungi admin utama untuk menyinkronkan produk dari Shopee.'}
+          </p>
         ) : rows.length === 0 ? (
           <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Tidak ada produk yang cocok dengan filter ini.</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 640 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 10, padding: '10px 12px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: `1px solid ${colors.border}` }}>
+            <div style={{ minWidth: showPrices ? 860 : 640 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 10, padding: '10px 12px', fontSize: 11, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: `1px solid ${colors.border}` }}>
                 <div />
                 <div>SKU</div>
                 <div>Produk</div>
-                <div>Stok Shopee</div>
-                <div>Stok Dashboard</div>
+                {showPrices && <div>Harga {marketLabel}</div>}
+                {showPrices && <div>HPP</div>}
+                <div>Stok {marketLabel}</div>
+                <div>Stok Dashboard {marketLabel}</div>
               </div>
               {rows.map((v) => (
                 <div
                   key={`${v.sku}-${v.model_id}`}
-                  style={{ display: 'grid', gridTemplateColumns: GRID, gap: 10, alignItems: 'center', padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}
+                  style={{ display: 'grid', gridTemplateColumns: grid, gap: 10, alignItems: 'center', padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, fontSize: 13 }}
                 >
                   <VariantThumb image={v.image} />
-                  <div style={{ fontFamily: 'ui-monospace, monospace', color: colors.blue }}>{v.sku}</div>
+                  <div style={{ fontFamily: 'ui-monospace, monospace', color: v.hasSellerSku === false ? colors.red : colors.blue }} title={v.hasSellerSku === false ? 'Tidak ada Seller SKU di TikTok' : undefined}>{v.sku}</div>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {v.isBundle && (
@@ -202,9 +215,11 @@ export default function StockList() {
                     </div>
                     {v.name && v.name !== v.productName && <div style={{ fontSize: 11.5, color: colors.textDim }}>{v.name}</div>}
                   </div>
-                  <div style={{ fontFamily: 'var(--num)', color: colors.textDim }}>{v.shopeeStock ?? '—'}</div>
+                  {showPrices && <div style={{ fontFamily: 'var(--num)' }}>{rupiah(v.price)}</div>}
+                  {showPrices && <div style={{ fontFamily: 'var(--num)', color: colors.textDim }}>{rupiah(v.hpp)}</div>}
+                  <div style={{ fontFamily: 'var(--num)', color: colors.textDim }}>{(isTikTok ? v.marketplaceStock : v.shopeeStock) ?? '—'}</div>
                   <div>
-                    <StockInput sku={v.sku} value={v.dashboardStock} onSaved={(next) => handleStockSaved(v.sku, next)} />
+                    <StockInput sku={v.sku} value={v.dashboardStock} platform={isTikTok ? 'tiktok' : undefined} onSaved={(next) => handleStockSaved(v.sku, next)} />
                   </div>
                 </div>
               ))}

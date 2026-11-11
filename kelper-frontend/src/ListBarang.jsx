@@ -125,7 +125,8 @@ function ImageHoverPreview({ src, anchorRect }) {
 // db.js's migration comment for why the client wants these to be able to
 // disagree. Saves on blur/Enter rather than per-keystroke; an empty field
 // clears it back to null (unknown), not 0.
-export function StockInput({ sku, value, onSaved }) {
+// platform 'tiktok' (2026-11-10) edits the TikTok stock (List Barang TikTok).
+export function StockInput({ sku, value, onSaved, platform }) {
   const [draft, setDraft] = useState(value == null ? '' : String(value));
   const [saving, setSaving] = useState(false);
 
@@ -146,7 +147,7 @@ export function StockInput({ sku, value, onSaved }) {
       const res = await apiFetch(`${API_BASE}/products/${encodeURIComponent(sku)}/stock`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock: next }),
+        body: JSON.stringify(platform ? { stock: next, platform } : { stock: next }),
       });
       if (res.ok) onSaved(next);
     } finally {

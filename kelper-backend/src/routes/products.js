@@ -208,8 +208,29 @@ const upsertStock = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
+// KELPER's own TikTok/Tokopedia stock (2026-11-10, separate per marketplace, see
+// db.js tiktok_stock_dashboard).
+const upsertTikTokStock = db.prepare(`
+  INSERT INTO tiktok_stock_dashboard (sku, stock, updated_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(sku) DO UPDATE SET
+    stock = excluded.stock,
+    updated_at = excluded.updated_at
+`);
+
+// Which marketplace's stock a request is about: ?platform= or body.platform,
+// 'tiktok' or (default, as before) 'shopee'.
+const stockPlatformOf = (req) => ((req.query.platform || req.body?.platform) === 'tiktok' ? 'tiktok' : 'shopee');
+
+// Writes one SKU's stock for that marketplace, logged.
+function setStock(platform, sku, stock, reason, ref, at) {
+  if (platform === 'tiktok') withStockLog(sku, reason, ref, at, () => upsertTikTokStock.run(sku, stock, at), 'tiktok');
+  else withStockLog(sku, reason, ref, at, () => upsertStock.run(sku, stock, at));
+}
+
 // Client's own manual stock count per SKU — see db.js migration comment for
-// why this is a separate field from Shopee's live stock.
+// why this is a separate field from Shopee's live stock. body.platform
+// 'tiktok' (2026-11-10) edits the TikTok stock instead.
 router.put('/:sku/stock', (req, res) => {
   const sku = req.params.sku;
   const { stock } = req.body;
@@ -217,7 +238,7 @@ router.put('/:sku/stock', (req, res) => {
     return res.status(400).json({ error: 'invalid_stock', message: 'stock must be a non-negative integer or null.' });
   }
   const at = Math.floor(Date.now() / 1000);
-  withStockLog(sku, 'manual', req.adminUsername || null, at, () => upsertStock.run(sku, stock, at));
+  setStock(stockPlatformOf(req), sku, stock, 'manual', req.adminUsername || null, at);
   res.json({ ok: true, sku, stock });
 });
 
@@ -411,6 +432,15 @@ const upsertItemData = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
+// The SKUs a TikTok stock upload may set (2026-11-10): TikTok's own catalog,
+// plus any SKU that already has a TikTok stock or a products row.
+function knownTikTokSkus() {
+  const set = new Set(db.prepare('SELECT sku FROM products').all().map((p) => p.sku));
+  for (const r of db.prepare('SELECT seller_sku FROM tiktok_catalog WHERE seller_sku IS NOT NULL').all()) set.add(r.seller_sku);
+  for (const r of db.prepare('SELECT sku FROM tiktok_stock_dashboard').all()) set.add(r.sku);
+  return set;
+}
+
 function knownSkus() {
   const set = new Set(db.prepare('SELECT sku FROM products').all().map((p) => p.sku));
   const modelsByItem = new Map();
@@ -584,7 +614,8 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
     });
   }
 
-  const known = knownSkus();
+  const platform = stockPlatformOf(req);
+  const known = platform === 'tiktok' ? knownTikTokSkus() : knownSkus();
   const nowTs = Math.floor(Date.now() / 1000);
   const bySku = new Map();
   const unknownSku = [];
@@ -603,7 +634,7 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
     bySku.set(sku, Math.round(stock));
   });
   db.transaction(() => {
-    for (const [sku, stock] of bySku) withStockLog(sku, 'upload', req.adminUsername || null, nowTs, () => upsertStock.run(sku, stock, nowTs));
+    for (const [sku, stock] of bySku) setStock(platform, sku, stock, 'upload', req.adminUsername || null, nowTs);
   })();
   res.json({ ok: true, imported: bySku.size, unknownSku, unmatched: [], unreadable, duplicateRows });
 });
@@ -766,19 +797,28 @@ router.get('/export-items', async (req, res) => {
 // uses -- not a static file, so a SKU added by the next catalog sync shows
 // up the next time this is downloaded, with no template to maintain by hand.
 router.get('/stock-template', async (req, res) => {
-  const items = db.prepare('SELECT * FROM shopee_items').all();
-  const modelsByItem = new Map();
-  for (const m of db.prepare('SELECT * FROM shopee_item_models ORDER BY model_id').all()) {
-    if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
-    modelsByItem.get(m.item_id).push(m);
-  }
-
   const rows = [];
-  for (const item of items) {
-    for (const m of modelsByItem.get(item.item_id) || []) {
-      const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
-      const name = m.model_name && m.model_name !== item.name ? `${item.name} - ${m.model_name}` : item.name;
-      rows.push({ sku, name });
+  if (stockPlatformOf(req) === 'tiktok') {
+    // TikTok's own catalog (2026-11-10), one row per seller SKU.
+    const seen = new Set();
+    for (const r of db.prepare("SELECT seller_sku, product_name, sku_name FROM tiktok_catalog WHERE seller_sku IS NOT NULL AND COALESCE(status, '') != 'DELETED'").all()) {
+      if (seen.has(r.seller_sku)) continue;
+      seen.add(r.seller_sku);
+      rows.push({ sku: r.seller_sku, name: r.sku_name ? `${r.product_name} - ${r.sku_name}` : r.product_name });
+    }
+  } else {
+    const items = db.prepare('SELECT * FROM shopee_items').all();
+    const modelsByItem = new Map();
+    for (const m of db.prepare('SELECT * FROM shopee_item_models ORDER BY model_id').all()) {
+      if (!modelsByItem.has(m.item_id)) modelsByItem.set(m.item_id, []);
+      modelsByItem.get(m.item_id).push(m);
+    }
+    for (const item of items) {
+      for (const m of modelsByItem.get(item.item_id) || []) {
+        const sku = m.model_sku || item.item_sku || `ITEM-${item.item_id}`;
+        const name = m.model_name && m.model_name !== item.name ? `${item.name} - ${m.model_name}` : item.name;
+        rows.push({ sku, name });
+      }
     }
   }
   rows.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
@@ -997,6 +1037,50 @@ router.get('/stock-list', (req, res) => {
   );
 });
 
+// List Barang TikTok (2026-11-10, client-requested: a separate list per
+// marketplace). TikTok's own catalog (src/tiktok/catalogSync.js), shaped like
+// /stock-list so the same page shows it: products with their SKUs, TikTok's
+// stock (marketplaceStock) and KELPER's own TikTok stock (dashboardStock).
+// Harga (TikTok's price) and the shared HPP are included for a full admin only;
+// the Packing Station admin role gets stock and nothing else, as on /stock-list.
+router.get('/tiktok-stock-list', (req, res) => {
+  const withPrices = req.adminRole !== 'packing';
+  const rows = db.prepare(`
+    SELECT c.*, d.stock AS dashboard_stock, p.hpp
+    FROM tiktok_catalog c
+    LEFT JOIN tiktok_stock_dashboard d ON d.sku = c.seller_sku
+    LEFT JOIN products p ON p.sku = c.seller_sku
+    WHERE COALESCE(c.status, '') != 'DELETED'
+  `).all();
+  const byProduct = new Map();
+  for (const r of rows) {
+    if (!byProduct.has(r.product_id)) {
+      byProduct.set(r.product_id, {
+        item_id: r.product_id,
+        sku: r.seller_sku || `TT-${r.sku_id}`,
+        name: r.product_name,
+        // Same filter values as Shopee's list: NORMAL = on sale.
+        status: r.status === 'ACTIVATE' ? 'NORMAL' : r.status || 'UNKNOWN',
+        isBundle: false,
+        image: r.image_url,
+        variants: [],
+      });
+    }
+    const sku = r.seller_sku || `TT-${r.sku_id}`;
+    byProduct.get(r.product_id).variants.push({
+      model_id: r.sku_id,
+      sku,
+      hasSellerSku: !!r.seller_sku,
+      name: r.sku_name,
+      image: r.image_url,
+      marketplaceStock: r.tiktok_stock,
+      dashboardStock: r.dashboard_stock ?? null,
+      ...(withPrices ? { price: r.price, hpp: r.hpp ?? null } : {}),
+    });
+  }
+  res.json([...byProduct.values()].sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' })));
+});
+
 // Stock Opname (client-requested 2026-10-16): per SKU, over a WIB date range
 // (?start=&end=, YYYY-MM-DD, inclusive): Stok Awal, Masuk, Keluar, Stok Akhir,
 // from stock_log (see stockLog.js).
@@ -1009,7 +1093,13 @@ router.get('/stock-list', (req, res) => {
 // what came in is unknowable. Any figure that leans on that assumption is
 // flagged (estimate: true; the page marks it "estimasi"). Exact if no stock
 // was uploaded or edited by hand in that time.
+// ?platform=tiktok (2026-11-10): the TikTok stock (tiktok_stock_dashboard) and
+// TikTok/Tokopedia sales instead; that log began when the TikTok stock was
+// added, so it has no pre-log estimate. Default (shopee): unchanged, except that
+// TikTok's own log rows and sales are left out.
 router.get('/stock-opname', (req, res) => {
+  const platform = stockPlatformOf(req);
+  const isTikTok = platform === 'tiktok';
   const today = dateStringWIB(0);
   let start = req.query.start || shiftDateStringWIB(today, -1);
   let end = req.query.end || start;
@@ -1019,7 +1109,7 @@ router.get('/stock-opname', (req, res) => {
   if (start > end) [start, end] = [end, start];
   const rangeStart = startOfDateWIB(start);
   const rangeEnd = startOfDateWIB(shiftDateStringWIB(end, 1));
-  const logStart = Number(getSetting('stockLogStartedAt', '0'));
+  const logStart = Number(getSetting(isTikTok ? 'tiktokStockLogStartedAt' : 'stockLogStartedAt', '0'));
   const estimate = rangeStart < logStart; // the range reaches back before recording began
 
   const logged = new Map(
@@ -1027,8 +1117,8 @@ router.get('/stock-opname', (req, res) => {
       SELECT sku,
              SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) AS masuk,
              SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END) AS keluar
-      FROM stock_log WHERE created_at >= ? AND created_at < ? GROUP BY sku
-    `).all(Math.max(rangeStart, logStart), rangeEnd).map((r) => [r.sku, r])
+      FROM stock_log WHERE created_at >= ? AND created_at < ? AND platform = ? GROUP BY sku
+    `).all(Math.max(rangeStart, logStart), rangeEnd, platform).map((r) => [r.sku, r])
   );
   // Picked-up quantity per SKU in [from, to): what a pickup took off, for the
   // time before the log.
@@ -1041,15 +1131,16 @@ router.get('/stock-opname', (req, res) => {
           JOIN (SELECT order_sn, MAX(completed_at) AS completed_at FROM packing_sessions WHERE status = 'DONE' GROUP BY order_sn) ps
             ON ps.order_sn = o.order_sn
           WHERE o.order_sn NOT LIKE 'MOCK-%' AND ps.completed_at >= ? AND ps.completed_at < ?
+            AND (o.platform = 'shopee') = ?
           GROUP BY oi.sku
-        `).all(from, to).map((r) => [r.sku, r.qty])
+        `).all(from, to, isTikTok ? 0 : 1).map((r) => [r.sku, r.qty])
       )
     : new Map());
   const salesBeforeLog = salesBetween(rangeStart, Math.min(rangeEnd, logStart));
   // Stock now, walked back to the end of the range: undo every change after it --
   // the logged ones, and (before the log) the sales, with nothing assumed to have come in.
   const changedAfter = new Map(
-    db.prepare('SELECT sku, SUM(delta) AS delta FROM stock_log WHERE created_at >= ? GROUP BY sku').all(Math.max(rangeEnd, logStart)).map((r) => [r.sku, r.delta])
+    db.prepare('SELECT sku, SUM(delta) AS delta FROM stock_log WHERE created_at >= ? AND platform = ? GROUP BY sku').all(Math.max(rangeEnd, logStart), platform).map((r) => [r.sku, r.delta])
   );
   const soldAfterBeforeLog = salesBetween(rangeEnd, logStart);
 
@@ -1061,7 +1152,14 @@ router.get('/stock-opname', (req, res) => {
   `).all()) {
     shopeeName.set(m.sku, m.model_name && m.model_name !== m.item_name ? `${m.item_name} - ${m.model_name}` : m.item_name);
   }
-  const products = new Map(db.prepare('SELECT sku, name, stock FROM products').all().map((p) => [p.sku, p]));
+  if (isTikTok) {
+    for (const r of db.prepare('SELECT seller_sku, product_name, sku_name FROM tiktok_catalog WHERE seller_sku IS NOT NULL').all()) {
+      shopeeName.set(r.seller_sku, r.sku_name ? `${r.product_name} - ${r.sku_name}` : r.product_name);
+    }
+  }
+  const products = isTikTok
+    ? new Map(db.prepare('SELECT t.sku, p.name, t.stock FROM tiktok_stock_dashboard t LEFT JOIN products p ON p.sku = t.sku').all().map((p) => [p.sku, p]))
+    : new Map(db.prepare('SELECT sku, name, stock FROM products').all().map((p) => [p.sku, p]));
 
   // Every SKU with a stock on file, plus any that moved in the range.
   const skus = new Set([...products.values()].filter((p) => p.stock != null).map((p) => p.sku));
@@ -1082,7 +1180,7 @@ router.get('/stock-opname', (req, res) => {
       return { sku, name: p?.name || shopeeName.get(sku) || null, awal, masuk, keluar, akhir };
     });
 
-  res.json({ start, end, logStartedAt: logStart || null, estimate, rows });
+  res.json({ platform, start, end, logStartedAt: logStart || null, estimate, rows });
 });
 
 module.exports = router;

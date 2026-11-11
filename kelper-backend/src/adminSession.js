@@ -62,6 +62,8 @@ const PACKING_ROLE_ALLOWED = [
   // the stock sheet upload. Not /products/catalog (it carries HPP, Harga,
   // profit and sales), and none of the other product writes.
   ['GET', /^\/products\/stock-list$/],
+  // List Barang TikTok (2026-11-10): the route itself leaves out Harga/HPP for this role.
+  ['GET', /^\/products\/tiktok-stock-list$/],
   ['GET', /^\/products\/stock-opname$/], // Stock Opname: stock movement only, no prices
   ['GET', /^\/products\/stock-template$/], // Stock Opname's Unduh Template Stok: SKU and name only
   ['PUT', /^\/products\/[^/]+\/stock$/],

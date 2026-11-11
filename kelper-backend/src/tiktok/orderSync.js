@@ -5,6 +5,7 @@ const { getSetting, setSetting } = require('../settings');
 const { flagOrderAsException } = require('../shopeeSync');
 const { bookTikTokOrders, detectLatePickups } = require('./booking');
 const { fillTikTokIncome } = require('./income');
+const { syncTikTokCatalog } = require('./catalogSync');
 
 // TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
 // (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
@@ -95,7 +96,12 @@ const updateOrder = db.prepare(`
 const deleteItems = db.prepare('DELETE FROM order_items WHERE order_sn = ?');
 const insertItem = db.prepare(`
   INSERT INTO order_items (order_sn, sku, product_name, qty, image_url, price_snapshot)
-  VALUES (?, ?, ?, ?, ?, (SELECT price FROM products WHERE sku = ?))
+  VALUES (?, ?, ?, ?, ?, COALESCE(
+    -- TikTok's own price for this SKU (2026-11-10: prices can differ per
+    -- marketplace, see catalogSync.js); the shared catalog price otherwise.
+    (SELECT MAX(price) FROM tiktok_catalog WHERE seller_sku = ? AND price IS NOT NULL),
+    (SELECT price FROM products WHERE sku = ?)
+  ))
 `);
 
 // Local statuses an imported order can still change from. ON_HOLD is TikTok's
@@ -163,7 +169,7 @@ const saveOrder = db.transaction((order, tiktokShopId = null) => {
   if (!session && ['ON_HOLD', 'READY_TO_PACK'].includes(status)) {
     deleteItems.run(order.id);
     for (const item of groupLineItems(order.line_items)) {
-      insertItem.run(order.id, item.sku, item.productName, item.qty, item.imageUrl, item.sku);
+      insertItem.run(order.id, item.sku, item.productName, item.qty, item.imageUrl, item.sku, item.sku);
     }
   }
 
@@ -263,6 +269,11 @@ function startTikTokSync() {
           const opts = { accessToken, shopCipher: shop.cipher };
           if (isTikTokSyncEnabled()) await bookTikTokOrders(opts, shop.shop_id);
           await fillTikTokIncome(opts, shop.shop_id); // read-only, so also while locked
+          try {
+            await syncTikTokCatalog(opts, shop.shop_id); // hourly, read-only
+          } catch (err) {
+            console.error(`[server] TikTok catalog sync failed: ${err.tiktokCode ?? ''} ${err.message}`);
+          }
         }
       }
     } catch (err) {

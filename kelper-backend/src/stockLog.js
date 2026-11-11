@@ -13,19 +13,26 @@ const db = require('./db');
 // (after - before), so the "never below zero" clamp is reflected. A change
 // that did nothing (same value, or a SKU whose stock is unknown/NULL both
 // before and after) is not logged.
-const getStock = db.prepare('SELECT stock FROM products WHERE sku = ?');
+// platform (2026-11-10): which stock `apply` changes -- 'shopee' (products.stock,
+// the default, as before) or 'tiktok' (tiktok_stock_dashboard, List Barang
+// TikTok's own stock). Stock Opname shows each separately.
+const getStock = {
+  shopee: db.prepare('SELECT stock FROM products WHERE sku = ?'),
+  tiktok: db.prepare('SELECT stock FROM tiktok_stock_dashboard WHERE sku = ?'),
+};
 const insertLog = db.prepare(`
-  INSERT INTO stock_log (sku, delta, stock_after, reason, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO stock_log (sku, delta, stock_after, reason, ref, created_at, platform) VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
-function withStockLog(sku, reason, ref, at, apply) {
-  const before = getStock.get(sku)?.stock ?? null;
+function withStockLog(sku, reason, ref, at, apply, platform = 'shopee') {
+  const read = getStock[platform] || getStock.shopee;
+  const before = read.get(sku)?.stock ?? null;
   apply();
-  const after = getStock.get(sku)?.stock ?? null;
+  const after = read.get(sku)?.stock ?? null;
   if (before == null && after == null) return;
   const delta = (after ?? 0) - (before ?? 0);
   if (delta === 0) return;
-  insertLog.run(sku, delta, after, reason, ref ?? null, at);
+  insertLog.run(sku, delta, after, reason, ref ?? null, at, platform === 'tiktok' ? 'tiktok' : 'shopee');
 }
 
 module.exports = { withStockLog };
