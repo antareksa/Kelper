@@ -1,5 +1,6 @@
 const db = require('../db');
 const { apiRequest } = require('./client');
+const { tiktokSkuMatcher } = require('./skuMatch');
 
 // TikTok Shop / Tokopedia product list (2026-11-10, client-requested: List
 // Barang per marketplace, each with its own stock and price). Copies TikTok's
@@ -53,6 +54,7 @@ async function syncTikTokCatalog(opts, tiktokShopId, { force = false } = {}) {
     db.prepare('SELECT product_id, MAX(product_update_time) AS t FROM tiktok_catalog WHERE shop_id = ? GROUP BY product_id').all(shopId).map((r) => [r.product_id, r.t])
   );
   const syncedAt = now();
+  const toKelperSku = tiktokSkuMatcher();
   let detailed = 0;
 
   for (const p of products) {
@@ -77,7 +79,7 @@ async function syncTikTokCatalog(opts, tiktokShopId, { force = false } = {}) {
           shop_id: shopId,
           product_id: p.id,
           sku_id: s.id,
-          seller_sku: s.seller_sku || null,
+          seller_sku: toKelperSku(s.seller_sku) || null,
           product_name: p.title,
           sku_name: detail ? (attrs.map((a) => a.value_name).filter(Boolean).join(' / ') || null) : null,
           // sale_price is filled for cross-border sellers only; a local seller

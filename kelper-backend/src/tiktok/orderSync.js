@@ -6,6 +6,7 @@ const { flagOrderAsException } = require('../shopeeSync');
 const { bookTikTokOrders, detectLatePickups } = require('./booking');
 const { fillTikTokIncome } = require('./income');
 const { syncTikTokCatalog, EFFECTIVE_PRICE_SQL } = require('./catalogSync');
+const { tiktokSkuMatcher } = require('./skuMatch');
 
 // TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
 // (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
@@ -61,9 +62,10 @@ function now() {
 // _items.sku can't be empty, so those fall back the way Shopee's ITEM-<id> does.
 function groupLineItems(lineItems) {
   const bySku = new Map();
+  const toKelperSku = tiktokSkuMatcher();
   for (const line of lineItems || []) {
     if (line.display_status === 'CANCELLED') continue; // one line cancelled, the rest still ship
-    const sku = line.seller_sku || `ITEM-${line.sku_id}`;
+    const sku = toKelperSku(line.seller_sku) || `ITEM-${line.sku_id}`;
     const entry = bySku.get(sku);
     // sale_price: what this unit sold for after the seller's discounts
     // (2026-11-12). Averaged when lines of one SKU differ.
