@@ -479,7 +479,8 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
 // Same buttons; HPP, GTIN and bundles from Item Data are shared by both lists.
 function ListBarang({ platform = 'shopee' }) {
   const isTikTok = platform === 'tiktok';
-  const [expandedSku, setExpandedSku] = useState(null);
+  // By listing id, not SKU: TikTok can have two listings with the same SKU (2026-11-12).
+  const [expandedId, setExpandedId] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('active'); // active | archived | all
   // Click a column header to sort by it, click again to flip the direction.
@@ -828,8 +829,8 @@ function ListBarang({ platform = 'shopee' }) {
                     key={p.item_id}
                     product={p}
                     singles={singles}
-                    expanded={expandedSku === p.sku}
-                    onToggle={() => setExpandedSku(expandedSku === p.sku ? null : p.sku)}
+                    expanded={expandedId === p.item_id}
+                    onToggle={() => setExpandedId(expandedId === p.item_id ? null : p.item_id)}
                     onStockSaved={handleStockSaved}
                     onHppSaved={handleHppSaved}
                     onBarcodeSaved={handleBarcodeSaved}
