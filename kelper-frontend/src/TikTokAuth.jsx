@@ -72,6 +72,17 @@ function TikTokAuth() {
           ))}
           <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
             <button onClick={handleCheck} disabled={busy} style={{ fontSize: 11, padding: '2px 8px' }}>Cek koneksi</button>
+            {/* 2026-11-12: authorize again without disconnecting first (e.g. after a
+                new permission is added to the app). The old connection keeps
+                working until TikTok returns the new one, and all data stays. */}
+            <button
+              onClick={() => { if (window.confirm('Hubungkan ulang TikTok Shop? Pilih toko yang SAMA di halaman TikTok. Data barang dan pesanan tetap aman.')) handleConnect(); }}
+              disabled={busy}
+              title="Login ulang ke TikTok tanpa memutuskan koneksi, misalnya setelah izin baru ditambahkan"
+              style={{ fontSize: 11, padding: '2px 8px' }}
+            >
+              Hubungkan ulang
+            </button>
             <button onClick={handleDisconnect} disabled={busy} style={{ fontSize: 11, padding: '2px 8px', opacity: 0.75 }}>Putuskan</button>
           </div>
         </div>

@@ -89,7 +89,9 @@ router.get('/exchange', requireConfigured, async (req, res) => {
     // Keep the token anyway (with no shops), so "Cek koneksi" can retry
     // later and the token can be used for diagnosis (e.g. Partner Center's
     // API Testing Tool) without authorizing again.
-    saveConnection(tokens, []);
+    // Except on a reconnect ("Hubungkan ulang", 2026-11-12): a shop already
+    // connected keeps its working connection, so order fetching never stops.
+    if (!getConnectionSummary()?.shops?.length) saveConnection(tokens, []);
     const scopes = tokens.grantedScopes.length ? tokens.grantedScopes.join(', ') : '(kosong)';
     const who = `${tokens.sellerName || '?'} (${tokens.sellerBaseRegion || '?'})`;
     log(`get authorized shops failed: code ${err.tiktokCode ?? '?'} ${err.message} | seller ${who} | granted scopes: ${scopes}`);
