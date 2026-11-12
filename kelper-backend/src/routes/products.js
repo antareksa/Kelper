@@ -8,6 +8,7 @@ const { getSetting } = require('../settings');
 const { isBundleSku } = require('../bundleUtil');
 const { withStockLog } = require('../stockLog');
 const { EFFECTIVE_PRICE_SQL } = require('../tiktok/catalogSync');
+const { tiktokSkuMatcher } = require('../tiktok/skuMatch');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -494,11 +495,14 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
   const duplicateRows = [];
 
   // ---- read the rows
+  // A SKU typed in other upper/lower case than Shopee's ("Kel-32" for KEL-32)
+  // is the same product (2026-11-12, see tiktok/skuMatch.js).
+  const toKelperSku = tiktokSkuMatcher();
   const bySku = new Map();
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     const name = nameCol ? cellText(row.getCell(nameCol)) : '';
-    let sku = skuCol ? cellText(row.getCell(skuCol)) : '';
+    let sku = skuCol ? toKelperSku(cellText(row.getCell(skuCol))) : '';
     if (!sku && !name) return; // blank row
     const label = name || sku;
     if (!sku) {
@@ -623,9 +627,10 @@ router.post('/import-stock', upload.single('file'), async (req, res) => {
   const unknownSku = [];
   const unreadable = [];
   const duplicateRows = [];
+  const toKelperSku = tiktokSkuMatcher(); // "Kel-32" = KEL-32 (2026-11-12)
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
-    const sku = cellText(row.getCell(skuColumn));
+    const sku = toKelperSku(cellText(row.getCell(skuColumn)));
     if (!sku) return;
     if (!known.has(sku)) { unknownSku.push(sku); return; }
     const raw = cellValue(row.getCell(stokColumn));
