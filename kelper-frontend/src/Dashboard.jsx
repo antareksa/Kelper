@@ -585,7 +585,7 @@ function Dashboard() {
             {marketplaceViews && !isPacking && <Route path="/home/shopee" element={<DashboardPreview view="shopee" />} />}
             {marketplaceViews && !isPacking && <Route path="/home/tiktok" element={<DashboardPreview view="tiktok" />} />}
             <Route path="/list-barang" element={isPacking ? <StockList /> : <ListBarang />} />
-            {tiktokEnabled && <Route path="/list-barang/tiktok" element={<StockList platform="tiktok" showPrices={!isPacking} />} />}
+            {tiktokEnabled && <Route path="/list-barang/tiktok" element={isPacking ? <StockList platform="tiktok" /> : <ListBarang platform="tiktok" />} />}
             <Route path="/list-barang/stock-opname" element={<StockOpname tiktokEnabled={tiktokEnabled} />} />
             <Route path="/bundle" element={<Navigate to="/list-barang" replace />} /> {/* the old List Bundle page: bundles are edited in List Barang now */}
             <Route path="/order" element={<OrderSearch />} />

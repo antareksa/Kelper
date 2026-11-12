@@ -316,7 +316,7 @@ function BarcodeInput({ sku, value, onSaved }) {
   );
 }
 
-function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppSaved, onBarcodeSaved, onBundleSaved }) {
+function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppSaved, onBarcodeSaved, onBundleSaved, platform }) {
   const initials = product.sku.slice(0, 2);
   const profitPct = avgProfitPct(product.variants);
   const thumbRef = useRef(null);
@@ -437,11 +437,14 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <VariantThumb image={v.image} />
-                    <span style={{ color: colors.text, fontFamily: 'ui-monospace, monospace' }}>{v.sku}</span>
+                    <span
+                      title={v.hasSellerSku === false ? 'Tidak ada Seller SKU di TikTok' : undefined}
+                      style={{ color: v.hasSellerSku === false ? colors.red : colors.text, fontFamily: 'ui-monospace, monospace' }}
+                    >{v.sku}</span>
                   </div>
                   <div style={{ color: colors.text }}>{v.name}</div>
                   <div>
-                    <StockInput sku={v.sku} value={v.dashboardStock} onSaved={(next) => onStockSaved(v.sku, next)} />
+                    <StockInput sku={v.sku} value={v.dashboardStock} platform={platform === 'tiktok' ? 'tiktok' : undefined} onSaved={(next) => onStockSaved(v.sku, next)} />
                   </div>
                   <div>
                     <CurrencyInput sku={v.sku} field="hpp" value={v.hpp} onSaved={(next) => onHppSaved(v.sku, next)} />
@@ -451,7 +454,7 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                   </div>
                   <div>
                     {/* Shopee's price, read-only since 2026-10-15 (backend catalogSync.js) */}
-                    <span title="Harga dari Shopee" style={{ color: v.price == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.price)}</span>
+                    <span title={platform === 'tiktok' ? 'Harga dari TikTok' : 'Harga dari Shopee'} style={{ color: v.price == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.price)}</span>
                   </div>
                   <div style={{ color: v.profit == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.profit)}</div>
                   <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>
@@ -471,7 +474,11 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
   );
 }
 
-function ListBarang() {
+// platform 'tiktok' (2026-11-12): List Barang TikTok for a full admin, the same
+// page from TikTok's catalog (/products/tiktok-catalog) with the TikTok stock.
+// The Shopee-only tools (item export, Item Data upload) are left out there.
+function ListBarang({ platform = 'shopee' }) {
+  const isTikTok = platform === 'tiktok';
   const [expandedSku, setExpandedSku] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('active'); // active | archived | all
@@ -489,13 +496,15 @@ function ListBarang() {
   const stockFileInputRef = useRef(null);
 
   useEffect(() => {
+    setLoading(true);
+    setCatalog([]);
     loadCatalog();
-  }, []);
+  }, [platform]);
 
   async function loadCatalog() {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/products/catalog`);
+      const res = await apiFetch(`${API_BASE}/products/${isTikTok ? 'tiktok-catalog' : 'catalog'}`);
       setCatalog(await res.json());
     } finally {
       setLoading(false);
@@ -541,7 +550,9 @@ function ListBarang() {
     setSyncing(true);
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/products/sync-shopee?shop_id=${SHOP_ID}`, { method: 'POST' });
+      const res = isTikTok
+        ? await apiFetch(`${API_BASE}/products/sync-tiktok`, { method: 'POST' })
+        : await apiFetch(`${API_BASE}/products/sync-shopee?shop_id=${SHOP_ID}`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error);
       await loadCatalog();
@@ -616,7 +627,7 @@ function ListBarang() {
     };
   }
   const handleFileChange = makeUploadHandler('import-item-data', 'Item Data');
-  const handleStockFileChange = makeUploadHandler('import-stock', 'stok');
+  const handleStockFileChange = makeUploadHandler(isTikTok ? 'import-stock?platform=tiktok' : 'import-stock', isTikTok ? 'stok TikTok' : 'stok');
 
   // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
   // one taken down by Shopee) — neither is "NORMAL" anymore, but the item
@@ -694,7 +705,7 @@ function ListBarang() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{ ...pillStyle, gap: 8, cursor: 'default' }}>
           <IconStore size={15} />
-          {shopName || 'Toko belum terhubung'}
+          {isTikTok ? 'TikTok Shop / Tokopedia' : shopName || 'Toko belum terhubung'}
         </div>
 
         <div style={{ position: 'relative', flex: 1, minWidth: 200, maxWidth: 320 }}>
@@ -740,11 +751,12 @@ function ListBarang() {
           onClick={handleSync}
           disabled={syncing}
           style={{ ...pillStyle, width: 34, justifyContent: 'center', padding: 0, opacity: syncing ? 0.6 : 1 }}
-          title="Sync dari Shopee"
+          title={isTikTok ? 'Sync dari TikTok' : 'Sync dari Shopee'}
         >
           <IconRefresh size={15} />
         </button>
 
+        {!isTikTok && (<>
         <button
           onClick={handleExport}
           style={{ ...pillStyle, gap: 8 }}
@@ -763,16 +775,17 @@ function ListBarang() {
           <IconUpload size={15} />
           {uploading ? 'Mengimpor...' : 'Unggah Item Data'}
         </button>
+        </>)}
 
         <input ref={stockFileInputRef} type="file" accept=".xlsx" onChange={handleStockFileChange} style={{ display: 'none' }} />
         <button
           onClick={() => stockFileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor stok dari Excel: kolom SKU dan Stok"
+          title={isTikTok ? 'Impor stok TikTok dari Excel: kolom SKU dan Stok' : 'Impor stok dari Excel: kolom SKU dan Stok'}
         >
           <IconUpload size={15} />
-          Unggah Stok
+          {isTikTok ? 'Unggah Stok TikTok' : 'Unggah Stok'}
         </button>
       </div>
 
@@ -792,7 +805,7 @@ function ListBarang() {
           <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Memuat produk...</p>
         ) : catalog.length === 0 ? (
           <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>
-            Belum ada produk. Klik tombol sync ({'↻'}) di atas untuk mengambil data dari Shopee.
+            Belum ada produk. Klik tombol sync ({'↻'}) di atas untuk mengambil data dari {isTikTok ? 'TikTok' : 'Shopee'}.
           </p>
         ) : filtered.length === 0 ? (
           <p style={{ padding: 20, color: colors.textDim, margin: 0 }}>Tidak ada produk yang cocok dengan filter ini.</p>
@@ -823,6 +836,7 @@ function ListBarang() {
                     onHppSaved={handleHppSaved}
                     onBarcodeSaved={handleBarcodeSaved}
                     onBundleSaved={loadCatalog}
+                    platform={platform}
                   />
                 ))}
               </div>

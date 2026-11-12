@@ -859,13 +859,17 @@ function pctChange(current, previous) {
 // approximation invented here), so a since-changed price isn't reflected
 // for past months either — consistent with how the rest of the app already
 // treats this limitation, not hidden or presented as more precise than it is.
-function skuQtyInRange(startTs, endTs) {
+// platform (2026-11-12): each List Barang counts its own marketplace's sales
+// only ('shopee', or 'tiktok' = TikTok + Tokopedia), since stock and price are
+// separate per marketplace.
+function skuQtyInRange(startTs, endTs, platform = 'shopee') {
   const rows = db
     .prepare(`
       SELECT oi.sku, SUM(oi.qty) AS qty
       FROM order_items oi
       JOIN orders o ON o.order_sn = oi.order_sn
       WHERE o.order_sn NOT LIKE 'MOCK-%' AND o.created_at >= ? AND o.created_at < ?
+        AND ${platform === 'tiktok' ? "o.platform != 'shopee'" : "COALESCE(o.platform, 'shopee') = 'shopee'"}
       GROUP BY oi.sku
     `)
     .all(startTs, endTs);
@@ -1079,6 +1083,112 @@ router.get('/tiktok-stock-list', (req, res) => {
     });
   }
   res.json([...byProduct.values()].sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' })));
+});
+
+// List Barang TikTok for a full admin (2026-11-12, client: "same as List Barang
+// Shopee"): the same shape as /catalog, from TikTok's catalog. Harga is TikTok's
+// own price; Stok is KELPER's TikTok stock (tiktok_stock_dashboard); HPP, barcode
+// and bundle contents are shared with Shopee (one products row per SKU); sales
+// are TikTok + Tokopedia orders only. The Packing Station admin role never gets
+// here (not in PACKING_ROLE_ALLOWED) and keeps /tiktok-stock-list.
+router.get('/tiktok-catalog', (req, res) => {
+  const rows = db.prepare(`
+    SELECT c.*, d.stock AS dashboard_stock
+    FROM tiktok_catalog c
+    LEFT JOIN tiktok_stock_dashboard d ON d.sku = c.seller_sku
+    WHERE COALESCE(c.status, '') != 'DELETED'
+  `).all();
+  const productBySku = new Map(db.prepare('SELECT sku, name, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
+
+  const thisMonthStart = startOfMonthWIB(0);
+  const lastMonthStart = startOfMonthWIB(1);
+  const now = Math.floor(Date.now() / 1000);
+  const qtyThisMonth = skuQtyInRange(thisMonthStart, now, 'tiktok');
+  const qtyLastMonth = skuQtyInRange(lastMonthStart, thisMonthStart, 'tiktok');
+
+  const contentsByBundle = new Map();
+  for (const r of db.prepare('SELECT bundle_sku, component_sku, qty FROM bundle_items ORDER BY rowid').all()) {
+    if (!contentsByBundle.has(r.bundle_sku)) contentsByBundle.set(r.bundle_sku, []);
+    contentsByBundle.get(r.bundle_sku).push({
+      sku: r.component_sku,
+      qty: r.qty,
+      name: productBySku.get(r.component_sku)?.name || null,
+      barcode: productBySku.get(r.component_sku)?.barcode ?? null,
+    });
+  }
+
+  const byProduct = new Map();
+  for (const r of rows) {
+    const sku = r.seller_sku || `TT-${r.sku_id}`;
+    if (!byProduct.has(r.product_id)) {
+      byProduct.set(r.product_id, {
+        item_id: r.product_id,
+        sku, // the product row shows its first SKU, like a Shopee item without a parent SKU
+        name: r.product_name,
+        status: r.status === 'ACTIVATE' ? 'NORMAL' : r.status || 'UNKNOWN',
+        image: r.image_url,
+        variants: [],
+      });
+    }
+    const matched = r.seller_sku ? productBySku.get(r.seller_sku) : null;
+    const hpp = matched?.hpp ?? null;
+    const price = r.price ?? null;
+    const profit = hpp != null && price != null ? price - hpp : null;
+    const profitPct = profit != null && price ? Math.round((profit / price) * 1000) / 10 : null;
+    const qtyIni = qtyThisMonth.get(sku) || 0;
+    const qtyLalu = qtyLastMonth.get(sku) || 0;
+    byProduct.get(r.product_id).variants.push({
+      model_id: r.sku_id,
+      sku,
+      hasSellerSku: !!r.seller_sku,
+      name: r.sku_name,
+      price,
+      stock: r.tiktok_stock,
+      dashboardStock: r.dashboard_stock ?? null,
+      image: r.image_url,
+      hpp,
+      barcode: matched?.barcode ?? null,
+      profit,
+      profitPct,
+      qtyIni,
+      qtyLalu,
+      omsetIni: price != null ? qtyIni * price : null,
+      omsetLalu: price != null ? qtyLalu * price : null,
+    });
+  }
+
+  const catalog = [...byProduct.values()].map((p) => {
+    const omsetIni = p.variants.reduce((t, v) => t + (v.omsetIni ?? 0), 0);
+    const omsetLalu = p.variants.reduce((t, v) => t + (v.omsetLalu ?? 0), 0);
+    const single = p.variants.length === 1 ? p.variants[0].sku : null;
+    return {
+      ...p,
+      isBundle: !!single && isBundleSku(single),
+      bundleItems: (single && contentsByBundle.get(single)) || [],
+      trendPct: pctChange(omsetIni, omsetLalu),
+      omsetIni,
+      omsetLalu,
+      soldOut: p.variants.length > 0 && p.variants.every((v) => v.dashboardStock != null && v.dashboardStock <= 0),
+    };
+  });
+  res.json(catalog.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' })));
+});
+
+// The Refresh button in List Barang TikTok: the hourly TikTok catalog sync, now,
+// for every connected TikTok shop.
+router.post('/sync-tiktok', async (req, res) => {
+  const { getTikTokOpts } = require('../tiktok/orderSync');
+  const { syncTikTokCatalog } = require('../tiktok/catalogSync');
+  const shops = db.prepare('SELECT shop_id FROM tiktok_shops').all();
+  if (shops.length === 0) return res.status(400).json({ error: 'no_tiktok_shop', message: 'Belum ada toko TikTok yang terhubung.' });
+  try {
+    for (const { shop_id: shopId } of shops) {
+      await syncTikTokCatalog(await getTikTokOpts(shopId), shopId, { force: true });
+    }
+    res.json({ ok: true, shops: shops.length });
+  } catch (err) {
+    res.status(500).json({ error: 'sync_failed', message: err.message });
+  }
 });
 
 // Stock Opname (client-requested 2026-10-16): per SKU, over a WIB date range
