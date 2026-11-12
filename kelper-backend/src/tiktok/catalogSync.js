@@ -80,7 +80,10 @@ async function syncTikTokCatalog(opts, tiktokShopId, { force = false } = {}) {
           seller_sku: s.seller_sku || null,
           product_name: p.title,
           sku_name: detail ? (attrs.map((a) => a.value_name).filter(Boolean).join(' / ') || null) : null,
-          price: Number(s.price?.sale_price) || null,
+          // sale_price is filled for cross-border sellers only; a local seller
+          // (the client, Indonesia) gets tax_exclusive_price (API spec; live
+          // 2026-11-12: every price was empty with sale_price alone).
+          price: Number(s.price?.sale_price) || Number(s.price?.tax_exclusive_price) || null,
           tiktok_stock: (s.inventory || []).reduce((t, i) => t + (Number(i.quantity) || 0), 0),
           image_url: firstUrl(attrs.find((a) => a.sku_img)?.sku_img) || mainImage,
           status: p.status || null,
