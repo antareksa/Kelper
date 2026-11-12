@@ -734,11 +734,29 @@ router.post('/sync-shopee', async (req, res) => {
   }
 });
 
+// Item Bundle? and List Item (GTIN) cells for one SKU in a download, written the
+// way /import-item-data reads them, so a downloaded list can be edited and
+// uploaded again as Item Data without losing bundle contents (2026-11-12).
+// A part is named by its barcode, or by its SKU when it has none.
+function bundleExportCells() {
+  const barcodeBySku = new Map(db.prepare('SELECT sku, barcode FROM products').all().map((p) => [p.sku, p.barcode]));
+  const partsByBundle = new Map();
+  for (const r of db.prepare('SELECT bundle_sku, component_sku, qty FROM bundle_items ORDER BY rowid').all()) {
+    if (!partsByBundle.has(r.bundle_sku)) partsByBundle.set(r.bundle_sku, []);
+    partsByBundle.get(r.bundle_sku).push(`${barcodeBySku.get(r.component_sku) || r.component_sku} - ${r.qty}`);
+  }
+  return (sku) => {
+    const parts = partsByBundle.get(sku);
+    return parts || isBundleSku(sku) ? ['Ya', (parts || []).join('\n') || null] : ['Tidak', null];
+  };
+}
+
 // Unduh Daftar Item on List Barang TikTok (2026-11-12): one row per TikTok SKU
 // from the TikTok catalog cache, same idea as the Shopee export above.
 async function exportTikTokItems(res) {
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
   const stockBySku = new Map(db.prepare('SELECT sku, stock FROM tiktok_stock_dashboard').all().map((r) => [r.sku, r.stock]));
+  const bundleCells = bundleExportCells();
   const rows = db.prepare("SELECT * FROM tiktok_catalog WHERE COALESCE(status, '') != 'DELETED'").all()
     .map((r) => ({ ...r, sku: r.seller_sku || `TT-${r.sku_id}` }))
     .sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
@@ -746,24 +764,25 @@ async function exportTikTokItems(res) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Item TikTok');
   ws.columns = [
-    { header: 'Product ID', width: 22 }, { header: 'SKU ID', width: 22 }, { header: 'SKU (dipakai KELPER)', width: 26 },
+    { header: 'Product ID', width: 22 }, { header: 'SKU ID', width: 22 }, { header: 'SKU', width: 26 },
     { header: 'Nama Item', width: 70 }, { header: 'Variasi', width: 28 }, { header: 'Status', width: 12 },
     { header: 'Stok TikTok', width: 13 }, { header: 'Stok Dashboard TikTok', width: 20 }, { header: 'Harga TikTok', width: 14 },
-    { header: 'GTIN (Dashboard)', width: 20 }, { header: 'HPP (Dashboard)', width: 15 }, { header: 'Catatan', width: 26 },
+    { header: 'GTIN', width: 20 }, { header: 'HPP', width: 15 }, { header: 'Item Bundle?', width: 13 },
+    { header: 'List Item (GTIN)', width: 30 }, { header: 'Catatan', width: 26 },
   ];
   for (const r of rows) {
     const p = r.seller_sku ? productBySku.get(r.seller_sku) : null;
     ws.addRow([
       r.product_id, r.sku_id, r.sku, r.product_name, r.sku_name, r.status,
       r.tiktok_stock, r.seller_sku ? stockBySku.get(r.seller_sku) ?? null : null, r.price,
-      p?.barcode ? Number(p.barcode) || p.barcode : null, p?.hpp ?? null,
+      p?.barcode ?? null, p?.hpp ?? null, ...bundleCells(r.sku),
       r.seller_sku ? '' : 'Belum ada Seller SKU di TikTok',
     ]);
   }
   ws.getRow(1).font = { bold: true };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  for (const col of [1, 2]) { ws.getColumn(col).numFmt = '@'; }
-  ws.getColumn(10).numFmt = '0';
+  for (const col of [1, 2, 10]) ws.getColumn(col).numFmt = '@'; // IDs and barcodes as text: keeps leading zeros
+  ws.getColumn(13).alignment = { wrapText: true };
   for (const col of [9, 11]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -787,6 +806,7 @@ router.get('/export-items', async (req, res) => {
     modelsByItem.get(m.item_id).push(m);
   }
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
+  const bundleCells = bundleExportCells();
 
   const rows = [];
   for (const item of items) {
@@ -798,7 +818,7 @@ router.get('/export-items', async (req, res) => {
         values: [
           item.item_id, m.model_id || null, sku, item.item_sku || null, m.model_sku || null,
           item.name, m.model_id ? m.model_name : null, m.model_status || item.item_status,
-          m.stock, m.price, p?.barcode ? Number(p.barcode) || p.barcode : null, p?.hpp ?? null,
+          m.stock, m.price, p?.barcode ?? null, p?.hpp ?? null, ...bundleCells(sku),
           m.model_sku || item.item_sku ? '' : 'Belum ada SKU di Shopee',
         ],
       });
@@ -809,16 +829,20 @@ router.get('/export-items', async (req, res) => {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Item Shopee');
   ws.columns = [
-    { header: 'Item ID', width: 16 }, { header: 'Model ID', width: 16 }, { header: 'SKU (dipakai KELPER)', width: 26 },
+    { header: 'Item ID', width: 16 }, { header: 'Model ID', width: 16 }, { header: 'SKU', width: 26 },
     { header: 'SKU Induk', width: 22 }, { header: 'SKU Variasi', width: 22 }, { header: 'Nama Item', width: 70 },
     { header: 'Variasi', width: 28 }, { header: 'Status', width: 12 }, { header: 'Stok Shopee', width: 13 },
-    { header: 'Harga Shopee', width: 14 }, { header: 'GTIN (Dashboard)', width: 20 }, { header: 'HPP (Dashboard)', width: 15 },
-    { header: 'Catatan', width: 26 },
+    { header: 'Harga Shopee', width: 14 }, { header: 'GTIN', width: 20 }, { header: 'HPP', width: 15 },
+    { header: 'Item Bundle?', width: 13 }, { header: 'List Item (GTIN)', width: 30 }, { header: 'Catatan', width: 26 },
   ];
   for (const r of rows) ws.addRow(r.values);
   ws.getRow(1).font = { bold: true };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  for (const col of [1, 2, 11]) ws.getColumn(col).numFmt = '0';
+  // Headers match /import-item-data (SKU, Nama Item, GTIN, HPP, Item Bundle?, List
+  // Item (GTIN)) so this file can be edited and uploaded back as Item Data.
+  for (const col of [1, 2]) ws.getColumn(col).numFmt = '0';
+  ws.getColumn(11).numFmt = '@'; // barcodes as text: keeps leading zeros
+  ws.getColumn(14).alignment = { wrapText: true };
   for (const col of [10, 12]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
