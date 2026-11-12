@@ -476,7 +476,7 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
 
 // platform 'tiktok' (2026-11-12): List Barang TikTok for a full admin, the same
 // page from TikTok's catalog (/products/tiktok-catalog) with the TikTok stock.
-// The Shopee-only tools (item export, Item Data upload) are left out there.
+// Same buttons; HPP, GTIN and bundles from Item Data are shared by both lists.
 function ListBarang({ platform = 'shopee' }) {
   const isTikTok = platform === 'tiktok';
   const [expandedSku, setExpandedSku] = useState(null);
@@ -567,12 +567,12 @@ function ListBarang({ platform = 'shopee' }) {
   async function handleExport() {
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/products/export-items`);
+      const res = await apiFetch(`${API_BASE}/products/export-items${isTikTok ? '?platform=tiktok' : ''}`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Gagal mengunduh');
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'item-shopee.xlsx';
+      a.download = isTikTok ? 'item-tiktok.xlsx' : 'item-shopee.xlsx';
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -626,7 +626,7 @@ function ListBarang({ platform = 'shopee' }) {
       }
     };
   }
-  const handleFileChange = makeUploadHandler('import-item-data', 'Item Data');
+  const handleFileChange = makeUploadHandler(isTikTok ? 'import-item-data?platform=tiktok' : 'import-item-data', 'Item Data');
   const handleStockFileChange = makeUploadHandler(isTikTok ? 'import-stock?platform=tiktok' : 'import-stock', isTikTok ? 'stok TikTok' : 'stok');
 
   // Shopee marks a product the seller archives as "UNLIST" (and "BANNED" for
@@ -756,11 +756,10 @@ function ListBarang({ platform = 'shopee' }) {
           <IconRefresh size={15} />
         </button>
 
-        {!isTikTok && (<>
         <button
           onClick={handleExport}
           style={{ ...pillStyle, gap: 8 }}
-          title="Unduh daftar item Shopee beserta SKU (Excel). Klik sync dulu agar datanya terbaru."
+          title={`Unduh daftar item ${isTikTok ? 'TikTok' : 'Shopee'} beserta SKU (Excel). Klik sync dulu agar datanya terbaru.`}
         >
           Unduh Daftar Item
         </button>
@@ -770,12 +769,11 @@ function ListBarang({ platform = 'shopee' }) {
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
           style={{ ...pillStyle, gap: 8, opacity: uploading ? 0.6 : 1 }}
-          title="Impor Item Data dari Excel: SKU, Nama Item, GTIN, HPP, Item Bundle?, List Item (GTIN). Kolom Harga diabaikan: Harga diambil dari Shopee."
+          title={`Impor Item Data dari Excel: SKU, Nama Item, GTIN, HPP, Item Bundle?, List Item (GTIN). Kolom Harga diabaikan: Harga diambil dari ${isTikTok ? 'TikTok' : 'Shopee'}. HPP dan GTIN dipakai bersama Shopee dan TikTok.`}
         >
           <IconUpload size={15} />
           {uploading ? 'Mengimpor...' : 'Unggah Item Data'}
         </button>
-        </>)}
 
         <input ref={stockFileInputRef} type="file" accept=".xlsx" onChange={handleStockFileChange} style={{ display: 'none' }} />
         <button

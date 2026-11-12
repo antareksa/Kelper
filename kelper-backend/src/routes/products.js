@@ -481,7 +481,8 @@ router.post('/import-item-data', upload.single('file'), async (req, res) => {
   const bundleCol = findColumn(sheet, 1, /bundle/i);
   const listCol = findColumn(sheet, 1, /list\s*item/i);
 
-  const known = knownSkus();
+  // ?platform=tiktok (2026-11-12, List Barang TikTok): TikTok's SKUs are accepted too.
+  const known = stockPlatformOf(req) === 'tiktok' ? knownTikTokSkus() : knownSkus();
   const nameToSku = buildNameToSku();
   const now = Math.floor(Date.now() / 1000);
   const unknownSku = [];
@@ -733,6 +734,44 @@ router.post('/sync-shopee', async (req, res) => {
   }
 });
 
+// Unduh Daftar Item on List Barang TikTok (2026-11-12): one row per TikTok SKU
+// from the TikTok catalog cache, same idea as the Shopee export above.
+async function exportTikTokItems(res) {
+  const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
+  const stockBySku = new Map(db.prepare('SELECT sku, stock FROM tiktok_stock_dashboard').all().map((r) => [r.sku, r.stock]));
+  const rows = db.prepare("SELECT * FROM tiktok_catalog WHERE COALESCE(status, '') != 'DELETED'").all()
+    .map((r) => ({ ...r, sku: r.seller_sku || `TT-${r.sku_id}` }))
+    .sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Item TikTok');
+  ws.columns = [
+    { header: 'Product ID', width: 22 }, { header: 'SKU ID', width: 22 }, { header: 'SKU (dipakai KELPER)', width: 26 },
+    { header: 'Nama Item', width: 70 }, { header: 'Variasi', width: 28 }, { header: 'Status', width: 12 },
+    { header: 'Stok TikTok', width: 13 }, { header: 'Stok Dashboard TikTok', width: 20 }, { header: 'Harga TikTok', width: 14 },
+    { header: 'GTIN (Dashboard)', width: 20 }, { header: 'HPP (Dashboard)', width: 15 }, { header: 'Catatan', width: 26 },
+  ];
+  for (const r of rows) {
+    const p = r.seller_sku ? productBySku.get(r.seller_sku) : null;
+    ws.addRow([
+      r.product_id, r.sku_id, r.sku, r.product_name, r.sku_name, r.status,
+      r.tiktok_stock, r.seller_sku ? stockBySku.get(r.seller_sku) ?? null : null, r.price,
+      p?.barcode ? Number(p.barcode) || p.barcode : null, p?.hpp ?? null,
+      r.seller_sku ? '' : 'Belum ada Seller SKU di TikTok',
+    ]);
+  }
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  for (const col of [1, 2]) { ws.getColumn(col).numFmt = '@'; }
+  ws.getColumn(10).numFmt = '0';
+  for (const col of [9, 11]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="item-tiktok.xlsx"');
+  await wb.xlsx.write(res);
+  res.end();
+}
+
 // Item list with SKUs as an Excel file (client-requested 2026-10-12): one row per
 // Shopee variant (an item without variants is one row), straight from the
 // catalog cache that sync-shopee fills -- press the sync button first for live
@@ -740,6 +779,7 @@ router.post('/sync-shopee', async (req, res) => {
 // uses the variant's SKU, else the item's, else "ITEM-<id>" when the seller never
 // typed one into Shopee (those are the rows to fix in Seller Centre).
 router.get('/export-items', async (req, res) => {
+  if (stockPlatformOf(req) === 'tiktok') return exportTikTokItems(res);
   const items = db.prepare('SELECT * FROM shopee_items').all();
   const modelsByItem = new Map();
   for (const m of db.prepare('SELECT * FROM shopee_item_models ORDER BY model_id').all()) {
