@@ -454,7 +454,10 @@ function ProductRow({ product, singles, expanded, onToggle, onStockSaved, onHppS
                   </div>
                   <div>
                     {/* Shopee's price, read-only since 2026-10-15 (backend catalogSync.js) */}
-                    <span title={platform === 'tiktok' ? 'Harga dari TikTok' : 'Harga dari Shopee'} style={{ color: v.price == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.price)}</span>
+                    <span title={platform === 'tiktok' ? 'Harga dari TikTok (setelah diskon promosi yang sedang berjalan)' : 'Harga dari Shopee'} style={{ color: v.price == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.price)}</span>
+                    {v.normalPrice != null && (
+                      <div title="Harga normal sebelum diskon" style={{ fontSize: 11, color: colors.textFaint, textDecoration: 'line-through', fontFamily: 'var(--num)' }}>{formatRupiah(v.normalPrice)}</div>
+                    )}
                   </div>
                   <div style={{ color: v.profit == null ? colors.textFaint : colors.text, fontFamily: 'var(--num)' }}>{formatRupiah(v.profit)}</div>
                   <div style={{ color: v.profitPct == null ? colors.textFaint : colors.green, fontWeight: 600, fontFamily: 'var(--num)' }}>

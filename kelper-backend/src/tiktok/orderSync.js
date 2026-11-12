@@ -5,7 +5,7 @@ const { getSetting, setSetting } = require('../settings');
 const { flagOrderAsException } = require('../shopeeSync');
 const { bookTikTokOrders, detectLatePickups } = require('./booking');
 const { fillTikTokIncome } = require('./income');
-const { syncTikTokCatalog } = require('./catalogSync');
+const { syncTikTokCatalog, EFFECTIVE_PRICE_SQL } = require('./catalogSync');
 
 // TikTok Shop / Tokopedia order import (2026-11-07) and booking loop
 // (2026-11-10), see docs/FEATURE-tiktok-integration.md. This file only reads
@@ -65,15 +65,19 @@ function groupLineItems(lineItems) {
     if (line.display_status === 'CANCELLED') continue; // one line cancelled, the rest still ship
     const sku = line.seller_sku || `ITEM-${line.sku_id}`;
     const entry = bySku.get(sku);
+    // sale_price: what this unit sold for after the seller's discounts
+    // (2026-11-12). Averaged when lines of one SKU differ.
+    const paid = Number(line.sale_price) || null;
     if (entry) {
       entry.qty += 1;
+      if (paid != null) { entry.paidTotal += paid; entry.paidCount += 1; }
     } else {
       // "Default" is TikTok's name for a product with no variants.
       const hasVariant = line.sku_name && line.sku_name !== 'Default';
-      bySku.set(sku, { sku, productName: hasVariant ? `${line.product_name} - ${line.sku_name}` : line.product_name, qty: 1, imageUrl: line.sku_image || null });
+      bySku.set(sku, { sku, productName: hasVariant ? `${line.product_name} - ${line.sku_name}` : line.product_name, qty: 1, imageUrl: line.sku_image || null, paidTotal: paid ?? 0, paidCount: paid != null ? 1 : 0 });
     }
   }
-  return [...bySku.values()];
+  return [...bySku.values()].map(({ paidTotal, paidCount, ...item }) => ({ ...item, unitPrice: paidCount ? Math.round(paidTotal / paidCount) : null }));
 }
 
 function orderFlags(order) {
@@ -97,9 +101,12 @@ const deleteItems = db.prepare('DELETE FROM order_items WHERE order_sn = ?');
 const insertItem = db.prepare(`
   INSERT INTO order_items (order_sn, sku, product_name, qty, image_url, price_snapshot)
   VALUES (?, ?, ?, ?, ?, COALESCE(
-    -- TikTok's own price for this SKU (2026-11-10: prices can differ per
-    -- marketplace, see catalogSync.js); the shared catalog price otherwise.
-    (SELECT MAX(price) FROM tiktok_catalog WHERE seller_sku = ? AND price IS NOT NULL),
+    -- The price this order actually paid (line sale_price, 2026-11-12); else
+    -- TikTok's current price for this SKU, after any ongoing promotion
+    -- (2026-11-10: prices can differ per marketplace, see catalogSync.js); the
+    -- shared catalog price otherwise.
+    ?,
+    (SELECT MAX(${EFFECTIVE_PRICE_SQL()}) FROM tiktok_catalog WHERE seller_sku = ? AND price IS NOT NULL),
     (SELECT price FROM products WHERE sku = ?)
   ))
 `);
@@ -169,7 +176,7 @@ const saveOrder = db.transaction((order, tiktokShopId = null) => {
   if (!session && ['ON_HOLD', 'READY_TO_PACK'].includes(status)) {
     deleteItems.run(order.id);
     for (const item of groupLineItems(order.line_items)) {
-      insertItem.run(order.id, item.sku, item.productName, item.qty, item.imageUrl, item.sku, item.sku);
+      insertItem.run(order.id, item.sku, item.productName, item.qty, item.imageUrl, item.unitPrice, item.sku, item.sku);
     }
   }
 

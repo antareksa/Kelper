@@ -683,6 +683,15 @@ db.exec(`
   );
 `);
 db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('stockLogStartedAt', ?)").run(String(Math.floor(Date.now() / 1000)));
+// Harga after TikTok's own discounts (2026-11-12, client-requested): the lowest
+// price from the shop's ongoing product promotions (fixed price, % off, flash
+// sale) for this SKU, read hourly by src/tiktok/catalogSync.js, and when that
+// promotion ends. NULL when no promotion applies. price stays the normal price.
+{
+  const cols = db.prepare('PRAGMA table_info(tiktok_catalog)').all().map((c) => c.name);
+  if (!cols.includes('discount_price')) db.exec('ALTER TABLE tiktok_catalog ADD COLUMN discount_price REAL');
+  if (!cols.includes('discount_until')) db.exec('ALTER TABLE tiktok_catalog ADD COLUMN discount_until INTEGER');
+}
 // Which stock a stock_log row belongs to (2026-11-10): 'shopee' (products.stock,
 // every older row) or 'tiktok' (tiktok_stock_dashboard).
 if (!db.prepare('PRAGMA table_info(stock_log)').all().some((c) => c.name === 'platform')) {

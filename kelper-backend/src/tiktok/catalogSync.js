@@ -98,6 +98,93 @@ async function syncTikTokCatalog(opts, tiktokShopId, { force = false } = {}) {
   // and history stay readable.
   db.prepare("UPDATE tiktok_catalog SET status = 'DELETED' WHERE shop_id = ? AND synced_at < ?").run(shopId, syncedAt);
   console.log(`[server] TikTok catalog: ${products.length} product(s), ${detailed} detail(s) read (shop ${shopId})`);
+
+  try {
+    await syncTikTokDiscounts(opts, shopId);
+  } catch (err) {
+    // 105005: the app has no Promotion scope yet (needs adding in Partner Center
+    // and the shop connecting again). Said once per run, not every hour.
+    if (err.tiktokCode === 105005) {
+      if (!promotionDeniedLogged.has(shopId)) console.warn(`[server] TikTok discounts: no Promotion permission yet (shop ${shopId}) — Harga shows the normal price`);
+      promotionDeniedLogged.add(shopId);
+    } else {
+      console.warn(`[server] TikTok discounts failed: ${err.tiktokCode ?? ''} ${err.message}`);
+    }
+  }
 }
 
-module.exports = { syncTikTokCatalog };
+// Harga after discount (2026-11-12, client-requested). TikTok's product list has
+// only the normal price; discounts live in the Promotion API. For every ongoing
+// product promotion open to all buyers -- fixed price, % off, flash sale -- the
+// price each SKU gets, and the lowest one wins (TikTok shows the buyer the best
+// price). Shipping discounts, buy-more-save-more and gifts are not a SKU price
+// and are left out. Stored with the end time, so an ended promotion stops
+// counting even before the next hourly sync.
+const promotionDeniedLogged = new Set();
+const PRICE_TYPES = new Set(['FIXED_PRICE', 'DIRECT_DISCOUNT', 'FLASHSALE']);
+
+// The price one promotion entry gives a SKU whose normal price is base.
+function promoPrice(entry, base) {
+  const fixed = Number(entry?.activity_price?.amount);
+  if (fixed > 0) return fixed;
+  const pct = Number(entry?.discount);
+  if (pct > 0 && pct < 100 && base > 0) return Math.round(base * (100 - pct) / 100);
+  return null;
+}
+
+async function syncTikTokDiscounts(opts, shopId) {
+  const activities = [];
+  let pageToken = '';
+  do {
+    const body = { status: 'ONGOING', page_size: 100 };
+    if (pageToken) body.page_token = pageToken;
+    const page = await apiRequest('POST', '/promotion/202309/activities/search', { ...opts, body });
+    activities.push(...(page?.activities || []).filter((a) => PRICE_TYPES.has(a.activity_type)));
+    pageToken = page?.next_page_token || '';
+  } while (pageToken);
+  promotionDeniedLogged.delete(shopId);
+
+  const skus = db.prepare("SELECT product_id, sku_id, price FROM tiktok_catalog WHERE shop_id = ? AND COALESCE(status, '') != 'DELETED'").all(shopId);
+  const skusByProduct = new Map();
+  for (const s of skus) {
+    if (!skusByProduct.has(s.product_id)) skusByProduct.set(s.product_id, []);
+    skusByProduct.get(s.product_id).push(s);
+  }
+  const best = new Map(); // sku_id -> { price, until }
+  const offer = (sku, price, until) => {
+    if (!(price > 0) || (sku.price && price >= sku.price)) return;
+    const cur = best.get(sku.sku_id);
+    if (!cur || price < cur.price) best.set(sku.sku_id, { price, until });
+  };
+
+  for (const a of activities) {
+    const detail = await apiRequest('GET', `/promotion/202309/activities/${a.id}`, opts);
+    const userType = detail?.target_user_info?.user_type;
+    if (userType && userType !== 'ALL_USER') continue; // e.g. new-customer only: not the public price
+    const until = detail?.end_time || a.end_time || null;
+    for (const p of detail?.products || []) {
+      const productSkus = skusByProduct.get(p.id) || [];
+      if (p.skus?.length) {
+        for (const e of p.skus) {
+          const sku = productSkus.find((s) => s.sku_id === e.id);
+          if (sku) offer(sku, promoPrice(e, sku.price), until);
+        }
+      } else {
+        for (const sku of productSkus) offer(sku, promoPrice(p, sku.price), until);
+      }
+    }
+  }
+
+  db.transaction(() => {
+    db.prepare('UPDATE tiktok_catalog SET discount_price = NULL, discount_until = NULL WHERE shop_id = ?').run(shopId);
+    const set = db.prepare('UPDATE tiktok_catalog SET discount_price = ?, discount_until = ? WHERE shop_id = ? AND sku_id = ?');
+    for (const [skuId, d] of best) set.run(d.price, d.until, shopId, skuId);
+  })();
+  console.log(`[server] TikTok discounts: ${activities.length} ongoing promotion(s), ${best.size} SKU(s) discounted (shop ${shopId})`);
+}
+
+// The price a TikTok SKU sells at right now: the promotion price while one runs,
+// else the normal price. SQL for a tiktok_catalog row aliased c (or none).
+const EFFECTIVE_PRICE_SQL = (c = '') => `CASE WHEN ${c}discount_price IS NOT NULL AND (${c}discount_until IS NULL OR ${c}discount_until > strftime('%s','now')) THEN ${c}discount_price ELSE ${c}price END`;
+
+module.exports = { syncTikTokCatalog, syncTikTokDiscounts, promoPrice, EFFECTIVE_PRICE_SQL };

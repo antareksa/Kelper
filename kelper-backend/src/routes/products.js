@@ -7,6 +7,7 @@ const { startOfMonthWIB, dateStringWIB, startOfDateWIB, shiftDateStringWIB } = r
 const { getSetting } = require('../settings');
 const { isBundleSku } = require('../bundleUtil');
 const { withStockLog } = require('../stockLog');
+const { EFFECTIVE_PRICE_SQL } = require('../tiktok/catalogSync');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -757,7 +758,7 @@ async function exportTikTokItems(res) {
   const productBySku = new Map(db.prepare('SELECT sku, hpp, barcode FROM products').all().map((p) => [p.sku, p]));
   const stockBySku = new Map(db.prepare('SELECT sku, stock FROM tiktok_stock_dashboard').all().map((r) => [r.sku, r.stock]));
   const bundleCells = bundleExportCells();
-  const rows = db.prepare("SELECT * FROM tiktok_catalog WHERE COALESCE(status, '') != 'DELETED'").all()
+  const rows = db.prepare(`SELECT *, ${EFFECTIVE_PRICE_SQL()} AS sell_price FROM tiktok_catalog WHERE COALESCE(status, '') != 'DELETED'`).all()
     .map((r) => ({ ...r, sku: r.seller_sku || `TT-${r.sku_id}` }))
     .sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' }));
 
@@ -766,7 +767,7 @@ async function exportTikTokItems(res) {
   ws.columns = [
     { header: 'Product ID', width: 22 }, { header: 'SKU ID', width: 22 }, { header: 'SKU', width: 26 },
     { header: 'Nama Item', width: 70 }, { header: 'Variasi', width: 28 }, { header: 'Status', width: 12 },
-    { header: 'Stok TikTok', width: 13 }, { header: 'Stok Dashboard TikTok', width: 20 }, { header: 'Harga TikTok', width: 14 },
+    { header: 'Stok TikTok', width: 13 }, { header: 'Stok Dashboard TikTok', width: 20 }, { header: 'Harga TikTok', width: 14 }, { header: 'Harga Normal TikTok', width: 18 },
     { header: 'GTIN', width: 20 }, { header: 'HPP', width: 15 }, { header: 'Item Bundle?', width: 13 },
     { header: 'List Item (GTIN)', width: 30 }, { header: 'Catatan', width: 26 },
   ];
@@ -774,16 +775,16 @@ async function exportTikTokItems(res) {
     const p = r.seller_sku ? productBySku.get(r.seller_sku) : null;
     ws.addRow([
       r.product_id, r.sku_id, r.sku, r.product_name, r.sku_name, r.status,
-      r.tiktok_stock, r.seller_sku ? stockBySku.get(r.seller_sku) ?? null : null, r.price,
+      r.tiktok_stock, r.seller_sku ? stockBySku.get(r.seller_sku) ?? null : null, r.sell_price, r.price,
       p?.barcode ?? null, p?.hpp ?? null, ...bundleCells(r.sku),
       r.seller_sku ? '' : 'Belum ada Seller SKU di TikTok',
     ]);
   }
   ws.getRow(1).font = { bold: true };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  for (const col of [1, 2, 10]) ws.getColumn(col).numFmt = '@'; // IDs and barcodes as text: keeps leading zeros
-  ws.getColumn(13).alignment = { wrapText: true };
-  for (const col of [9, 11]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
+  for (const col of [1, 2, 11]) ws.getColumn(col).numFmt = '@'; // IDs and barcodes as text: keeps leading zeros
+  ws.getColumn(14).alignment = { wrapText: true };
+  for (const col of [9, 10, 12]) ws.getColumn(col).numFmt = '[$Rp]#,##0';
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="item-tiktok.xlsx"');
@@ -1114,7 +1115,7 @@ router.get('/stock-list', (req, res) => {
 router.get('/tiktok-stock-list', (req, res) => {
   const withPrices = req.adminRole !== 'packing';
   const rows = db.prepare(`
-    SELECT c.*, d.stock AS dashboard_stock, p.hpp
+    SELECT c.*, ${EFFECTIVE_PRICE_SQL('c.')} AS sell_price, d.stock AS dashboard_stock, p.hpp
     FROM tiktok_catalog c
     LEFT JOIN tiktok_stock_dashboard d ON d.sku = c.seller_sku
     LEFT JOIN products p ON p.sku = c.seller_sku
@@ -1143,7 +1144,7 @@ router.get('/tiktok-stock-list', (req, res) => {
       image: r.image_url,
       marketplaceStock: r.tiktok_stock,
       dashboardStock: r.dashboard_stock ?? null,
-      ...(withPrices ? { price: r.price, hpp: r.hpp ?? null } : {}),
+      ...(withPrices ? { price: r.sell_price, hpp: r.hpp ?? null } : {}),
     });
   }
   res.json([...byProduct.values()].sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' })));
@@ -1157,7 +1158,7 @@ router.get('/tiktok-stock-list', (req, res) => {
 // here (not in PACKING_ROLE_ALLOWED) and keeps /tiktok-stock-list.
 router.get('/tiktok-catalog', (req, res) => {
   const rows = db.prepare(`
-    SELECT c.*, d.stock AS dashboard_stock
+    SELECT c.*, ${EFFECTIVE_PRICE_SQL('c.')} AS sell_price, d.stock AS dashboard_stock
     FROM tiktok_catalog c
     LEFT JOIN tiktok_stock_dashboard d ON d.sku = c.seller_sku
     WHERE COALESCE(c.status, '') != 'DELETED'
@@ -1196,7 +1197,9 @@ router.get('/tiktok-catalog', (req, res) => {
     }
     const matched = r.seller_sku ? productBySku.get(r.seller_sku) : null;
     const hpp = matched?.hpp ?? null;
-    const price = r.price ?? null;
+    // Harga = the price after an ongoing TikTok promotion (2026-11-12), like
+    // Shopee's current_price; normalPrice is the price before it.
+    const price = r.sell_price ?? null;
     const profit = hpp != null && price != null ? price - hpp : null;
     const profitPct = profit != null && price ? Math.round((profit / price) * 1000) / 10 : null;
     const qtyIni = qtyThisMonth.get(sku) || 0;
@@ -1207,6 +1210,7 @@ router.get('/tiktok-catalog', (req, res) => {
       hasSellerSku: !!r.seller_sku,
       name: r.sku_name,
       price,
+      normalPrice: price != null && r.price != null && price < r.price ? r.price : null,
       stock: r.tiktok_stock,
       dashboardStock: r.dashboard_stock ?? null,
       image: r.image_url,
